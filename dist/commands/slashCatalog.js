@@ -15,6 +15,9 @@ function buildSlashCommands(input) {
             .setName("quickstart")
             .setDescription("Guided first-run command flow for raids and economy."),
         new discord_js_1.SlashCommandBuilder()
+            .setName("testupdate")
+            .setDescription("Test command that replies with Updated."),
+        new discord_js_1.SlashCommandBuilder()
             .setName("xproles")
             .setDescription("View XP rank roles in a randomized color embed."),
         new discord_js_1.SlashCommandBuilder()

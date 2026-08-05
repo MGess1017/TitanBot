@@ -7499,24 +7499,93 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const user = ensureUser(interaction.user.id);
         const gameStats = getGameStatsSummary(interaction.user.id);
         const prestigeBadge = getPrestigeBadge(user.prestige);
-        const tierVisual = getPmcTierVisual(getPmcLevel(user.pmcXP));
+        const engagementLevel = getXPLevel(user.xp);
+        const pmcLevel = getPmcLevel(user.pmcXP);
+        const tierVisual = getPmcTierVisual(pmcLevel);
+        const currentThreshold = engagementLevel > 0 ? XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
+        const nextThreshold = XP_LEVEL_THRESHOLDS[engagementLevel] ?? currentThreshold;
+        const levelSpan = Math.max(1, nextThreshold - currentThreshold);
+        const xpIntoLevel = Math.max(0, user.xp - currentThreshold);
+        const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - user.xp) : 0;
+        const progressPercent = nextThreshold > currentThreshold
+            ? Math.round((xpIntoLevel / levelSpan) * 100)
+            : 100;
+        const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
+        const achievements = user.achievements.length > 0
+            ? user.achievements.slice(0, 6).join("\n")
+            : "No achievements yet";
+        const pmcProgress = getPmcProgress(user.pmcXP);
         const embed = new EmbedBuilder()
             .setColor(prestigeBadge.color)
-            .setTitle(`${interaction.user.username} XP Stats`)
-            .setDescription(`Level ${getXPLevel(user.xp)} | Prestige ${user.prestige}`)
-            .setThumbnail(prestigeBadge.iconUrl)
+            .setTitle("📊 XP Intelligence Report")
+            .setDescription([
+                `🧠 **Engagement XP:** ${user.xp.toLocaleString()}`,
+                `🎚️ **Level ${engagementLevel}**${nextThreshold > currentThreshold ? ` • ${xpToNextLevel.toLocaleString()} XP to level ${engagementLevel + 1}` : " • Level cap reached"}`,
+                `${xpBar(user.xp)}`
+            ].join("\n"))
+            .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4ca.png")
             .addFields(
-                { name: "Engagement XP", value: `${user.xp}`, inline: true },
-                { name: "Daily Streak", value: `${user.dailyStreak}`, inline: true },
-                { name: "FN Token$", value: `${user.fnTokens}`, inline: true },
-                { name: "PMC Raid XP", value: `${user.pmcXP}`, inline: true },
-                { name: "PMC Level", value: `${getPmcLevel(user.pmcXP)}`, inline: true },
-                { name: "Prestige Badge", value: prestigeBadge.label, inline: true },
-                { name: "PMC Tier Badge", value: tierVisual.label, inline: true },
-                { name: "Casino Sessions", value: `${gameStats.casinoPlayed}`, inline: true },
-                { name: "Games W/L/P", value: `${gameStats.wins}/${gameStats.losses}/${gameStats.pushes}`, inline: true },
-                { name: "Games Lifetime Net", value: `${gameStats.net >= 0 ? `+${gameStats.net}` : gameStats.net} FN Token$`, inline: true }
-            );
+                {
+                    name: "🎯 Engagement Breakdown",
+                    value: [
+                        `Level: **${engagementLevel.toLocaleString()}**`,
+                        `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
+                        `Completion: **${progressPercent}%**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🔥 Activity Signals",
+                    value: [
+                        `📆 Daily streak: **${user.dailyStreak.toLocaleString()}**`,
+                        `⏱️ Last XP: **${lastXpAt}**`,
+                        `🏆 Achievements: **${user.achievements.length.toLocaleString()}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "💼 Economy Snapshot",
+                    value: [
+                        `🪙 Wallet: **${user.fnTokens.toLocaleString()}**`,
+                        `🏦 Bank: **${user.bankTokens.toLocaleString()}**`,
+                        `🎯 Access Points: **${getPoints(interaction.user.id).toLocaleString()}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🪖 Raid Progression",
+                    value: [
+                        `PMC Level: **${pmcLevel.toLocaleString()}**`,
+                        `Raid XP: **${user.pmcXP.toLocaleString()}**`,
+                        `Next PMC Level: **${pmcProgress.needForNext.toLocaleString()} XP away**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🌟 Status Badges",
+                    value: [
+                        `Prestige: **${user.prestige.toLocaleString()}**`,
+                        `Prestige Badge: **${prestigeBadge.label}**`,
+                        `PMC Tier: **${tierVisual.label}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🎰 Game Record",
+                    value: [
+                        `Sessions: **${gameStats.casinoPlayed.toLocaleString()}**`,
+                        `W/L/P: **${gameStats.wins}/${gameStats.losses}/${gameStats.pushes}**`,
+                        `Net: **${gameStats.net >= 0 ? `+${gameStats.net}` : gameStats.net} FN Token$**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "✨ Recent Unlocks",
+                    value: achievements,
+                    inline: false
+                }
+            )
+            .setFooter({ text: "Detailed progression data is sourced from persisted state." });
         return JSON.stringify({ embed: embed.toJSON() });
     },
     health: async interaction => {

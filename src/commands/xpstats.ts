@@ -1,29 +1,64 @@
 import { CommandInteraction } from "discord.js";
-import { points } from "../data/points.json"; // Assuming points data is imported from points.json
-import { getXPLevel, xpBar } from "../utils"; // Assuming utility functions are imported from utils
+import { ensureUser, getXPLevel, XP_LEVEL_THRESHOLDS, xpBar } from "../utils";
 
 export const xpStatsCommand = {
     name: "xpstats",
     description: "Show detailed XP statistics",
     async execute(interaction: CommandInteraction) {
-        const userId = interaction.user.id;
-        const userStats = points[userId];
-
-        if (!userStats) {
-            return interaction.reply("You have no XP data. Please participate in activities to earn XP.");
-        }
-
+        const userStats = ensureUser(interaction.user.id);
         const level = getXPLevel(userStats.xp);
-        const achievements = userStats.achievements.length > 0 ? userStats.achievements.join(", ") : "None yet";
+        const currentThreshold = level > 0 ? XP_LEVEL_THRESHOLDS[level - 1] : 0;
+        const nextThreshold = XP_LEVEL_THRESHOLDS[level] ?? currentThreshold;
+        const levelSpan = Math.max(1, nextThreshold - currentThreshold);
+        const xpIntoLevel = Math.max(0, userStats.xp - currentThreshold);
+        const progressPercent = nextThreshold > currentThreshold
+            ? Math.round((xpIntoLevel / levelSpan) * 100)
+            : 100;
+        const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - userStats.xp) : 0;
+        const achievements = userStats.achievements.length > 0
+            ? userStats.achievements.slice(0, 6).join("\n")
+            : "No achievements yet";
+        const lastXpAt = userStats.lastXP > 0
+            ? `<t:${Math.floor(userStats.lastXP / 1000)}:R>`
+            : "No XP earned yet";
 
         const responseEmbed = {
             color: 0x00ffea,
-            title: "📊 Your XP Stats",
-            description: `Daily streak: **${userStats.dailyStreak} days**\n` +
-                         `Achievements: ${achievements}\n` +
-                         `Total XP: **${userStats.xp}**\n` +
-                         `Level: **${level}**\n` +
-                         `${xpBar(userStats.xp)}`,
+            title: "📊 XP Stats Snapshot",
+            description: [
+                `🧠 **Total XP:** ${userStats.xp.toLocaleString()}`,
+                `🎚️ **Level ${level}**${nextThreshold > currentThreshold ? ` • ${xpToNextLevel.toLocaleString()} XP to next level` : " • Level cap reached"}`,
+                `${xpBar(userStats.xp)}`
+            ].join("\n"),
+            thumbnail: {
+                url: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4ca.png"
+            },
+            fields: [
+                {
+                    name: "🎯 Progress",
+                    value: [
+                        `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
+                        `Completion: **${progressPercent}%**`,
+                        `Last XP: **${lastXpAt}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🔥 Activity",
+                    value: [
+                        `📆 Daily streak: **${userStats.dailyStreak.toLocaleString()}**`,
+                        `🏅 Prestige: **${userStats.prestige.toLocaleString()}**`,
+                        `🏆 Achievements: **${userStats.achievements.length.toLocaleString()}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "✨ Unlocks",
+                    value: achievements,
+                    inline: false
+                }
+            ],
+            footer: { text: "Live data is pulled from persisted XP state." }
         };
 
         return interaction.reply({ embeds: [responseEmbed] });
