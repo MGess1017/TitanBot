@@ -55,6 +55,7 @@ import {
     savePoints,
     transferWalletTokens,
     withdrawFromBank,
+    XP_LEVEL_THRESHOLDS,
     xpBar
 } from "./utils";
 import {
@@ -7413,20 +7414,84 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const accessPoints = getPoints(userId);
         const badge = getAccessPointBadge(accessPoints);
         const prestigeBadge = getPrestigeBadge(user.prestige);
-        const tierVisual = getPmcTierVisual(getPmcLevel(user.pmcXP));
+        const pmcLevel = getPmcLevel(user.pmcXP);
+        const tierVisual = getPmcTierVisual(pmcLevel);
+        const engagementLevel = getXPLevel(user.xp);
+        const currentThreshold = engagementLevel > 0 ? XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
+        const nextThreshold = XP_LEVEL_THRESHOLDS[engagementLevel] ?? currentThreshold;
+        const levelSpan = Math.max(1, nextThreshold - currentThreshold);
+        const xpIntoLevel = Math.max(0, user.xp - currentThreshold);
+        const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - user.xp) : 0;
+        const progressPercent = nextThreshold > currentThreshold
+            ? Math.round((xpIntoLevel / levelSpan) * 100)
+            : 100;
+        const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
+        const streakText = user.dailyStreak > 0 ? `${user.dailyStreak} day streak` : "No active streak";
+        const achievements = user.achievements.length > 0
+            ? user.achievements.slice(0, 4).join("\n")
+            : "No achievements yet";
         const embed = new EmbedBuilder()
             .setColor(prestigeBadge.color)
-            .setTitle("🎖️ XP Status")
-            .setDescription("Engagement XP is earned from communication activity and levels your chat rank.")
-            .setThumbnail(prestigeBadge.iconUrl)
+            .setTitle("📈 XP Progress Center")
+            .setDescription([
+                `🧠 **Live XP:** ${user.xp.toLocaleString()}`,
+                `🎚️ **Level ${engagementLevel}**${nextThreshold > currentThreshold ? ` • ${xpToNextLevel.toLocaleString()} XP to level ${engagementLevel + 1}` : " • Level cap reached"}`,
+                `${xpBar(user.xp)}`
+            ].join("\n"))
+            .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4c8.png")
             .addFields(
-                { name: "📦 Engagement Rank", value: `Level ${getXPLevel(user.xp)}\nXP: ${user.xp}`, inline: true },
-                { name: "🪖 Progress Bar", value: xpBar(user.xp), inline: true },
-                { name: "⚔️ Separate Raid Track", value: `PMC Level: ${getPmcLevel(user.pmcXP)}\nRaid XP: ${user.pmcXP}\nDaily Streak: ${user.dailyStreak}` },
-                { name: "🛡️ Access Points", value: `${accessPoints}\nBadge: ${badge.label}`, inline: false },
-                { name: "🌟 Prestige Badge", value: `${prestigeBadge.label}\nPrestige: ${user.prestige}`, inline: true },
-                { name: "🪖 PMC Tier Badge", value: `${tierVisual.label}\nLevel ${getPmcLevel(user.pmcXP)}`, inline: true }
-            );
+                {
+                    name: "🎯 Engagement",
+                    value: [
+                        `Level: **${engagementLevel.toLocaleString()}**`,
+                        `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
+                        `Completion: **${progressPercent}%**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "💼 Economy",
+                    value: [
+                        `🪙 FN Token$: **${user.fnTokens.toLocaleString()}**`,
+                        `🏦 Banked: **${user.bankTokens.toLocaleString()}**`,
+                        `🎯 Access Points: **${accessPoints.toLocaleString()}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🔥 Activity",
+                    value: [
+                        `📆 ${streakText}`,
+                        `⏱️ Last XP: **${lastXpAt}**`,
+                        `🏆 Achievements: **${user.achievements.length.toLocaleString()}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🪖 Raid Track",
+                    value: [
+                        `PMC Level: **${pmcLevel.toLocaleString()}**`,
+                        `Raid XP: **${user.pmcXP.toLocaleString()}**`,
+                        `Tier: **${tierVisual.label}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🌟 Status",
+                    value: [
+                        `Prestige: **${user.prestige.toLocaleString()}**`,
+                        `Badge: **${prestigeBadge.label}**`,
+                        `Access Tier: **${badge.label}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "✨ Recent Unlocks",
+                    value: achievements,
+                    inline: true
+                }
+            )
+            .setFooter({ text: "Live data is pulled from persisted XP state." });
         return JSON.stringify({ embed: embed.toJSON() });
     },
     pmc: async interaction => buildPmcProfilePayload(interaction.user),
