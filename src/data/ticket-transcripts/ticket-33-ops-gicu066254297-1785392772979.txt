@@ -1,0 +1,13 @@
+Ticket #33 Transcript
+Guild: FN™ Tarkov (1491266115933048914)
+Channel: ops-gicu066254297 (1532269091547517078)
+Owner: 1325446856645410816
+Resolved By: 1511903830474883270
+Resolved Reason: Resolved by support panel action
+Exported At: 2026-07-30T06:26:12.979Z
+Messages: 3
+
+--- Messages ---
+[2026-07-30T06:10:19.916Z] FN Dev#6036 (1524100788664926309): <@&1506184638207361145> <@1325446856645410816>
+[2026-07-30T06:18:01.845Z] 3bn8 (1511903830474883270): sup
+[2026-07-30T06:26:02.396Z] FN Dev#6036 (1524100788664926309): 🔒 Ticket archived to hold queue. 📝 Reason: Archived by support panel action

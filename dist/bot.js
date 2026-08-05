@@ -1,0 +1,8172 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+require("dotenv/config");
+const dotenv = __importStar(require("dotenv"));
+const discord_js_1 = require("discord.js");
+const fs_extra_1 = __importDefault(require("fs-extra"));
+const node_crypto_1 = __importDefault(require("node:crypto"));
+const node_https_1 = __importDefault(require("node:https"));
+const node_os_1 = __importDefault(require("node:os"));
+const path_1 = __importDefault(require("path"));
+const utils_1 = require("./utils");
+const ticketEnhancements_1 = require("./services/ticketEnhancements");
+const economy_1 = require("./game/economy");
+const catalog_1 = require("./game/catalog");
+const bossHearts_1 = require("./game/bossHearts");
+const payloads_1 = require("./game/payloads");
+const raid_1 = require("./game/raid");
+const RaidDomain = __importStar(require("./raid/domain"));
+const RaidRuntime = __importStar(require("./raid/runtime"));
+const ticketOps_1 = require("./services/ticketOps");
+const ticketTranscript_1 = require("./services/ticketTranscript");
+const ticketCommands_1 = require("./commands/ticketCommands");
+const moderationCommands_1 = require("./commands/moderationCommands");
+const coreCommands_1 = require("./commands/coreCommands");
+const slashCatalog_1 = require("./commands/slashCatalog");
+const health_1 = require("./runtime/health");
+const rateLimit_1 = require("./runtime/rateLimit");
+const ticketState_1 = require("./services/ticketState");
+// Always resolve env vars from this bot project root, even when npm --prefix is used from another cwd.
+dotenv.config({ path: path_1.default.resolve(__dirname, "../.env") });
+const client = new discord_js_1.Client({
+    intents: [
+        discord_js_1.GatewayIntentBits.Guilds,
+        discord_js_1.GatewayIntentBits.GuildMembers,
+        discord_js_1.GatewayIntentBits.GuildMessages,
+        discord_js_1.GatewayIntentBits.MessageContent
+    ]
+});
+const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID || "";
+const ACTIVITY_CHANNEL_ID = process.env.DISCORD_ACTIVITY_CHANNEL_ID || "";
+const HEALTH_REPORT_CHANNEL_ID = process.env.HEALTH_REPORT_CHANNEL_ID || ACTIVITY_CHANNEL_ID || "";
+const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
+const STRICT_ENV_REQUIRED = process.env.STRICT_ENV_REQUIRED === "1"
+    || (process.env.STRICT_ENV_REQUIRED !== "0" && process.env.NODE_ENV === "production");
+const XP_COOLDOWN_MS = 0;
+const RAID_COOLDOWN_MS = 5 * 1000;
+const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
+const WEEKLY_BALANCE_REPORT_MS = 7 * 24 * 60 * 60 * 1000;
+const HEALTH_WATCHDOG_INTERVAL_MS = 10 * 60 * 1000;
+const BACKUP_STALE_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
+const PREFIX = "$";
+const MIN_BET = 1;
+const MIN_RAID_BET = 10;
+const MOD_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/moderation.json");
+const TRADE_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/trades.json");
+const XP_ROLE_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/xp-roles.json");
+const POINTS_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/points.json");
+const POINTS_BACKUP_FILE = `${POINTS_DATA_FILE}.bak`;
+const EVENT_LOG_FILE = path_1.default.resolve(__dirname, "../src/data/events.jsonl");
+const BALANCE_TELEMETRY_FILE = path_1.default.resolve(__dirname, "../src/data/balance-telemetry.json");
+const METRICS_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/runtime-metrics.json");
+const TICKET_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/tickets.json");
+const TICKET_TRANSCRIPT_DIR = path_1.default.resolve(__dirname, "../src/data/ticket-transcripts");
+const DEFAULT_TICKET_HANDLER_ROLE_ID = "1506184638207361145";
+const DEFAULT_TICKET_DEFAULT_CATEGORY_ID = "1523411322430296228";
+const DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID = "1506119505720377434";
+const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
+const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
+const TICKET_DEFAULT_CATEGORY_ID = process.env.TICKET_DEFAULT_CATEGORY_ID || DEFAULT_TICKET_DEFAULT_CATEGORY_ID;
+const PERMANENT_TICKET_PANEL_CHANNEL_ID = process.env.PERMANENT_TICKET_PANEL_CHANNEL_ID || DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
+const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID || DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID;
+const TICKET_EXPORT_WEBHOOK_URL = process.env.TICKET_EXPORT_WEBHOOK_URL || "";
+const ARMY_ICON_URL = "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1fa96.png";
+const OPS_ALERT_COOLDOWN_MS = 60 * 1000;
+const COMMAND_IDEMPOTENCY_WINDOW_MS = Math.max(0, Number(process.env.COMMAND_IDEMPOTENCY_WINDOW_MS || 15000));
+const COMMAND_RATE_LIMIT_WINDOW_MS = 1500;
+const CASINO_ACTION_RATE_LIMIT_WINDOW_MS = 1200;
+const opsAlertLastSent = new Map();
+const recentCommandExecutions = new Map();
+const inFlightTicketCreates = new Map();
+const ticketSlaAlertState = new Map();
+const INSTANCE_LOCK_PATH = path_1.default.join(node_os_1.default.tmpdir(), `titan-raid-bot.${node_crypto_1.default.createHash("sha1").update(String(process.env.DISCORD_TOKEN || "no-token")).digest("hex").slice(0, 12)}.lock`);
+let hasInstanceLock = false;
+function shouldSendOpsAlert(key) {
+    const now = Date.now();
+    const last = opsAlertLastSent.get(key) || 0;
+    if (now - last < OPS_ALERT_COOLDOWN_MS)
+        return false;
+    opsAlertLastSent.set(key, now);
+    return true;
+}
+function toSafeString(value) {
+    if (value instanceof Error)
+        return `${value.name}: ${value.message}`;
+    if (typeof value === "string")
+        return value;
+    try {
+        return JSON.stringify(value);
+    }
+    catch {
+        return String(value);
+    }
+}
+function postOpsAlert(level, title, details = {}) {
+    if (!OPS_ALERT_WEBHOOK_URL)
+        return;
+    const key = `${level}:${title}`;
+    if (!shouldSendOpsAlert(key))
+        return;
+    let webhookUrl;
+    try {
+        webhookUrl = new URL(OPS_ALERT_WEBHOOK_URL);
+    }
+    catch {
+        console.error("OPS_ALERT_WEBHOOK_URL is invalid.");
+        return;
+    }
+    const detailLines = Object.entries(details)
+        .map(([k, v]) => `${k}: ${toSafeString(v)}`)
+        .slice(0, 12);
+    const content = [
+        `**Titan Bot ${level.toUpperCase()}**`,
+        title,
+        ...detailLines
+    ].join("\n");
+    const body = JSON.stringify({
+        username: "Titan Ops Alerts",
+        content: content.slice(0, 1800)
+    });
+    const req = node_https_1.default.request({
+        protocol: webhookUrl.protocol,
+        hostname: webhookUrl.hostname,
+        port: webhookUrl.port || (webhookUrl.protocol === "https:" ? 443 : 80),
+        path: `${webhookUrl.pathname}${webhookUrl.search}`,
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body)
+        }
+    }, res => {
+        if (res.statusCode && res.statusCode >= 400) {
+            console.error(`Ops alert webhook failed with status ${res.statusCode}.`);
+        }
+        res.resume();
+    });
+    req.on("error", error => {
+        console.error(`Ops alert webhook error: ${toSafeString(error)}`);
+    });
+    req.write(body);
+    req.end();
+}
+function pruneRecentCommandExecutions(now = Date.now()) {
+    if (COMMAND_IDEMPOTENCY_WINDOW_MS <= 0)
+        return;
+    for (const [key, ts] of recentCommandExecutions.entries()) {
+        if (now - ts > COMMAND_IDEMPOTENCY_WINDOW_MS) {
+            recentCommandExecutions.delete(key);
+        }
+    }
+}
+function commandExecutionKey(interaction, fingerprint) {
+    return `${interaction.guildId || "dm"}:${interaction.user.id}:${interaction.commandName}:${fingerprint}`;
+}
+function rejectIfDuplicateCommand(interaction, fingerprint) {
+    if (COMMAND_IDEMPOTENCY_WINDOW_MS <= 0)
+        return null;
+    pruneRecentCommandExecutions();
+    const key = commandExecutionKey(interaction, fingerprint);
+    const now = Date.now();
+    const last = recentCommandExecutions.get(key);
+    if (last && (now - last) <= COMMAND_IDEMPOTENCY_WINDOW_MS) {
+        return "Duplicate command detected. Please wait a few seconds before retrying.";
+    }
+    recentCommandExecutions.set(key, now);
+    return null;
+}
+function rejectIfRateLimitedForInteraction(interaction) {
+    if (COMMAND_RATE_LIMIT_WINDOW_MS <= 0)
+        return null;
+    const key = `${interaction.guildId || "dm"}:${interaction.user.id}:${interaction.commandName}`;
+    return (0, rateLimit_1.rejectIfRateLimited)(key, COMMAND_RATE_LIMIT_WINDOW_MS);
+}
+function rejectIfRateLimitedForCasinoAction(guildId, userId, gameKey) {
+    if (CASINO_ACTION_RATE_LIMIT_WINDOW_MS <= 0)
+        return null;
+    const key = `${guildId || "dm"}:${userId}:casino:${gameKey}`;
+    return (0, rateLimit_1.rejectIfRateLimited)(key, CASINO_ACTION_RATE_LIMIT_WINDOW_MS);
+}
+function updateBotPresence() {
+    if (!client.user)
+        return;
+    const guildCount = client.guilds.cache.size;
+    const label = guildCount > 0
+        ? `${PREFIX}help • ${guildCount} server${guildCount === 1 ? "" : "s"}`
+        : `${PREFIX}help`;
+    void client.user.setPresence({
+        activities: [{ name: label, type: discord_js_1.ActivityType.Playing }],
+        status: "online"
+    });
+}
+function tryAcquireTicketCreateLock(guildId, ownerId) {
+    const key = `${guildId}:${ownerId}`;
+    if (inFlightTicketCreates.has(key))
+        return false;
+    inFlightTicketCreates.set(key, Date.now());
+    return true;
+}
+function releaseTicketCreateLock(guildId, ownerId) {
+    inFlightTicketCreates.delete(`${guildId}:${ownerId}`);
+}
+function isProcessAlive(pid) {
+    if (!Number.isFinite(pid) || pid <= 0)
+        return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function acquireInstanceLock() {
+    const now = Date.now();
+    const payload = JSON.stringify({ pid: process.pid, startedAt: now });
+    try {
+        fs_extra_1.default.writeFileSync(INSTANCE_LOCK_PATH, payload, { flag: "wx" });
+        hasInstanceLock = true;
+        return { ok: true };
+    }
+    catch {
+        const state = readInstanceLockState();
+        if (state.ownerPid && state.ownerAlive) {
+            return { ok: false, reason: `Another bot instance appears active (PID ${state.ownerPid}).` };
+        }
+        try {
+            fs_extra_1.default.writeFileSync(INSTANCE_LOCK_PATH, payload, { flag: "w" });
+            hasInstanceLock = true;
+            return { ok: true };
+        }
+        catch {
+            return { ok: false, reason: "Unable to acquire singleton lock file." };
+        }
+    }
+}
+function releaseInstanceLock() {
+    if (!hasInstanceLock)
+        return;
+    try {
+        const state = readInstanceLockState();
+        if (!state.ownerPid || state.ownerPid === process.pid || !state.ownerAlive) {
+            fs_extra_1.default.removeSync(INSTANCE_LOCK_PATH);
+        }
+    }
+    catch {
+        // Best effort cleanup only.
+    }
+    finally {
+        hasInstanceLock = false;
+    }
+}
+async function runStartupPreflight() {
+    const errors = [];
+    const warnings = [];
+    if (!process.env.DISCORD_TOKEN) {
+        errors.push("DISCORD_TOKEN is missing.");
+    }
+    const optionalDefaults = [
+        { key: "TICKET_HANDLER_ROLE_ID", message: "TICKET_HANDLER_ROLE_ID not set; using built-in default role id." },
+        { key: "TICKET_DEFAULT_CATEGORY_ID", message: "TICKET_DEFAULT_CATEGORY_ID not set; using built-in default category id." },
+        { key: "PERMANENT_TICKET_PANEL_CHANNEL_ID", message: "PERMANENT_TICKET_PANEL_CHANNEL_ID not set; using built-in default channel id." },
+        { key: "BOT_FEATURE_BRIEF_CHANNEL_ID", message: "BOT_FEATURE_BRIEF_CHANNEL_ID not set; using built-in default channel id." }
+    ];
+    for (const requirement of optionalDefaults) {
+        if (!process.env[requirement.key]) {
+            if (STRICT_ENV_REQUIRED)
+                errors.push(`${requirement.key} is required in strict env mode.`);
+            else
+                warnings.push(requirement.message);
+        }
+    }
+    if (STRICT_ENV_REQUIRED && !process.env.DISCORD_GUILD_ID) {
+        errors.push("DISCORD_GUILD_ID is required in strict env mode.");
+    }
+    const writablePaths = [
+        POINTS_DATA_FILE,
+        MOD_DATA_FILE,
+        TRADE_DATA_FILE,
+        TICKET_DATA_FILE,
+        BALANCE_TELEMETRY_FILE,
+        EVENT_LOG_FILE,
+        XP_ROLE_DATA_FILE
+    ];
+    for (const filePath of writablePaths) {
+        try {
+            fs_extra_1.default.ensureDirSync(path_1.default.dirname(filePath));
+            const probePath = `${filePath}.probe`;
+            fs_extra_1.default.writeFileSync(probePath, "");
+            fs_extra_1.default.unlinkSync(probePath);
+        }
+        catch {
+            errors.push(`Path is not writable: ${filePath}`);
+        }
+    }
+    return { errors, warnings };
+}
+const ACCESS_POINT_BADGES = [
+    {
+        threshold: 1000,
+        label: "Elite Access Tier (1000+ AP)",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f451.png"
+    },
+    {
+        threshold: 500,
+        label: "Veteran Access Tier (500+ AP)",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/2694.png"
+    },
+    {
+        threshold: 250,
+        label: "Operator Access Tier (250+ AP)",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f6e1.png"
+    },
+    {
+        threshold: 0,
+        label: "Recruit Access Tier",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f539.png"
+    }
+];
+const PRESTIGE_BADGES = [
+    {
+        threshold: 10,
+        label: "Celestial Prestige X",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f30c.png",
+        color: 0x8b5cf6
+    },
+    {
+        threshold: 5,
+        label: "Mythic Prestige V",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f680.png",
+        color: 0xf97316
+    },
+    {
+        threshold: 3,
+        label: "Diamond Prestige III",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f48e.png",
+        color: 0x0ea5e9
+    },
+    {
+        threshold: 1,
+        label: "Veteran Prestige I",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f3c5.png",
+        color: 0xf59e0b
+    },
+    {
+        threshold: 0,
+        label: "Unranked Prestige",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f539.png",
+        color: 0x4ca7ff
+    }
+];
+const PMC_TIER_VISUALS = [
+    {
+        level: 20000,
+        label: "Mythic Overlord",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f30c.png",
+        color: 0x7c3aed
+    },
+    {
+        level: 12000,
+        label: "Cataclysm Marshal",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f525.png",
+        color: 0xdc2626
+    },
+    {
+        level: 8000,
+        label: "Apex Sovereign",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f451.png",
+        color: 0xd97706
+    },
+    {
+        level: 4000,
+        label: "Steel Warlord",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/2694.png",
+        color: 0x334155
+    },
+    {
+        level: 1000,
+        label: "Iron Vanguard",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f6e1.png",
+        color: 0x0f766e
+    },
+    {
+        level: 0,
+        label: "Field Recruit",
+        iconUrl: ARMY_ICON_URL,
+        color: 0x0b1f3a
+    }
+];
+function getAccessPointBadge(accessPoints) {
+    for (const badge of ACCESS_POINT_BADGES) {
+        if (accessPoints >= badge.threshold)
+            return badge;
+    }
+    return ACCESS_POINT_BADGES[ACCESS_POINT_BADGES.length - 1];
+}
+function getPrestigeBadge(prestige) {
+    const p = Math.max(0, Math.floor(prestige));
+    for (const badge of PRESTIGE_BADGES) {
+        if (p >= badge.threshold)
+            return badge;
+    }
+    return PRESTIGE_BADGES[PRESTIGE_BADGES.length - 1];
+}
+function getPmcTierVisual(level) {
+    const lv = Math.max(0, Math.floor(level));
+    for (const visual of PMC_TIER_VISUALS) {
+        if (lv >= visual.level)
+            return visual;
+    }
+    return PMC_TIER_VISUALS[PMC_TIER_VISUALS.length - 1];
+}
+function defaultBalanceSlice() {
+    return {
+        runs: 0,
+        wins: 0,
+        net: 0,
+        totalBet: 0,
+        totalReward: 0,
+        successChanceSum: 0,
+        bossSpawns: 0,
+        bossKills: 0,
+        lootValue: 0,
+        lootItems: 0
+    };
+}
+function defaultBalanceTelemetryStore() {
+    const now = Date.now();
+    return {
+        createdAt: now,
+        updatedAt: now,
+        lastWeeklyReportAt: 0,
+        commands: {},
+        raid: {
+            runs: 0,
+            wins: 0,
+            losses: 0,
+            totalBet: 0,
+            totalNet: 0,
+            bossSpawns: 0,
+            bossKills: 0,
+            byTension: {},
+            byMap: {},
+            byCondition: {},
+            byDifficulty: {},
+            tokenSources: {
+                baseReward: 0,
+                outcomeBonus: 0,
+                bossBonus: 0,
+                failureMitigation: 0
+            },
+            lootByRarity: {}
+        },
+        consumables: {},
+        crates: {}
+    };
+}
+function normalizeBalanceSliceMap(raw) {
+    if (!raw || typeof raw !== "object")
+        return {};
+    return Object.fromEntries(Object.entries(raw).map(([key, value]) => {
+        const row = (value && typeof value === "object") ? value : {};
+        return [key, {
+                runs: typeof row.runs === "number" ? row.runs : 0,
+                wins: typeof row.wins === "number" ? row.wins : 0,
+                net: typeof row.net === "number" ? row.net : 0,
+                totalBet: typeof row.totalBet === "number" ? row.totalBet : 0,
+                totalReward: typeof row.totalReward === "number" ? row.totalReward : 0,
+                successChanceSum: typeof row.successChanceSum === "number" ? row.successChanceSum : 0,
+                bossSpawns: typeof row.bossSpawns === "number" ? row.bossSpawns : 0,
+                bossKills: typeof row.bossKills === "number" ? row.bossKills : 0,
+                lootValue: typeof row.lootValue === "number" ? row.lootValue : 0,
+                lootItems: typeof row.lootItems === "number" ? row.lootItems : 0
+            }];
+    }));
+}
+function defaultRuntimeMetricsStore() {
+    const now = Date.now();
+    return {
+        createdAt: now,
+        updatedAt: now,
+        command: {
+            total: 0,
+            success: 0,
+            failed: 0,
+            byCommand: {}
+        },
+        tickets: {
+            createAttempts: 0,
+            createFailures: 0,
+            lastFailureAt: null,
+            lastFailureReason: null
+        },
+        availability: {
+            totalRestarts: 0,
+            lastStartupAt: null,
+            lastShutdownAt: null,
+            trackedDowntimeMs: 0,
+            lastDowntimeMs: 0,
+            maxDowntimeMs: 0
+        }
+    };
+}
+function parseRuntimeMetricsStore(raw) {
+    if (!raw || typeof raw !== "object")
+        return null;
+    const seed = defaultRuntimeMetricsStore();
+    const value = raw;
+    const command = value.command || seed.command;
+    const tickets = value.tickets || seed.tickets;
+    const availability = value.availability || seed.availability;
+    return {
+        createdAt: typeof value.createdAt === "number" ? value.createdAt : seed.createdAt,
+        updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : seed.updatedAt,
+        command: {
+            total: typeof command.total === "number" ? command.total : 0,
+            success: typeof command.success === "number" ? command.success : 0,
+            failed: typeof command.failed === "number" ? command.failed : 0,
+            byCommand: command.byCommand && typeof command.byCommand === "object"
+                ? Object.fromEntries(Object.entries(command.byCommand).map(([key, value]) => {
+                    const row = (value && typeof value === "object" ? value : {});
+                    return [key, {
+                            total: typeof row.total === "number" ? row.total : 0,
+                            failed: typeof row.failed === "number" ? row.failed : 0,
+                            totalDurationMs: typeof row.totalDurationMs === "number" ? row.totalDurationMs : 0,
+                            maxDurationMs: typeof row.maxDurationMs === "number" ? row.maxDurationMs : 0,
+                            lastDurationMs: typeof row.lastDurationMs === "number" ? row.lastDurationMs : 0
+                        }];
+                }))
+                : {}
+        },
+        tickets: {
+            createAttempts: typeof tickets.createAttempts === "number" ? tickets.createAttempts : 0,
+            createFailures: typeof tickets.createFailures === "number" ? tickets.createFailures : 0,
+            lastFailureAt: typeof tickets.lastFailureAt === "number" ? tickets.lastFailureAt : null,
+            lastFailureReason: typeof tickets.lastFailureReason === "string" ? tickets.lastFailureReason : null
+        },
+        availability: {
+            totalRestarts: typeof availability.totalRestarts === "number" ? availability.totalRestarts : 0,
+            lastStartupAt: typeof availability.lastStartupAt === "number" ? availability.lastStartupAt : null,
+            lastShutdownAt: typeof availability.lastShutdownAt === "number" ? availability.lastShutdownAt : null,
+            trackedDowntimeMs: typeof availability.trackedDowntimeMs === "number" ? availability.trackedDowntimeMs : 0,
+            lastDowntimeMs: typeof availability.lastDowntimeMs === "number" ? availability.lastDowntimeMs : 0,
+            maxDowntimeMs: typeof availability.maxDowntimeMs === "number" ? availability.maxDowntimeMs : 0
+        }
+    };
+}
+function parseBalanceTelemetryStore(raw) {
+    if (!raw || typeof raw !== "object")
+        return null;
+    const seed = defaultBalanceTelemetryStore();
+    const value = raw;
+    const raid = value.raid || seed.raid;
+    return {
+        createdAt: typeof value.createdAt === "number" ? value.createdAt : seed.createdAt,
+        updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : seed.updatedAt,
+        lastWeeklyReportAt: typeof value.lastWeeklyReportAt === "number" ? value.lastWeeklyReportAt : 0,
+        commands: value.commands && typeof value.commands === "object" ? value.commands : {},
+        raid: {
+            runs: typeof raid.runs === "number" ? raid.runs : 0,
+            wins: typeof raid.wins === "number" ? raid.wins : 0,
+            losses: typeof raid.losses === "number" ? raid.losses : 0,
+            totalBet: typeof raid.totalBet === "number" ? raid.totalBet : 0,
+            totalNet: typeof raid.totalNet === "number" ? raid.totalNet : 0,
+            bossSpawns: typeof raid.bossSpawns === "number" ? raid.bossSpawns : 0,
+            bossKills: typeof raid.bossKills === "number" ? raid.bossKills : 0,
+            byTension: normalizeBalanceSliceMap(raid.byTension),
+            byMap: normalizeBalanceSliceMap(raid.byMap),
+            byCondition: normalizeBalanceSliceMap(raid.byCondition),
+            byDifficulty: normalizeBalanceSliceMap(raid.byDifficulty),
+            tokenSources: {
+                baseReward: typeof raid.tokenSources?.baseReward === "number" ? raid.tokenSources.baseReward : 0,
+                outcomeBonus: typeof raid.tokenSources?.outcomeBonus === "number" ? raid.tokenSources.outcomeBonus : 0,
+                bossBonus: typeof raid.tokenSources?.bossBonus === "number" ? raid.tokenSources.bossBonus : 0,
+                failureMitigation: typeof raid.tokenSources?.failureMitigation === "number" ? raid.tokenSources.failureMitigation : 0
+            },
+            lootByRarity: raid.lootByRarity && typeof raid.lootByRarity === "object" ? raid.lootByRarity : {}
+        },
+        consumables: value.consumables && typeof value.consumables === "object" ? value.consumables : {},
+        crates: value.crates && typeof value.crates === "object" ? value.crates : {}
+    };
+}
+function readRuntimeMetrics() {
+    return readJsonWithBackup(METRICS_DATA_FILE, parseRuntimeMetricsStore, defaultRuntimeMetricsStore());
+}
+const runtimeMetrics = readRuntimeMetrics();
+let shutdownMetricMarked = false;
+function saveRuntimeMetrics() {
+    runtimeMetrics.updatedAt = Date.now();
+    writeJsonAtomic(METRICS_DATA_FILE, runtimeMetrics);
+}
+function recordCommandOutcome(commandName, success, durationMs = 0) {
+    runtimeMetrics.command.total += 1;
+    if (success)
+        runtimeMetrics.command.success += 1;
+    else
+        runtimeMetrics.command.failed += 1;
+    const key = String(commandName || "unknown").toLowerCase();
+    const entry = runtimeMetrics.command.byCommand[key] || {
+        total: 0,
+        failed: 0,
+        totalDurationMs: 0,
+        maxDurationMs: 0,
+        lastDurationMs: 0
+    };
+    entry.total += 1;
+    if (!success)
+        entry.failed += 1;
+    entry.lastDurationMs = Math.max(0, Math.floor(durationMs));
+    entry.totalDurationMs += entry.lastDurationMs;
+    entry.maxDurationMs = Math.max(entry.maxDurationMs, entry.lastDurationMs);
+    runtimeMetrics.command.byCommand[key] = entry;
+    saveRuntimeMetrics();
+}
+function recordTicketCreateAttempt() {
+    runtimeMetrics.tickets.createAttempts += 1;
+    saveRuntimeMetrics();
+}
+function recordTicketCreateFailure(reason) {
+    runtimeMetrics.tickets.createFailures += 1;
+    runtimeMetrics.tickets.lastFailureAt = Date.now();
+    runtimeMetrics.tickets.lastFailureReason = clampText(String(reason || "unknown failure"), 240);
+    saveRuntimeMetrics();
+}
+function recordRuntimeStartup() {
+    const now = Date.now();
+    const lastShutdown = runtimeMetrics.availability.lastShutdownAt;
+    if (typeof lastShutdown === "number" && lastShutdown > 0 && now > lastShutdown) {
+        const downtime = now - lastShutdown;
+        runtimeMetrics.availability.lastDowntimeMs = downtime;
+        runtimeMetrics.availability.trackedDowntimeMs += downtime;
+        runtimeMetrics.availability.maxDowntimeMs = Math.max(runtimeMetrics.availability.maxDowntimeMs, downtime);
+    }
+    runtimeMetrics.availability.totalRestarts += 1;
+    runtimeMetrics.availability.lastStartupAt = now;
+    shutdownMetricMarked = false;
+    saveRuntimeMetrics();
+}
+function recordRuntimeShutdown(reason) {
+    if (shutdownMetricMarked)
+        return;
+    shutdownMetricMarked = true;
+    runtimeMetrics.availability.lastShutdownAt = Date.now();
+    saveRuntimeMetrics();
+    appendAuditEvent("runtime_shutdown_marked", { reason });
+}
+function formatMetricDuration(ms) {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${days}d ${hours}h ${minutes}m ${secs}s`;
+}
+function appendAuditEvent(eventType, payload) {
+    try {
+        fs_extra_1.default.ensureDirSync(path_1.default.dirname(EVENT_LOG_FILE));
+        const line = JSON.stringify({
+            ts: new Date().toISOString(),
+            eventType,
+            ...payload
+        });
+        fs_extra_1.default.appendFileSync(EVENT_LOG_FILE, `${line}\n`, "utf8");
+    }
+    catch {
+        // Never crash runtime due to audit logging.
+    }
+}
+function readInstanceLockState() {
+    if (!fs_extra_1.default.existsSync(INSTANCE_LOCK_PATH)) {
+        return { exists: false, ownerPid: null, ownerStartedAt: null, ownerAlive: false };
+    }
+    try {
+        const raw = fs_extra_1.default.readFileSync(INSTANCE_LOCK_PATH, "utf8");
+        const parsed = JSON.parse(raw);
+        const ownerPid = Number(parsed?.pid || 0) || null;
+        const ownerStartedAt = Number(parsed?.startedAt || 0) || null;
+        const ownerAlive = ownerPid ? isProcessAlive(ownerPid) : false;
+        return { exists: true, ownerPid, ownerStartedAt, ownerAlive };
+    }
+    catch {
+        return { exists: true, ownerPid: null, ownerStartedAt: null, ownerAlive: false };
+    }
+}
+function describeInFlightTicketCreateLocks(limit = 5) {
+    if (!inFlightTicketCreates.size)
+        return "none";
+    const now = Date.now();
+    const entries = Array.from(inFlightTicketCreates.entries())
+        .slice(0, Math.max(1, limit))
+        .map(([key, ts]) => `${key} (${Math.max(0, Math.floor((now - ts) / 1000))}s)`);
+    return entries.join("\n");
+}
+function readRecentTicketOpsEvents(limit = 8) {
+    if (!fs_extra_1.default.existsSync(EVENT_LOG_FILE))
+        return [];
+    const interesting = new Set([
+        "ticket_open",
+        "ticket_duplicate_channel_deleted",
+        "ticket_prune_deleted_channel",
+        "ticket_prune_stale_owner_open",
+        "ticket_import",
+        "ticket_panel_permanent_upsert",
+        "uncaught_exception"
+    ]);
+    try {
+        const lines = fs_extra_1.default.readFileSync(EVENT_LOG_FILE, "utf8").split(/\r?\n/).filter(Boolean);
+        const picked = [];
+        for (let i = lines.length - 1; i >= 0; i--) {
+            let obj;
+            try {
+                const parsed = JSON.parse(lines[i]);
+                if (!parsed || typeof parsed !== "object")
+                    continue;
+                obj = parsed;
+            }
+            catch {
+                continue;
+            }
+            if (!interesting.has(String(obj.eventType || "")))
+                continue;
+            if (obj.eventType === "uncaught_exception" && !String(obj.message || "").toLowerCase().includes("ticket"))
+                continue;
+            const tsValue = typeof obj.ts === "number" || typeof obj.ts === "string" ? obj.ts : null;
+            const tsText = tsValue !== null ? new Date(tsValue).toLocaleTimeString() : "time?";
+            let detail = "";
+            if (obj.eventType === "ticket_open") {
+                detail = `owner ${obj.ownerId || "?"} channel ${obj.channelId || "?"}`;
+            }
+            else if (obj.eventType === "ticket_duplicate_channel_deleted") {
+                detail = `removed ${obj.channelId || "?"} kept ${obj.canonicalChannelId || "?"}`;
+            }
+            else if (obj.eventType === "ticket_import") {
+                detail = `channel ${obj.channelId || "?"}`;
+            }
+            else if (obj.eventType === "ticket_panel_permanent_upsert") {
+                detail = `${obj.action || "updated"} ${obj.channelId || "?"}`;
+            }
+            else if (obj.eventType === "uncaught_exception") {
+                detail = String(obj.message || "").slice(0, 90);
+            }
+            else {
+                detail = `channel ${obj.channelId || "n/a"}`;
+            }
+            picked.push(`${tsText} | ${obj.eventType} | ${detail}`);
+            if (picked.length >= Math.max(1, limit))
+                break;
+        }
+        return picked;
+    }
+    catch {
+        return [];
+    }
+}
+function formatDuration(totalSeconds) {
+    const seconds = Math.max(0, Math.floor(totalSeconds));
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${days}d ${hours}h ${minutes}m ${secs}s`;
+}
+function toIsoOrNever(ts) {
+    if (!ts || ts <= 0)
+        return "never";
+    return new Date(ts).toISOString();
+}
+function statLabel(filePath) {
+    try {
+        if (!fs_extra_1.default.existsSync(filePath))
+            return "missing";
+        const stat = fs_extra_1.default.statSync(filePath);
+        const kb = Math.max(1, Math.round(stat.size / 1024));
+        return `${kb}KB | ${stat.mtime.toISOString()}`;
+    }
+    catch {
+        return "unreadable";
+    }
+}
+function statSummary(filePath) {
+    try {
+        if (!fs_extra_1.default.existsSync(filePath)) {
+            return { exists: false, size: 0, mtime: 0 };
+        }
+        const stat = fs_extra_1.default.statSync(filePath);
+        return { exists: true, size: stat.size, mtime: stat.mtimeMs };
+    }
+    catch {
+        return { exists: false, size: 0, mtime: 0 };
+    }
+}
+function writeJsonAtomic(filePath, data) {
+    const backupPath = `${filePath}.bak`;
+    const backupV1Path = `${filePath}.bak.1`;
+    const backupV2Path = `${filePath}.bak.2`;
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    fs_extra_1.default.ensureDirSync(path_1.default.dirname(filePath));
+    try {
+        if (fs_extra_1.default.existsSync(backupV1Path))
+            fs_extra_1.default.copyFileSync(backupV1Path, backupV2Path);
+        if (fs_extra_1.default.existsSync(backupPath))
+            fs_extra_1.default.copyFileSync(backupPath, backupV1Path);
+    }
+    catch {
+        // Best effort backup chain rotation only.
+    }
+    if (fs_extra_1.default.existsSync(filePath)) {
+        try {
+            fs_extra_1.default.copyFileSync(filePath, backupPath);
+        }
+        catch {
+            // Best-effort backup pre-write.
+        }
+    }
+    try {
+        fs_extra_1.default.writeJsonSync(tempPath, data, { spaces: 2 });
+        fs_extra_1.default.moveSync(tempPath, filePath, { overwrite: true });
+        try {
+            fs_extra_1.default.copyFileSync(filePath, backupPath);
+        }
+        catch {
+            // Best-effort backup post-write.
+        }
+    }
+    finally {
+        if (fs_extra_1.default.existsSync(tempPath)) {
+            fs_extra_1.default.removeSync(tempPath);
+        }
+    }
+}
+function readJsonWithBackup(filePath, parse, seed) {
+    const backupPath = `${filePath}.bak`;
+    if (!fs_extra_1.default.existsSync(filePath) && !fs_extra_1.default.existsSync(backupPath)) {
+        writeJsonAtomic(filePath, seed);
+        return seed;
+    }
+    const readParsed = (candidatePath) => {
+        if (!fs_extra_1.default.existsSync(candidatePath))
+            return null;
+        try {
+            const raw = fs_extra_1.default.readJsonSync(candidatePath);
+            return parse(raw);
+        }
+        catch {
+            return null;
+        }
+    };
+    const primary = readParsed(filePath);
+    if (primary)
+        return primary;
+    const backup = readParsed(backupPath);
+    if (backup) {
+        writeJsonAtomic(filePath, backup);
+        appendAuditEvent("data_store_recovered_from_backup", { filePath });
+        return backup;
+    }
+    writeJsonAtomic(filePath, seed);
+    appendAuditEvent("data_store_reinitialized", { filePath });
+    return seed;
+}
+const balanceTelemetry = readJsonWithBackup(BALANCE_TELEMETRY_FILE, parseBalanceTelemetryStore, defaultBalanceTelemetryStore());
+function saveBalanceTelemetry() {
+    balanceTelemetry.updatedAt = Date.now();
+    writeJsonAtomic(BALANCE_TELEMETRY_FILE, balanceTelemetry);
+}
+function ensureBalanceSlice(store, key) {
+    if (!store[key])
+        store[key] = defaultBalanceSlice();
+    return store[key];
+}
+function trackRaidCommandUsage(commandName) {
+    balanceTelemetry.commands[commandName] = (balanceTelemetry.commands[commandName] || 0) + 1;
+    saveBalanceTelemetry();
+}
+function recordRaidTelemetry(input) {
+    const raid = balanceTelemetry.raid;
+    const safeBet = Math.max(0, Math.floor(input.bet));
+    const safeBaseReward = Math.max(0, Math.floor(input.baseRewardTokens));
+    const safeOutcomeBonus = Math.max(0, Math.floor(input.outcomeBonusTokens));
+    const safeBossBonus = Math.max(0, Math.floor(input.bossBonusTokens));
+    const safeMitigation = Math.max(0, Math.floor(input.failureMitigationTokens));
+    const safeReward = safeBaseReward + safeOutcomeBonus + safeBossBonus + safeMitigation;
+    const safeSuccessChance = Math.max(0, Math.min(100, Math.floor(input.successChance)));
+    raid.runs += 1;
+    raid.totalBet += safeBet;
+    raid.totalNet += Math.floor(input.net);
+    if (input.success)
+        raid.wins += 1;
+    else
+        raid.losses += 1;
+    if (input.bossSpawned)
+        raid.bossSpawns += 1;
+    if (input.bossDefeated)
+        raid.bossKills += 1;
+    raid.tokenSources.baseReward += safeBaseReward;
+    raid.tokenSources.outcomeBonus += safeOutcomeBonus;
+    raid.tokenSources.bossBonus += safeBossBonus;
+    raid.tokenSources.failureMitigation += safeMitigation;
+    const tensionKey = String(input.tensionLabel || "unknown").toLowerCase();
+    const mapKey = String(input.mapLabel || "unknown");
+    const difficultyKey = String(input.mapDifficulty || "unknown");
+    const conditionKey = String(input.conditionLabel || "unknown").toLowerCase();
+    const tensionSlice = ensureBalanceSlice(raid.byTension, tensionKey);
+    const mapSlice = ensureBalanceSlice(raid.byMap, mapKey);
+    const difficultySlice = ensureBalanceSlice(raid.byDifficulty, difficultyKey);
+    const conditionSlice = ensureBalanceSlice(raid.byCondition, conditionKey);
+    const lootItems = input.loot.reduce((sum, item) => sum + Math.max(0, Math.floor(item.qty)), 0);
+    const lootValue = input.loot.reduce((sum, item) => {
+        const qty = Math.max(0, Math.floor(item.qty));
+        const unit = Math.max(0, catalog_1.ITEM_DEFS[item.id]?.price || 0);
+        return sum + (qty * unit);
+    }, 0);
+    const recordSlice = (slice) => {
+        slice.runs += 1;
+        if (input.success)
+            slice.wins += 1;
+        slice.net += Math.floor(input.net);
+        slice.totalBet += safeBet;
+        slice.totalReward += safeReward;
+        slice.successChanceSum += safeSuccessChance;
+        if (input.bossSpawned)
+            slice.bossSpawns += 1;
+        if (input.bossDefeated)
+            slice.bossKills += 1;
+        slice.lootItems += lootItems;
+        slice.lootValue += lootValue;
+    };
+    recordSlice(tensionSlice);
+    recordSlice(mapSlice);
+    recordSlice(difficultySlice);
+    recordSlice(conditionSlice);
+    for (const item of input.loot) {
+        const qty = Math.max(0, Math.floor(item.qty));
+        if (!qty)
+            continue;
+        const rarity = String(catalog_1.ITEM_DEFS[item.id]?.rarity || "unknown").toLowerCase();
+        raid.lootByRarity[rarity] = (raid.lootByRarity[rarity] || 0) + qty;
+    }
+    saveBalanceTelemetry();
+}
+function recordConsumableTelemetry(itemId, qty, autoUse, failed) {
+    const entry = balanceTelemetry.consumables[itemId] || { uses: 0, qty: 0, failures: 0, autoUses: 0 };
+    if (failed) {
+        entry.failures += 1;
+    }
+    else {
+        entry.uses += 1;
+        entry.qty += Math.max(1, Math.floor(qty));
+        if (autoUse)
+            entry.autoUses += 1;
+    }
+    balanceTelemetry.consumables[itemId] = entry;
+    saveBalanceTelemetry();
+}
+function recordCrateTelemetry(crateId, autoOpen, drops) {
+    const entry = balanceTelemetry.crates[crateId] || { opened: 0, autoOpened: 0, totalDrops: 0 };
+    entry.opened += 1;
+    if (autoOpen)
+        entry.autoOpened += 1;
+    entry.totalDrops += drops.reduce((acc, item) => acc + Math.max(0, Math.floor(item.qty)), 0);
+    balanceTelemetry.crates[crateId] = entry;
+    saveBalanceTelemetry();
+}
+function checkpointState(reason) {
+    try {
+        (0, utils_1.savePoints)();
+        saveTradeStore();
+        saveModerationStore();
+        saveTicketStore();
+        saveBalanceTelemetry();
+        saveRuntimeMetrics();
+        appendAuditEvent("checkpoint", { reason });
+    }
+    catch {
+        // Best-effort checkpoint only.
+    }
+}
+function readTradeStore() {
+    return readJsonWithBackup(TRADE_DATA_FILE, raw => {
+        const candidate = raw;
+        if (candidate && Array.isArray(candidate.offers) && typeof candidate.nextId === "number") {
+            return { nextId: Math.max(1, candidate.nextId), offers: candidate.offers };
+        }
+        return null;
+    }, { nextId: 1, offers: [] });
+}
+const tradeStore = readTradeStore();
+function saveTradeStore() {
+    writeJsonAtomic(TRADE_DATA_FILE, tradeStore);
+}
+function createTradeOffer(input) {
+    const offer = {
+        id: tradeStore.nextId++,
+        status: "open",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        ...input
+    };
+    tradeStore.offers.push(offer);
+    saveTradeStore();
+    return offer;
+}
+function getOpenTradeOffer(offerId) {
+    const offer = tradeStore.offers.find(entry => entry.id === offerId);
+    if (!offer || offer.status !== "open")
+        return null;
+    return offer;
+}
+function normalizeTicketStatus(status) {
+    return (0, ticketState_1.normalizeTicketStatus)(status);
+}
+function normalizeTicketPriority(priority) {
+    return (0, ticketState_1.normalizeTicketPriority)(priority);
+}
+function normalizeTicketWorkflowStatus(status) {
+    return (0, ticketState_1.normalizeTicketWorkflowStatus)(status);
+}
+function canTransitionTicketStatus(fromStatus, toStatus) {
+    return (0, ticketState_1.canTransitionTicketStatus)(fromStatus, toStatus);
+}
+function normalizeTicketFromRaw(ticketRaw) {
+    const transcriptRaw = ticketRaw.transcript && typeof ticketRaw.transcript === "object"
+        ? ticketRaw.transcript
+        : null;
+    const transcript = transcriptRaw
+        ? {
+            exportedAt: typeof transcriptRaw.exportedAt === "number" ? transcriptRaw.exportedAt : Date.now(),
+            messageCountApprox: typeof transcriptRaw.messageCountApprox === "number" ? transcriptRaw.messageCountApprox : 0,
+            firstMessageAt: typeof transcriptRaw.firstMessageAt === "number" ? transcriptRaw.firstMessageAt : null,
+            lastMessageAt: typeof transcriptRaw.lastMessageAt === "number" ? transcriptRaw.lastMessageAt : null,
+            channelName: String(transcriptRaw.channelName || "unknown"),
+            transcriptPath: transcriptRaw.transcriptPath ? String(transcriptRaw.transcriptPath) : undefined,
+            transcriptFormat: transcriptRaw.transcriptFormat === "txt" ? "txt" : undefined
+        }
+        : null;
+    const notesRaw = Array.isArray(ticketRaw.internalNotes) ? ticketRaw.internalNotes : [];
+    const internalNotes = notesRaw
+        .map(note => {
+        const cast = note;
+        if (!cast || typeof cast !== "object")
+            return null;
+        const byId = typeof cast.byId === "string" ? cast.byId : "";
+        const at = typeof cast.at === "number" ? cast.at : Date.now();
+        const text = typeof cast.note === "string" ? cast.note : "";
+        if (!byId || !text)
+            return null;
+        return { byId, at, note: text.slice(0, 500) };
+    })
+        .filter((note) => note !== null);
+    const csatRaw = ticketRaw.csat && typeof ticketRaw.csat === "object"
+        ? ticketRaw.csat
+        : null;
+    const csat = csatRaw
+        ? {
+            rating: Math.max(1, Math.min(5, Number(csatRaw.rating) || 5)),
+            submittedAt: typeof csatRaw.submittedAt === "number" ? csatRaw.submittedAt : Date.now(),
+            submittedById: typeof csatRaw.submittedById === "string" ? csatRaw.submittedById : "unknown",
+            ...(typeof csatRaw.comment === "string" ? { comment: csatRaw.comment.slice(0, 300) } : {})
+        }
+        : null;
+    const rawCategory = typeof ticketRaw.category === "string" ? ticketRaw.category : "general";
+    const category = (0, ticketEnhancements_1.classifyTicketCategory)(rawCategory);
+    const priority = normalizeTicketPriority(ticketRaw.priority);
+    const derivedPolicy = (0, ticketEnhancements_1.getTicketSlaPolicy)(category, priority);
+    const rawSla = ticketRaw.slaPolicy && typeof ticketRaw.slaPolicy === "object"
+        ? ticketRaw.slaPolicy
+        : null;
+    const normalized = {
+        id: Number(ticketRaw.id) || 0,
+        guildId: String(ticketRaw.guildId || ""),
+        ownerId: String(ticketRaw.ownerId || ""),
+        channelId: String(ticketRaw.channelId || ""),
+        reason: String(ticketRaw.reason || "General support"),
+        status: normalizeTicketStatus(ticketRaw.status),
+        priority,
+        workflowStatus: normalizeTicketWorkflowStatus(ticketRaw.workflowStatus),
+        claimedById: ticketRaw.claimedById ? String(ticketRaw.claimedById) : null,
+        assignedToId: ticketRaw.assignedToId ? String(ticketRaw.assignedToId) : null,
+        panelMessageId: ticketRaw.panelMessageId ? String(ticketRaw.panelMessageId) : null,
+        firstResponseAt: typeof ticketRaw.firstResponseAt === "number" ? ticketRaw.firstResponseAt : null,
+        archivedAt: typeof ticketRaw.archivedAt === "number" ? ticketRaw.archivedAt : null,
+        resolvedAt: typeof ticketRaw.resolvedAt === "number" ? ticketRaw.resolvedAt : null,
+        closedReason: ticketRaw.closedReason ? String(ticketRaw.closedReason) : null,
+        resolvedReason: ticketRaw.resolvedReason ? String(ticketRaw.resolvedReason) : null,
+        transcript,
+        createdAt: typeof ticketRaw.createdAt === "number" ? ticketRaw.createdAt : Date.now(),
+        updatedAt: typeof ticketRaw.updatedAt === "number" ? ticketRaw.updatedAt : Date.now(),
+        category,
+        tags: Array.isArray(ticketRaw.tags) ? ticketRaw.tags.map(tag => String(tag).slice(0, 30)) : [],
+        linkedTicketId: typeof ticketRaw.linkedTicketId === "number" ? ticketRaw.linkedTicketId : null,
+        parentTicketId: typeof ticketRaw.parentTicketId === "number" ? ticketRaw.parentTicketId : null,
+        childTicketIds: Array.isArray(ticketRaw.childTicketIds) ? ticketRaw.childTicketIds.map(id => Number(id)).filter(id => Number.isFinite(id) && id > 0) : [],
+        mergedIntoTicketId: typeof ticketRaw.mergedIntoTicketId === "number" ? ticketRaw.mergedIntoTicketId : null,
+        reopenUntilAt: typeof ticketRaw.reopenUntilAt === "number" ? ticketRaw.reopenUntilAt : null,
+        reopenedCount: typeof ticketRaw.reopenedCount === "number" ? ticketRaw.reopenedCount : 0,
+        internalNotes,
+        csat,
+        slaPolicy: {
+            name: typeof rawSla?.name === "string" ? rawSla.name : derivedPolicy.name,
+            firstResponseMs: typeof rawSla?.firstResponseMs === "number" ? rawSla.firstResponseMs : derivedPolicy.firstResponseMs,
+            resolveMs: typeof rawSla?.resolveMs === "number" ? rawSla.resolveMs : derivedPolicy.resolveMs
+        }
+    };
+    if (!(normalized.id > 0 && normalized.guildId && normalized.ownerId && normalized.channelId)) {
+        return null;
+    }
+    return normalized;
+}
+function readTicketStore() {
+    return readJsonWithBackup(TICKET_DATA_FILE, raw => {
+        const candidate = raw;
+        if (candidate && typeof candidate.nextId === "number" && candidate.guildConfigs && Array.isArray(candidate.tickets)) {
+            const normalizedTickets = candidate.tickets
+                .map(ticketRaw => normalizeTicketFromRaw((ticketRaw && typeof ticketRaw === "object") ? ticketRaw : {}))
+                .filter((ticket) => ticket !== null);
+            const normalizedStore = {
+                nextId: Math.max(1, candidate.nextId),
+                version: typeof candidate.version === "number" && candidate.version > 0 ? Math.floor(candidate.version) : 1,
+                guildConfigs: candidate.guildConfigs,
+                tickets: normalizedTickets
+            };
+            return normalizedStore;
+        }
+        return null;
+    }, { nextId: 1, version: 1, guildConfigs: {}, tickets: [] });
+}
+const ticketStore = readTicketStore();
+function readDiskTicketStoreVersion() {
+    if (!fs_extra_1.default.existsSync(TICKET_DATA_FILE))
+        return null;
+    try {
+        const raw = fs_extra_1.default.readJsonSync(TICKET_DATA_FILE);
+        if (typeof raw.version !== "number" || raw.version <= 0) {
+            return 1;
+        }
+        return Math.floor(raw.version);
+    }
+    catch {
+        return null;
+    }
+}
+function saveTicketStore() {
+    const diskVersion = readDiskTicketStoreVersion();
+    if (diskVersion !== null && diskVersion !== ticketStore.version) {
+        appendAuditEvent("ticket_store_version_conflict", {
+            expectedVersion: ticketStore.version,
+            diskVersion
+        });
+        return false;
+    }
+    const previousVersion = ticketStore.version;
+    ticketStore.version = previousVersion + 1;
+    try {
+        writeJsonAtomic(TICKET_DATA_FILE, ticketStore);
+        return true;
+    }
+    catch {
+        ticketStore.version = previousVersion;
+        return false;
+    }
+}
+function ensureTicketConfig(guildId) {
+    if (!ticketStore.guildConfigs[guildId]) {
+        ticketStore.guildConfigs[guildId] = {
+            categoryId: null,
+            archiveCategoryId: null,
+            logChannelId: null,
+            retentionDays: 45,
+            reopenWindowHours: 72,
+            exportWebhookUrl: null
+        };
+        saveTicketStore();
+    }
+    const cfg = ticketStore.guildConfigs[guildId];
+    if (cfg.categoryId === undefined)
+        cfg.categoryId = null;
+    if (cfg.archiveCategoryId === undefined)
+        cfg.archiveCategoryId = null;
+    if (cfg.logChannelId === undefined)
+        cfg.logChannelId = null;
+    if (cfg.retentionDays === undefined)
+        cfg.retentionDays = 45;
+    if (cfg.reopenWindowHours === undefined)
+        cfg.reopenWindowHours = 72;
+    if (cfg.exportWebhookUrl === undefined)
+        cfg.exportWebhookUrl = null;
+    return cfg;
+}
+function findOpenTicketByOwner(guildId, ownerId) {
+    return (0, ticketState_1.findOpenTicketByOwner)(ticketStore.tickets, guildId, ownerId);
+}
+function findOpenTicketByChannel(channelId) {
+    return (0, ticketState_1.findOpenTicketByChannel)(ticketStore.tickets, channelId);
+}
+function findTicketByChannel(channelId) {
+    return (0, ticketState_1.findTicketByChannel)(ticketStore.tickets, channelId);
+}
+function findArchivedTicketByChannel(channelId) {
+    return (0, ticketState_1.findArchivedTicketByChannel)(ticketStore.tickets, channelId);
+}
+function findTicketById(ticketId) {
+    return ticketStore.tickets.find(ticket => ticket.id === ticketId) || null;
+}
+function getTicketSearchIndex(ticket) {
+    return (0, ticketEnhancements_1.extractSearchableTicketText)({
+        reason: ticket.reason,
+        category: ticket.category,
+        notes: ticket.internalNotes || []
+    });
+}
+function buildTicketSlaThresholds(ticket) {
+    const policy = ticket.slaPolicy || (0, ticketEnhancements_1.getTicketSlaPolicy)(ticket.category || "general", ticket.priority);
+    const firstResponseBreachMs = Math.max(2 * 60 * 1000, policy.firstResponseMs);
+    const resolveBreachMs = Math.max(2 * 60 * 60 * 1000, policy.resolveMs);
+    return {
+        firstResponseWarnMs: Math.max(60000, Math.floor(firstResponseBreachMs * 0.66)),
+        firstResponseBreachMs,
+        resolveWarnMs: Math.max(firstResponseBreachMs, Math.floor(resolveBreachMs * 0.84)),
+        resolveBreachMs
+    };
+}
+async function autoRouteTicket(guild, ticket) {
+    const role = guild.roles.cache.get(TICKET_HANDLER_ROLE_ID) || await guild.roles.fetch(TICKET_HANDLER_ROLE_ID).catch(() => null);
+    if (!role)
+        return;
+    const handlerIds = Array.from(role.members.values())
+        .filter(member => !member.user.bot)
+        .map(member => member.id);
+    const best = (0, ticketEnhancements_1.pickLeastLoadedAssignee)(handlerIds, ticketStore.tickets);
+    if (!best)
+        return;
+    const assigned = assignTicketToUser(ticket.channelId, best);
+    if (!assigned)
+        return;
+    await updateTicketOpsPanelMessage(guild, assigned);
+    appendAuditEvent("ticket_auto_route", {
+        guildId: guild.id,
+        ticketId: assigned.id,
+        assignedToId: best,
+        category: assigned.category || "general",
+        policy: assigned.slaPolicy?.name || "default"
+    });
+}
+function evaluateTicketDeflection(guildId, ownerId, reason) {
+    const duplicates = (0, ticketEnhancements_1.findPotentialDuplicateTickets)({
+        tickets: ticketStore.tickets,
+        guildId,
+        ownerId,
+        reason,
+        lookbackMs: 21 * 24 * 60 * 60 * 1000
+    });
+    const kb = (0, ticketEnhancements_1.getKbSuggestions)(reason);
+    if (!duplicates.length)
+        return { blocked: false };
+    const dupLines = duplicates
+        .slice(0, 3)
+        .map(d => `• #${d.ticketId} (${d.status}) similarity ${(d.score * 100).toFixed(0)}%`)
+        .join("\n");
+    return {
+        blocked: true,
+        message: [
+            "Potential duplicate detected. Try these first:",
+            kb.map(item => `• ${item}`).join("\n"),
+            "Recent related tickets:",
+            dupLines,
+            "If you still need a new case, run /ticketforce."
+        ].join("\n")
+    };
+}
+function applyTicketMetadata(ticket, reason) {
+    ticket.category = (0, ticketEnhancements_1.classifyTicketCategory)(reason);
+    ticket.slaPolicy = (0, ticketEnhancements_1.getTicketSlaPolicy)(ticket.category, ticket.priority);
+    ticket.tags = Array.from(new Set([ticket.category, ticket.priority]));
+    ticket.updatedAt = Date.now();
+    saveTicketStore();
+}
+function purgeResolvedTicketsByRetention(guildId, now = Date.now()) {
+    const cfg = ensureTicketConfig(guildId);
+    const retentionDays = Math.max(1, Number(cfg.retentionDays || 45));
+    const before = ticketStore.tickets.length;
+    ticketStore.tickets = ticketStore.tickets.filter(ticket => !(ticket.guildId === guildId && (0, ticketEnhancements_1.shouldPurgeResolvedTicket)(ticket, retentionDays, now)));
+    const removed = before - ticketStore.tickets.length;
+    if (removed > 0) {
+        saveTicketStore();
+        appendAuditEvent("ticket_retention_purge", { guildId, retentionDays, removed });
+    }
+    return removed;
+}
+function buildTicketIntakeModal() {
+    const summaryInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(TICKET_IDS.intakeSummary)
+        .setLabel("Issue Summary")
+        .setStyle(discord_js_1.TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(120)
+        .setPlaceholder("Short title: what do you need help with?");
+    const categoryInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(TICKET_IDS.intakeCategory)
+        .setLabel("Category")
+        .setStyle(discord_js_1.TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(40)
+        .setPlaceholder("bug, billing, account, report, appeal, general");
+    const detailsInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(TICKET_IDS.intakeDetails)
+        .setLabel("Details")
+        .setStyle(discord_js_1.TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(900)
+        .setPlaceholder("Reproduction steps, timestamps, expected vs actual behavior.");
+    const platformInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(TICKET_IDS.intakePlatform)
+        .setLabel("Platform / Order ID")
+        .setStyle(discord_js_1.TextInputStyle.Short)
+        .setRequired(false)
+        .setMaxLength(80)
+        .setPlaceholder("PC / iOS / Order #...");
+    const evidenceInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(TICKET_IDS.intakeEvidence)
+        .setLabel("Evidence Links")
+        .setStyle(discord_js_1.TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(400)
+        .setPlaceholder("Screenshots, clips, logs, message links.");
+    return new discord_js_1.ModalBuilder()
+        .setCustomId(TICKET_IDS.intakeModal)
+        .setTitle("Smart Ticket Intake")
+        .addComponents(new discord_js_1.ActionRowBuilder().addComponents(summaryInput), new discord_js_1.ActionRowBuilder().addComponents(categoryInput), new discord_js_1.ActionRowBuilder().addComponents(detailsInput), new discord_js_1.ActionRowBuilder().addComponents(platformInput), new discord_js_1.ActionRowBuilder().addComponents(evidenceInput));
+}
+function buildTicketCsatButtons(ticketId) {
+    return new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:1`).setLabel("1").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:2`).setLabel("2").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:3`).setLabel("3").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:4`).setLabel("4").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:5`).setLabel("5").setStyle(discord_js_1.ButtonStyle.Success));
+}
+function addTicketInternalNote(ticket, note) {
+    if (!ticket.internalNotes)
+        ticket.internalNotes = [];
+    ticket.internalNotes.push({ ...note, note: note.note.slice(0, 500) });
+    ticket.updatedAt = Date.now();
+    return saveTicketStore();
+}
+function postJsonToWebhook(webhookUrlRaw, payload) {
+    return new Promise(resolve => {
+        let webhookUrl;
+        try {
+            webhookUrl = new URL(webhookUrlRaw);
+        }
+        catch {
+            resolve(false);
+            return;
+        }
+        const body = JSON.stringify(payload);
+        const req = node_https_1.default.request({
+            protocol: webhookUrl.protocol,
+            hostname: webhookUrl.hostname,
+            port: webhookUrl.port || (webhookUrl.protocol === "https:" ? 443 : 80),
+            path: `${webhookUrl.pathname}${webhookUrl.search}`,
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(body)
+            }
+        }, res => {
+            const ok = Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 300);
+            res.resume();
+            resolve(ok);
+        });
+        req.on("error", () => resolve(false));
+        req.write(body);
+        req.end();
+    });
+}
+async function pruneDeletedTicketRecords(guild) {
+    let removed = 0;
+    for (let i = ticketStore.tickets.length - 1; i >= 0; i--) {
+        const ticket = ticketStore.tickets[i];
+        if (ticket.guildId !== guild.id)
+            continue;
+        const channel = guild.channels.cache.get(ticket.channelId)
+            || await guild.channels.fetch(ticket.channelId).catch(() => null);
+        if (channel)
+            continue;
+        ticketStore.tickets.splice(i, 1);
+        removed += 1;
+        appendAuditEvent("ticket_prune_deleted_channel", {
+            guildId: guild.id,
+            ticketId: ticket.id,
+            channelId: ticket.channelId,
+            ownerId: ticket.ownerId,
+            priorStatus: ticket.status
+        });
+    }
+    if (removed > 0) {
+        saveTicketStore();
+    }
+    return removed;
+}
+async function pruneInaccessibleOwnerTicketRecords(guild) {
+    let removed = 0;
+    for (let i = ticketStore.tickets.length - 1; i >= 0; i--) {
+        const ticket = ticketStore.tickets[i];
+        if (ticket.guildId !== guild.id)
+            continue;
+        if (!(ticket.status === "open" || ticket.status === "claimed"))
+            continue;
+        const channel = guild.channels.cache.get(ticket.channelId)
+            || await guild.channels.fetch(ticket.channelId).catch(() => null);
+        if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+            continue;
+        const owner = await guild.members.fetch(ticket.ownerId).catch(() => null);
+        const ownerCanView = owner ? channel.permissionsFor(owner)?.has(discord_js_1.PermissionFlagsBits.ViewChannel) : false;
+        if (ownerCanView)
+            continue;
+        ticketStore.tickets.splice(i, 1);
+        removed += 1;
+        appendAuditEvent("ticket_prune_inaccessible_owner", {
+            guildId: guild.id,
+            ticketId: ticket.id,
+            channelId: ticket.channelId,
+            ownerId: ticket.ownerId,
+            priorStatus: ticket.status
+        });
+    }
+    if (removed > 0) {
+        saveTicketStore();
+    }
+    return removed;
+}
+function findChannelOwnerFromTopic(topic) {
+    if (!topic)
+        return null;
+    const match = topic.match(/\((\d{17,21})\)\s*$/);
+    if (!match)
+        return null;
+    return match[1];
+}
+function importTicketEntryForChannel(guildId, ownerId, channelId, reason) {
+    const existing = findTicketByChannel(channelId);
+    if (existing)
+        return existing;
+    const ticket = {
+        id: ticketStore.nextId++,
+        guildId,
+        ownerId,
+        channelId,
+        reason,
+        status: "open",
+        priority: "normal",
+        workflowStatus: "new",
+        claimedById: null,
+        assignedToId: null,
+        panelMessageId: null,
+        firstResponseAt: null,
+        archivedAt: null,
+        resolvedAt: null,
+        closedReason: null,
+        resolvedReason: null,
+        transcript: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+    };
+    ticketStore.tickets.push(ticket);
+    saveTicketStore();
+    return ticket;
+}
+async function ensureTrackedTicketByChannelId(guild, channelId, fallbackOwnerId) {
+    const existing = findTicketByChannel(channelId);
+    if (existing)
+        return existing;
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+        return null;
+    const ownerFromTopic = findChannelOwnerFromTopic(channel.topic);
+    const ownerId = ownerFromTopic || fallbackOwnerId;
+    const concurrentExisting = findTicketByChannel(channelId);
+    if (concurrentExisting)
+        return concurrentExisting;
+    const imported = importTicketEntryForChannel(guild.id, ownerId, channel.id, "Imported existing ticket channel");
+    appendAuditEvent("ticket_import", {
+        guildId: guild.id,
+        ticketId: imported.id,
+        channelId: imported.channelId,
+        ownerId: imported.ownerId,
+        importedByFallback: true
+    });
+    return imported;
+}
+function createTicketEntry(guildId, ownerId, channelId, reason, priority) {
+    return (0, ticketState_1.createTicketEntry)(ticketStore, guildId, ownerId, channelId, reason, priority, saveTicketStore);
+}
+function archiveTicketByChannel(channelId, closeReason) {
+    return (0, ticketState_1.archiveTicketByChannel)(ticketStore.tickets, channelId, closeReason, saveTicketStore);
+}
+function claimTicketByChannel(channelId, claimedById) {
+    return (0, ticketState_1.claimTicketByChannel)(ticketStore.tickets, channelId, claimedById, saveTicketStore);
+}
+function resolveTicketByChannel(channelId, resolvedReason, transcript) {
+    return (0, ticketState_1.resolveTicketByChannel)(ticketStore.tickets, channelId, resolvedReason, transcript, saveTicketStore);
+}
+function setTicketWorkflowStatus(channelId, workflowStatus) {
+    return (0, ticketState_1.setTicketWorkflowStatus)(ticketStore.tickets, channelId, workflowStatus, saveTicketStore);
+}
+function assignTicketToUser(channelId, assigneeId) {
+    return (0, ticketState_1.assignTicketToUser)(ticketStore.tickets, channelId, assigneeId, saveTicketStore);
+}
+function reopenTicketByChannel(channelId, reopenedById, reopenReason) {
+    return (0, ticketState_1.reopenTicketByChannel)(ticketStore.tickets, channelId, reopenedById, reopenReason, saveTicketStore);
+}
+function getTicketSlaState(ticket, now = Date.now(), thresholds) {
+    return (0, ticketState_1.getTicketSlaState)(ticket, now, thresholds);
+}
+function ticketSlaAlertKey(ticketId, level) {
+    return `${ticketId}:${level}`;
+}
+function shouldEmitTicketSlaAlert(ticketId, level, now = Date.now()) {
+    const key = ticketSlaAlertKey(ticketId, level);
+    const last = ticketSlaAlertState.get(key) || 0;
+    // Avoid repeating the same alert type for a ticket too frequently.
+    if (last && now - last < 6 * 60 * 60 * 1000) {
+        return false;
+    }
+    ticketSlaAlertState.set(key, now);
+    return true;
+}
+function setTicketPanelMessageId(channelId, panelMessageId) {
+    (0, ticketState_1.setTicketPanelMessageId)(ticketStore.tickets, channelId, panelMessageId, saveTicketStore);
+}
+function buildTicketCommandEmbed(title, description, ticket, fields = []) {
+    const statusEmoji = {
+        open: "🟢",
+        claimed: "🛠️",
+        archived: "🗂️",
+        resolved: "✅"
+    };
+    const workflowEmoji = {
+        new: "🆕",
+        responded: "💬",
+        waiting_user: "⏳",
+        escalated: "🚨",
+        resolved: "✅"
+    };
+    const priorityEmoji = {
+        low: "🟦",
+        normal: "🟨",
+        high: "🟥"
+    };
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x14b8a6)
+        .setTitle(title)
+        .setDescription(description)
+        .setTimestamp(new Date());
+    if (ticket) {
+        embed.addFields({ name: "🎫 Ticket", value: `#${ticket.id}`, inline: true }, { name: "📍 Channel", value: `<#${ticket.channelId}>`, inline: true }, { name: "👤 Owner", value: `<@${ticket.ownerId}>`, inline: true }, { name: "📌 State", value: `${statusEmoji[ticket.status]} ${ticket.status.toUpperCase()}`, inline: true }, { name: "🧭 Workflow", value: `${workflowEmoji[ticket.workflowStatus]} ${ticket.workflowStatus}`, inline: true }, { name: "⚡ Priority", value: `${priorityEmoji[ticket.priority]} ${ticket.priority.toUpperCase()}`, inline: true });
+    }
+    if (fields.length) {
+        embed.addFields(fields);
+    }
+    return sanitizeEmbedBuilder(embed);
+}
+function buildTicketCommandEmbedPayload(title, description, ticket, fields = []) {
+    return JSON.stringify({ embed: buildTicketCommandEmbed(title, description, ticket, fields).toJSON() });
+}
+function getTicketNextActionHint(ticket) {
+    const status = normalizeTicketStatus(ticket.status);
+    if (status === "open")
+        return "Claim or assign the ticket to start handling.";
+    if (status === "claimed" && !ticket.assignedToId)
+        return "Assign a handler, then update workflow as you respond.";
+    if (status === "claimed" && ticket.workflowStatus === "waiting_user")
+        return "Waiting on user response. Archive when pending follow-up.";
+    if (status === "archived")
+        return "Review archive notes, then permanently resolve when complete.";
+    if (status === "resolved")
+        return "Ticket is complete. Reopen flow is not enabled.";
+    return "Update workflow as the case progresses.";
+}
+function buildTicketOpsEmbed(ticket) {
+    const policy = ticket.slaPolicy || (0, ticketEnhancements_1.getTicketSlaPolicy)(ticket.category || "general", ticket.priority);
+    const sla = getTicketSlaState(ticket, Date.now(), {
+        firstResponseWarnMs: Math.max(60000, Math.floor(policy.firstResponseMs * 0.66)),
+        firstResponseBreachMs: policy.firstResponseMs,
+        resolveWarnMs: Math.max(policy.firstResponseMs, Math.floor(policy.resolveMs * 0.84)),
+        resolveBreachMs: policy.resolveMs
+    });
+    const firstResponseStatus = ticket.firstResponseAt
+        ? `Met <t:${Math.floor(ticket.firstResponseAt / 1000)}:R>`
+        : (sla.firstResponseOverdue ? "BREACHED" : "Pending");
+    const resolveStatus = ticket.resolvedAt
+        ? `Resolved <t:${Math.floor(ticket.resolvedAt / 1000)}:R>`
+        : (sla.resolveOverdue ? "BREACHED" : "On Track");
+    const status = normalizeTicketStatus(ticket.status);
+    const nextAction = getTicketNextActionHint(ticket);
+    const statusLabel = `${status === "open" ? "🟢" : status === "claimed" ? "🛠️" : status === "archived" ? "🗂️" : "✅"} ${status.toUpperCase()}`;
+    const workflowLabel = `${ticket.workflowStatus === "new" ? "🆕" : ticket.workflowStatus === "responded" ? "💬" : ticket.workflowStatus === "waiting_user" ? "⏳" : ticket.workflowStatus === "escalated" ? "🚨" : "✅"} ${ticket.workflowStatus}`;
+    const priorityLabel = `${ticket.priority === "low" ? "🟦" : ticket.priority === "normal" ? "🟨" : "🟥"} ${ticket.priority.toUpperCase()}`;
+    return brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x14b8a6)
+        .setTitle(`🏛️ FN Support • Case #${ticket.id} Command Deck`)
+        .setDescription("Premium live operations panel for this case.\nStatus, assignment, workflow, and SLA indicators refresh automatically as handlers progress resolution.")
+        .addFields({ name: "👤 Requester", value: `<@${ticket.ownerId}>`, inline: true }, { name: "🕒 Opened At", value: `<t:${Math.floor(ticket.createdAt / 1000)}:f>`, inline: true }, { name: "📍 Ticket Thread", value: `<#${ticket.channelId}>`, inline: true }, { name: "⚡ Priority Tier", value: priorityLabel, inline: true }, { name: "🏷️ Category", value: String(ticket.category || "general"), inline: true }, { name: "🧭 Workflow Lane", value: workflowLabel, inline: true }, { name: "🛠️ Claim Lead", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed yet", inline: true }, { name: "🎯 Assigned Specialist", value: ticket.assignedToId ? `<@${ticket.assignedToId}>` : "Unassigned", inline: true }, { name: "📌 Lifecycle", value: statusLabel, inline: true }, { name: "📝 Case Brief", value: ticket.reason || "No reason provided", inline: false }, { name: "⏱️ SLA Clock", value: `• Policy: ${policy.name}\n• First response target: ${Math.round(policy.firstResponseMs / 60000)}m (${firstResponseStatus})\n• Resolution target: ${Math.round(policy.resolveMs / 3600000)}h (${resolveStatus})`, inline: false }, { name: "🧬 Case Graph", value: `Parent: ${ticket.parentTicketId ? `#${ticket.parentTicketId}` : "none"} | Linked: ${ticket.linkedTicketId ? `#${ticket.linkedTicketId}` : "none"} | Merged Into: ${ticket.mergedIntoTicketId ? `#${ticket.mergedIntoTicketId}` : "none"}`, inline: false }, { name: "➡️ Recommended Move", value: nextAction, inline: false }, { name: "🧰 Command Strip", value: "`/claimticket` ` /ticketassign` ` /ticketstatus` ` /reopenticket` ` /closeticket` ` /resolveticket`", inline: false })
+        .setFooter({ text: `FN Support Tickets • Case #${ticket.id} • Live sync` }), "FN Support Command Deck", "Live case operations");
+}
+async function updateTicketOpsPanelMessage(guild, ticket) {
+    const channel = (guild.channels.cache.get(ticket.channelId)
+        || await guild.channels.fetch(ticket.channelId).catch(() => null));
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+        return;
+    let panelMessageId = ticket.panelMessageId;
+    if (!panelMessageId) {
+        const legacyPrefix = `Ticket #${ticket.id} · Operations Desk`;
+        const premiumPrefix = `🏛️ FN Support • Case #${ticket.id} Command Deck`;
+        let candidateId = null;
+        let beforeId;
+        // Look through deeper history so legacy tickets still get live panel updates.
+        for (let i = 0; i < 5; i++) {
+            const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+            if (!batch || !batch.size)
+                break;
+            const candidate = batch.find(message => message.author.id === (client.user?.id || "")
+                && (message.embeds[0]?.title?.startsWith(legacyPrefix)
+                    || message.embeds[0]?.title?.startsWith(premiumPrefix)));
+            if (candidate) {
+                candidateId = candidate.id;
+                break;
+            }
+            const last = batch.last();
+            beforeId = last?.id;
+            if (!beforeId)
+                break;
+        }
+        if (candidateId) {
+            setTicketPanelMessageId(ticket.channelId, candidateId);
+            panelMessageId = candidateId;
+        }
+    }
+    if (!panelMessageId)
+        return;
+    const panelMessage = await channel.messages.fetch(panelMessageId).catch(() => null);
+    if (!panelMessage)
+        return;
+    await panelMessage.edit({ embeds: [buildTicketOpsEmbed(ticket)], components: panelMessage.components }).catch(() => undefined);
+}
+function readModerationStore() {
+    return readJsonWithBackup(MOD_DATA_FILE, raw => {
+        const candidate = raw;
+        if (candidate && candidate.guilds && typeof candidate.guilds === "object") {
+            return { guilds: candidate.guilds };
+        }
+        return null;
+    }, { guilds: {} });
+}
+const moderationStore = readModerationStore();
+function saveModerationStore() {
+    writeJsonAtomic(MOD_DATA_FILE, moderationStore);
+}
+function ensureGuildModeration(guildId) {
+    if (!moderationStore.guilds[guildId]) {
+        moderationStore.guilds[guildId] = {
+            modLogChannelId: null,
+            lockdownChannelId: null,
+            nextCaseId: 1,
+            warnings: {}
+        };
+        saveModerationStore();
+    }
+    const g = moderationStore.guilds[guildId];
+    if (g.modLogChannelId === undefined)
+        g.modLogChannelId = null;
+    if (g.lockdownChannelId === undefined)
+        g.lockdownChannelId = null;
+    if (g.nextCaseId === undefined || g.nextCaseId < 1)
+        g.nextCaseId = 1;
+    if (!g.warnings || typeof g.warnings !== "object")
+        g.warnings = {};
+    moderationStore.guilds[guildId] = g;
+    return moderationStore.guilds[guildId];
+}
+function parseDurationMs(raw) {
+    const match = raw.trim().toLowerCase().match(/^(\d+)(s|m|h|d)$/);
+    if (!match)
+        return null;
+    const value = Number.parseInt(match[1], 10);
+    const unit = match[2];
+    if (value < 1)
+        return null;
+    if (unit === "s")
+        return value * 1000;
+    if (unit === "m")
+        return value * 60 * 1000;
+    if (unit === "h")
+        return value * 60 * 60 * 1000;
+    return value * 24 * 60 * 60 * 1000;
+}
+async function sendModLog(guildId, title, fields) {
+    const state = ensureGuildModeration(guildId);
+    if (!state.modLogChannelId)
+        return;
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild)
+        return;
+    const channel = guild.channels.cache.get(state.modLogChannelId);
+    if (!channel || !channel.isTextBased())
+        return;
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0xff6b6b)
+        .setTitle(`🛡️ ${title}`)
+        .setTimestamp(new Date())
+        .addFields(fields), "FN Moderation Desk", "Moderation live feed");
+    await channel.send({ embeds: [embed] }).catch(() => undefined);
+}
+async function sendTicketLog(guildId, title, fields) {
+    const cfg = ensureTicketConfig(guildId);
+    if (!cfg.logChannelId)
+        return;
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild)
+        return;
+    const channel = guild.channels.cache.get(cfg.logChannelId);
+    if (!channel || !channel.isTextBased())
+        return;
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x2dd4bf)
+        .setTitle(`🎫 ${title}`)
+        .setTimestamp(new Date())
+        .addFields(fields), "FN Support Ticket Stream", "Ticket event feed");
+    await channel.send({ embeds: [embed] }).catch(() => undefined);
+}
+async function sendTicketSlaAlert(guild, title, lines, severity) {
+    const cfg = ensureTicketConfig(guild.id);
+    const targetChannelId = cfg.logChannelId || HEALTH_REPORT_CHANNEL_ID || ensureGuildModeration(guild.id).modLogChannelId || "";
+    if (!targetChannelId)
+        return;
+    const channel = await guild.channels.fetch(targetChannelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel))
+        return;
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(severity === "error" ? 0xef4444 : 0xf59e0b)
+        .setTitle(`${severity === "error" ? "🚨" : "⚠️"} ${title}`)
+        .setDescription(lines.join("\n"))
+        .setTimestamp(new Date()), "FN SLA Watchdog", "Priority SLA alert");
+    await channel.send({ content: `<@&${TICKET_HANDLER_ROLE_ID}>`, embeds: [embed], allowedMentions: { parse: ["roles"] } }).catch(() => undefined);
+}
+function requireGuild(interaction) {
+    if (!interaction.guild)
+        return "This command can only be used in a server.";
+    return null;
+}
+function requireAdministrator(interaction) {
+    const guildError = requireGuild(interaction);
+    if (guildError)
+        return guildError;
+    if (!interaction.memberPermissions?.has(discord_js_1.PermissionFlagsBits.Administrator)) {
+        return "Only administrators can run this command.";
+    }
+    return null;
+}
+function requireGuildOwner(interaction) {
+    const guildError = requireGuild(interaction);
+    if (guildError)
+        return guildError;
+    if (!interaction.guild || interaction.user.id !== interaction.guild.ownerId) {
+        return "Only the Discord server owner can run this command.";
+    }
+    return null;
+}
+function canManageTicketActions(member) {
+    return member.permissions.has(discord_js_1.PermissionFlagsBits.Administrator)
+        || member.roles.cache.has(TICKET_HANDLER_ROLE_ID);
+}
+function resolveTicketTargetChannelId(interaction) {
+    const selectedChannel = interaction.options.getChannel("ticket_channel");
+    const typedChannelId = (interaction.options.getString("ticket_channel_id") || "").trim();
+    if (typedChannelId && !/^\d{17,21}$/.test(typedChannelId)) {
+        return { channelId: null, error: "ticket_channel_id must be a valid Discord channel ID." };
+    }
+    const channelId = typedChannelId || selectedChannel?.id || interaction.channelId || null;
+    if (!channelId) {
+        return { channelId: null, error: "This command must be used in a ticket channel or include ticket_channel/ticket_channel_id." };
+    }
+    return { channelId, error: null };
+}
+async function handleTicketAssignCommand(interaction, usedAlias = false) {
+    const guildError = requireGuild(interaction);
+    if (guildError)
+        return guildError;
+    const member = interaction.member;
+    if (!member || !canManageTicketActions(member)) {
+        return "Only admins or the handler role can assign tickets.";
+    }
+    const target = resolveTicketTargetChannelId(interaction);
+    if (target.error || !target.channelId) {
+        return target.error || "Unable to resolve the target ticket channel.";
+    }
+    const ticket = await ensureTrackedTicketByChannelId(interaction.guild, target.channelId, interaction.user.id);
+    if (!ticket) {
+        return "This channel is not a tracked ticket. Use ticket_channel or ticket_channel_id. If needed, run /tickets to list active tracked channels.";
+    }
+    const assignee = interaction.options.getUser("user", true);
+    const assignDedupeError = rejectIfDuplicateCommand(interaction, `ticketassign:${target.channelId}:assignee:${assignee.id}`);
+    if (assignDedupeError)
+        return assignDedupeError;
+    const assigneeMember = interaction.guild ? await interaction.guild.members.fetch(assignee.id).catch(() => null) : null;
+    if (!assigneeMember)
+        return "Unable to find that member in this server.";
+    if (!canManageTicketActions(assigneeMember) && !assigneeMember.permissions.has(discord_js_1.PermissionFlagsBits.Administrator)) {
+        return "Assignee must be an admin or have the ticket handler role.";
+    }
+    const assigned = assignTicketToUser(target.channelId, assignee.id);
+    if (!assigned)
+        return "Unable to assign this ticket right now.";
+    await updateTicketOpsPanelMessage(interaction.guild, assigned);
+    const assignChannel = interaction.guild
+        ? (interaction.guild.channels.cache.get(target.channelId) || await interaction.guild.channels.fetch(target.channelId).catch(() => null))
+        : null;
+    if (assignChannel && assignChannel.type === discord_js_1.ChannelType.GuildText) {
+        await assignChannel.send({
+            content: `<@${assignee.id}> you have been assigned to Ticket #${assigned.id}.`,
+            allowedMentions: { parse: ["users"] }
+        }).catch(() => undefined);
+    }
+    await sendTicketLog(interaction.guildId, `Ticket #${assigned.id} Assigned`, [
+        { name: "Assigned By", value: `<@${interaction.user.id}>`, inline: true },
+        { name: "Assigned To", value: `<@${assignee.id}>`, inline: true },
+        { name: "Channel", value: `<#${assigned.channelId}>`, inline: true },
+        { name: "Workflow Status", value: assigned.workflowStatus, inline: true }
+    ]);
+    appendAuditEvent("ticket_assign", {
+        guildId: interaction.guildId,
+        ticketId: assigned.id,
+        assignedById: interaction.user.id,
+        assignedToId: assignee.id,
+        channelId: assigned.channelId,
+        ...(usedAlias ? { usedAlias: true } : {})
+    });
+    return buildTicketCommandEmbedPayload("🎫 Ticket Assignment Updated", `Ticket assignment has been updated and the assignee has been tagged in channel.`, assigned, [
+        { name: "Assigned By", value: `<@${interaction.user.id}>`, inline: true },
+        { name: "Assigned To", value: `<@${assignee.id}>`, inline: true },
+        { name: "Alias Used", value: usedAlias ? "Yes (`/ticketassgin`)" : "No (`/ticketassign`)", inline: true },
+        { name: "Next Step", value: "Use `/ticketstatus` to move workflow to `responded`, `waiting_user`, or `escalated`." }
+    ]);
+}
+function isUnknownInteractionError(error) {
+    if (!error || typeof error !== "object")
+        return false;
+    const maybe = error;
+    return maybe.code === 10062 || maybe.code === "10062";
+}
+const HELP_IDS = {
+    menu: "help_dropbox",
+    general: "general",
+    xp: "xp",
+    raids: "raids",
+    shop: "shop",
+    games: "games",
+    bank: "bank",
+    moderation: "moderation"
+};
+const RAID_CONDITION_CHOICES = RaidDomain.RAID_CONDITIONS.map(condition => ({
+    name: condition.label,
+    value: condition.key
+}));
+const TICKET_IDS = {
+    open: "ticket_open",
+    claim: "ticket_claim",
+    close: "ticket_close",
+    resolve: "ticket_resolve",
+    intakeModal: "ticket_intake_modal",
+    intakeCategory: "ticket_intake_category",
+    intakeSummary: "ticket_intake_summary",
+    intakeDetails: "ticket_intake_details",
+    intakePlatform: "ticket_intake_platform",
+    intakeEvidence: "ticket_intake_evidence",
+    csatPrefix: "ticket_csat"
+};
+const SELL_UI_IDS = {
+    menu: "sell_item_picker",
+    qtyPrefix: "sell_qty"
+};
+const CASINO_UI_IDS = {
+    prefix: "casino_ui"
+};
+const CASINO_GAME_ORDER = [
+    "dice",
+    "roulette",
+    "blackjack",
+    "crash",
+    "slots",
+    "coinflip",
+    "baccarat",
+    "hilo",
+    "keno"
+];
+const XP_ROLE_SYNC_RUNNING_GUILDS = new Set();
+const XP_ROLE_TIERS = [
+    { xp: 1000, roleId: "1526854382199771166", name: "Tier 1" },
+    { xp: 2500, roleId: "1526854454455046194", name: "Tier 2" },
+    { xp: 10000, roleId: "1526854514345246752", name: "Tier 3" },
+    { xp: 20000, roleId: "1526854549946634360", name: "Tier 4" },
+    { xp: 50000, roleId: "1526854596721508433", name: "Tier 5" },
+    { xp: 100000, roleId: "1526854670260244480", name: "Tier 6" },
+    { xp: 120000, roleId: "1528237537846493264", name: "Recruit I" },
+    { xp: 150000, roleId: "1528237538752467155", name: "Recruit II" },
+    { xp: 180000, roleId: "1528237539557769236", name: "Recruit III" },
+    { xp: 210000, roleId: "1528237540039983154", name: "Scout I" },
+    { xp: 240000, roleId: "1528237540589572217", name: "Scout II" },
+    { xp: 270000, roleId: "1528237540828647436", name: "Scout III" },
+    { xp: 300000, roleId: "1528237541873029252", name: "Vanguard I" },
+    { xp: 330000, roleId: "1528237542590386386", name: "Vanguard II" },
+    { xp: 360000, roleId: "1528237543873576980", name: "Vanguard III" },
+    { xp: 390000, roleId: "1528237544398000199", name: "Ranger I" },
+    { xp: 420000, roleId: "1528237544960036874", name: "Ranger II" },
+    { xp: 450000, roleId: "1528237545597702205", name: "Ranger III" },
+    { xp: 480000, roleId: "1528237546142699530", name: "Striker I" },
+    { xp: 510000, roleId: "1528237546838954087", name: "Striker II" },
+    { xp: 540000, roleId: "1528237547849777232", name: "Striker III" },
+    { xp: 570000, roleId: "1528237548697030747", name: "Sentinel I" },
+    { xp: 600000, roleId: "1528237549795938557", name: "Sentinel II" },
+    { xp: 630000, roleId: "1528237551217803264", name: "Sentinel III" },
+    { xp: 660000, roleId: "1528237551389769779", name: "Warden I" },
+    { xp: 690000, roleId: "1528237552073576521", name: "Warden II" },
+    { xp: 720000, roleId: "1528237553453498368", name: "Warden III" },
+    { xp: 750000, roleId: "1528237554090905861", name: "Elite I" },
+    { xp: 780000, roleId: "1528237554795810967", name: "Elite II" },
+    { xp: 810000, roleId: "1528237555428884591", name: "Elite III" },
+    { xp: 840000, roleId: "1528237556406161521", name: "Titan Commander" }
+];
+function readXpRoleEntries() {
+    if (!fs_extra_1.default.existsSync(XP_ROLE_DATA_FILE)) {
+        return [];
+    }
+    try {
+        const raw = fs_extra_1.default.readJsonSync(XP_ROLE_DATA_FILE);
+        if (!raw || !Array.isArray(raw.entries))
+            return [];
+        return raw.entries.filter(entry => typeof entry?.xp === "number" && typeof entry?.roleId === "string" && typeof entry?.name === "string");
+    }
+    catch {
+        return [];
+    }
+}
+function saveXpRoleEntries(entries) {
+    fs_extra_1.default.ensureDirSync(path_1.default.dirname(XP_ROLE_DATA_FILE));
+    fs_extra_1.default.writeJsonSync(XP_ROLE_DATA_FILE, { entries }, { spaces: 2 });
+}
+function getPersistedXpRoleMap() {
+    const map = new Map();
+    for (const entry of readXpRoleEntries()) {
+        map.set(entry.xp, entry);
+    }
+    return map;
+}
+function getEffectiveXpRoleEntries() {
+    const persisted = readXpRoleEntries()
+        .filter(entry => Number.isFinite(entry.xp) && entry.xp > 0 && Boolean(entry.roleId))
+        .sort((a, b) => a.xp - b.xp);
+    if (persisted.length) {
+        return persisted;
+    }
+    return XP_ROLE_TIERS
+        .map(entry => ({ xp: entry.xp, roleId: entry.roleId, name: entry.name }))
+        .sort((a, b) => a.xp - b.xp);
+}
+async function getEffectiveXpRoleEntriesForGuild(guild) {
+    const persisted = readXpRoleEntries()
+        .filter(entry => Number.isFinite(entry.xp) && entry.xp > 0 && Boolean(entry.roleId) && Boolean(entry.name));
+    if (persisted.length) {
+        return persisted.sort((a, b) => a.xp - b.xp);
+    }
+    return XP_ROLE_TIERS
+        .map(entry => ({ xp: entry.xp, roleId: entry.roleId, name: entry.name }))
+        .sort((a, b) => a.xp - b.xp);
+}
+async function syncMemberXpRoles(member, xp, roleEntriesOverride) {
+    const roleEntries = roleEntriesOverride ?? await getEffectiveXpRoleEntriesForGuild(member.guild);
+    if (!roleEntries.length)
+        return;
+    const me = member.guild.members.me ?? await member.guild.members.fetchMe().catch(() => null);
+    if (!me || !me.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles))
+        return;
+    // Ensure role/member caches are current before applying threshold logic.
+    await member.guild.roles.fetch().catch(() => undefined);
+    const refreshedMember = await member.guild.members.fetch(member.id).catch(() => member);
+    const botHighest = me.roles.highest?.position ?? 0;
+    const existingEntries = roleEntries
+        .map(entry => ({ entry, role: refreshedMember.guild.roles.cache.get(entry.roleId) || null }))
+        .filter((pair) => Boolean(pair.role));
+    if (!existingEntries.length)
+        return;
+    const unlockedPair = existingEntries.filter(pair => xp >= pair.entry.xp).pop();
+    const unlockedRoleId = unlockedPair?.entry.roleId;
+    // Only manage roles below the bot's highest role.
+    const manageableTierRoleIds = existingEntries
+        .filter(pair => pair.role.position < botHighest)
+        .map(pair => pair.entry.roleId);
+    if (unlockedPair && unlockedPair.role.position >= botHighest) {
+        appendAuditEvent("xp_role_sync_blocked", {
+            guildId: refreshedMember.guild.id,
+            memberId: refreshedMember.id,
+            roleId: unlockedPair.entry.roleId,
+            reason: "target role is above or equal to bot highest role"
+        });
+        return;
+    }
+    if (unlockedRoleId && !refreshedMember.roles.cache.has(unlockedRoleId)) {
+        await refreshedMember.roles.add(unlockedRoleId).catch(() => undefined);
+    }
+    const removeRoleIds = manageableTierRoleIds.filter(roleId => roleId !== unlockedRoleId && refreshedMember.roles.cache.has(roleId));
+    if (removeRoleIds.length) {
+        await refreshedMember.roles.remove(removeRoleIds).catch(() => undefined);
+    }
+}
+async function runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId) {
+    appendAuditEvent("xp_role_sync_started", {
+        guildId: guild.id,
+        userId: startedByUserId,
+        sourceChannelId
+    });
+    await guild.members.fetch().catch(() => undefined);
+    const members = guild.members.cache.filter(member => !member.user.bot);
+    let synced = 0;
+    let skipped = 0;
+    let processed = 0;
+    const roleEntries = await getEffectiveXpRoleEntriesForGuild(guild);
+    for (const [, member] of members) {
+        const before = roleEntries
+            .filter(entry => member.roles.cache.has(entry.roleId))
+            .map(entry => entry.roleId)
+            .sort()
+            .join(",");
+        const user = (0, utils_1.ensureUser)(member.id);
+        await syncMemberXpRoles(member, user.xp, roleEntries);
+        const refreshed = member.guild.members.cache.get(member.id) ?? member;
+        const after = roleEntries
+            .filter(entry => refreshed.roles.cache.has(entry.roleId))
+            .map(entry => entry.roleId)
+            .sort()
+            .join(",");
+        if (before !== after) {
+            synced += 1;
+        }
+        else {
+            skipped += 1;
+        }
+        processed += 1;
+    }
+    const completion = `XP role sync complete. Started by <@${startedByUserId}>. Processed ${processed} member(s): ${synced} updated, ${skipped} unchanged.`;
+    if (sourceChannelId) {
+        const channel = await guild.channels.fetch(sourceChannelId).catch(() => null);
+        if (channel && channel.isTextBased() && "send" in channel) {
+            await channel.send({ content: completion, allowedMentions: { users: [startedByUserId], parse: [] } }).catch(() => undefined);
+        }
+    }
+    appendAuditEvent("xp_role_sync_completed", {
+        guildId: guild.id,
+        userId: startedByUserId,
+        processed,
+        synced,
+        skipped
+    });
+    return { processed, synced, skipped };
+}
+function getPrimaryGuild() {
+    return DISCORD_GUILD_ID
+        ? client.guilds.cache.get(DISCORD_GUILD_ID) || null
+        : client.guilds.cache.first() || null;
+}
+function buildHealthEmbed() {
+    const heap = process.memoryUsage();
+    const usersTracked = Object.keys(utils_1.points).length;
+    const commandTotal = runtimeMetrics.command.total;
+    const commandFailed = runtimeMetrics.command.failed;
+    const commandErrorRate = commandTotal > 0 ? ((commandFailed / commandTotal) * 100).toFixed(2) : "0.00";
+    const ticketAttempts = runtimeMetrics.tickets.createAttempts;
+    const ticketFailures = runtimeMetrics.tickets.createFailures;
+    const ticketFailureRate = ticketAttempts > 0 ? ((ticketFailures / ticketAttempts) * 100).toFixed(2) : "0.00";
+    const availability = runtimeMetrics.availability;
+    const downtimeIntervals = Math.max(0, availability.totalRestarts - 1);
+    const avgDowntimeMs = downtimeIntervals > 0
+        ? Math.floor(availability.trackedDowntimeMs / downtimeIntervals)
+        : 0;
+    return brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x22c55e)
+        .setTitle("🩺 Bot Health")
+        .setDescription("Operational diagnostics for runtime, persistence, and sync state.")
+        .addFields({
+        name: "Runtime",
+        value: [
+            `Uptime: ${formatDuration(process.uptime())}`,
+            `Guilds: ${client.guilds.cache.size}`,
+            `Heap: ${(heap.heapUsed / (1024 * 1024)).toFixed(1)}MB / ${(heap.heapTotal / (1024 * 1024)).toFixed(1)}MB`,
+            `RSS: ${(heap.rss / (1024 * 1024)).toFixed(1)}MB`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "Persistence",
+        value: [
+            `Tracked users: ${usersTracked}`,
+            `points.json: ${statLabel(POINTS_DATA_FILE)}`,
+            `points.json.bak: ${statLabel(POINTS_BACKUP_FILE)}`,
+            `events.jsonl: ${statLabel(EVENT_LOG_FILE)}`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "Ops",
+        value: [
+            `Active XP sync jobs: ${XP_ROLE_SYNC_RUNNING_GUILDS.size}`,
+            `tickets.json: ${statLabel(TICKET_DATA_FILE)}`,
+            `trades.json: ${statLabel(TRADE_DATA_FILE)}`,
+            `moderation.json: ${statLabel(MOD_DATA_FILE)}`,
+            `balance-telemetry.json: ${statLabel(BALANCE_TELEMETRY_FILE)}`,
+            `runtime-metrics.json: ${statLabel(METRICS_DATA_FILE)}`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "SLO Metrics",
+        value: [
+            `Command error rate: ${commandFailed}/${commandTotal} (${commandErrorRate}%)`,
+            `Ticket create failures: ${ticketFailures}/${ticketAttempts} (${ticketFailureRate}%)`,
+            `Restarts tracked: ${availability.totalRestarts}`,
+            `Last downtime: ${formatMetricDuration(availability.lastDowntimeMs)}`,
+            `Average downtime: ${formatMetricDuration(avgDowntimeMs)}`,
+            `Total downtime tracked: ${formatMetricDuration(availability.trackedDowntimeMs)}`
+        ].join("\n"),
+        inline: false
+    })
+        .setTimestamp(new Date()), "Titan Runtime Health Monitor", "Automated diagnostics");
+}
+async function collectRoleSanityReport(guild) {
+    await guild.roles.fetch().catch(() => undefined);
+    await guild.members.fetch().catch(() => undefined);
+    const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+    const botHighest = me?.roles.highest?.position ?? 0;
+    const canManageRoles = Boolean(me?.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles));
+    const existingTierRoles = XP_ROLE_TIERS
+        .map(tier => ({ tier, role: guild.roles.cache.get(tier.roleId) || null }))
+        .filter(item => Boolean(item.role));
+    const missing = XP_ROLE_TIERS.filter(tier => !guild.roles.cache.has(tier.roleId));
+    const hierarchyBlocked = existingTierRoles
+        .filter(item => (item.role?.position || 0) >= botHighest)
+        .map(item => ({ tier: item.tier, rolePosition: item.role?.position || 0 }));
+    let multiTierMembers = 0;
+    for (const [, member] of guild.members.cache) {
+        if (member.user.bot)
+            continue;
+        const count = XP_ROLE_TIERS.filter(tier => member.roles.cache.has(tier.roleId)).length;
+        if (count > 1)
+            multiTierMembers += 1;
+    }
+    return {
+        configuredTierCount: XP_ROLE_TIERS.length,
+        existingTierCount: existingTierRoles.length,
+        missing,
+        hierarchyBlocked,
+        multiTierMembers,
+        canManageRoles,
+        botHighestRolePosition: botHighest
+    };
+}
+async function runRoleSanityFix(guild, startedByUserId, sourceChannelId) {
+    if (XP_ROLE_SYNC_RUNNING_GUILDS.has(guild.id)) {
+        return { started: false, reason: "XP role sync already running." };
+    }
+    XP_ROLE_SYNC_RUNNING_GUILDS.add(guild.id);
+    void runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId)
+        .catch(error => {
+        appendAuditEvent("rolesanity_fix_failed", {
+            guildId: guild.id,
+            userId: startedByUserId,
+            error: error instanceof Error ? error.message : String(error)
+        });
+    })
+        .finally(() => {
+        XP_ROLE_SYNC_RUNNING_GUILDS.delete(guild.id);
+    });
+    appendAuditEvent("rolesanity_fix_started", {
+        guildId: guild.id,
+        userId: startedByUserId,
+        sourceChannelId
+    });
+    return { started: true };
+}
+async function collectTicketSanityReport(guild) {
+    const guildTickets = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id);
+    const open = guildTickets.filter(ticket => normalizeTicketStatus(ticket.status) === "open").length;
+    const claimed = guildTickets.filter(ticket => normalizeTicketStatus(ticket.status) === "claimed").length;
+    const archived = guildTickets.filter(ticket => normalizeTicketStatus(ticket.status) === "archived").length;
+    const resolved = guildTickets.filter(ticket => normalizeTicketStatus(ticket.status) === "resolved").length;
+    const ownerOpenCounts = new Map();
+    for (const ticket of guildTickets) {
+        if (ticket.status !== "open" && ticket.status !== "claimed")
+            continue;
+        ownerOpenCounts.set(ticket.ownerId, (ownerOpenCounts.get(ticket.ownerId) || 0) + 1);
+    }
+    const duplicateOpenOwners = [...ownerOpenCounts.values()].filter(count => count > 1).length;
+    let missingChannels = 0;
+    for (const ticket of guildTickets) {
+        const exists = guild.channels.cache.get(ticket.channelId)
+            || await guild.channels.fetch(ticket.channelId).catch(() => null);
+        if (!exists)
+            missingChannels += 1;
+    }
+    const panelMissing = guildTickets.filter(ticket => (ticket.status === "open" || ticket.status === "claimed") && !ticket.panelMessageId).length;
+    const slaBreaches = guildTickets
+        .filter(ticket => ticket.status !== "resolved")
+        .map(ticket => ({ ticket, sla: getTicketSlaState(ticket) }))
+        .filter(entry => entry.sla.firstResponseOverdue || entry.sla.resolveOverdue)
+        .length;
+    return {
+        total: guildTickets.length,
+        open,
+        claimed,
+        archived,
+        resolved,
+        missingChannels,
+        duplicateOpenOwners,
+        panelMissing,
+        slaBreaches
+    };
+}
+function dedupeActiveTicketsByOwner(guildId) {
+    const active = ticketStore.tickets
+        .filter(ticket => ticket.guildId === guildId && (ticket.status === "open" || ticket.status === "claimed"))
+        .sort((a, b) => b.createdAt - a.createdAt);
+    const keepOwners = new Set();
+    let removed = 0;
+    for (const ticket of active) {
+        if (!keepOwners.has(ticket.ownerId)) {
+            keepOwners.add(ticket.ownerId);
+            continue;
+        }
+        const idx = ticketStore.tickets.findIndex(t => t.id === ticket.id);
+        if (idx >= 0) {
+            ticketStore.tickets.splice(idx, 1);
+            removed += 1;
+        }
+    }
+    if (removed > 0) {
+        saveTicketStore();
+    }
+    return removed;
+}
+async function runTicketSanityFix(guild) {
+    const removedDeleted = await pruneDeletedTicketRecords(guild);
+    const removedInaccessible = await pruneInaccessibleOwnerTicketRecords(guild);
+    const deduped = dedupeActiveTicketsByOwner(guild.id);
+    let panelBackfilled = 0;
+    const activeTickets = ticketStore.tickets.filter(t => t.guildId === guild.id && (t.status === "open" || t.status === "claimed") && !t.panelMessageId);
+    for (const ticket of activeTickets) {
+        await updateTicketOpsPanelMessage(guild, ticket);
+        const refreshed = findTicketByChannel(ticket.channelId);
+        if (refreshed?.panelMessageId)
+            panelBackfilled += 1;
+    }
+    appendAuditEvent("ticketsanity_fix_applied", {
+        guildId: guild.id,
+        removedDeleted,
+        removedInaccessible,
+        deduped,
+        panelBackfilled
+    });
+    return { removedDeleted, removedInaccessible, deduped, panelBackfilled };
+}
+async function sendAutomatedHealthReport(reason) {
+    const guild = getPrimaryGuild();
+    if (!guild)
+        return;
+    const channelId = HEALTH_REPORT_CHANNEL_ID || ensureGuildModeration(guild.id).modLogChannelId || "";
+    if (!channelId)
+        return;
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel))
+        return;
+    const embed = buildHealthEmbed().setTitle("📊 Automated Health Report").setFooter({ text: `Reason: ${reason}` });
+    await channel.send({ embeds: [embed] }).catch(() => undefined);
+    appendAuditEvent("health_report_sent", { guildId: guild.id, channelId, reason });
+}
+function buildBalanceReportEmbed(reason = "manual") {
+    const raid = balanceTelemetry.raid;
+    const winRate = raid.runs > 0 ? ((raid.wins / raid.runs) * 100).toFixed(1) : "0.0";
+    const avgNet = raid.runs > 0 ? (raid.totalNet / raid.runs).toFixed(1) : "0.0";
+    const avgBet = raid.runs > 0 ? (raid.totalBet / raid.runs).toFixed(1) : "0.0";
+    const avgReward = raid.runs > 0
+        ? ((raid.tokenSources.baseReward + raid.tokenSources.outcomeBonus + raid.tokenSources.bossBonus + raid.tokenSources.failureMitigation) / raid.runs).toFixed(1)
+        : "0.0";
+    const bossKillRate = raid.bossSpawns > 0 ? ((raid.bossKills / raid.bossSpawns) * 100).toFixed(1) : "0.0";
+    const formatSlice = (label, data) => {
+        const wr = data.runs > 0 ? ((data.wins / data.runs) * 100).toFixed(1) : "0.0";
+        const net = data.runs > 0 ? (data.net / data.runs).toFixed(1) : "0.0";
+        const chance = data.runs > 0 ? (data.successChanceSum / data.runs).toFixed(1) : "0.0";
+        const lootValue = data.runs > 0 ? (data.lootValue / data.runs).toFixed(1) : "0.0";
+        const bossRate = data.bossSpawns > 0 ? ((data.bossKills / data.bossSpawns) * 100).toFixed(1) : "0.0";
+        return `${label}: ${data.runs} runs | WR ${wr}% | Avg Net ${net} | Avg Success ${chance}% | Loot Value ${lootValue} | Boss KR ${bossRate}%`;
+    };
+    const topTensions = Object.entries(raid.byTension)
+        .sort((a, b) => b[1].runs - a[1].runs)
+        .slice(0, 3)
+        .map(([name, data]) => formatSlice(name, data))
+        .join("\n") || "No raid telemetry yet.";
+    const topMaps = Object.entries(raid.byMap)
+        .sort((a, b) => b[1].runs - a[1].runs)
+        .slice(0, 3)
+        .map(([name, data]) => formatSlice(name, data))
+        .join("\n") || "No map telemetry yet.";
+    const topDifficulties = Object.entries(raid.byDifficulty)
+        .sort((a, b) => b[1].runs - a[1].runs)
+        .slice(0, 3)
+        .map(([name, data]) => formatSlice(name, data))
+        .join("\n") || "No difficulty telemetry yet.";
+    const topConditions = Object.entries(raid.byCondition)
+        .sort((a, b) => b[1].runs - a[1].runs)
+        .slice(0, 3)
+        .map(([name, data]) => formatSlice(name, data))
+        .join("\n") || "No condition telemetry yet.";
+    const tokenSources = [
+        `Base Raid Payout: ${raid.tokenSources.baseReward}`,
+        `Outcome Bonus: ${raid.tokenSources.outcomeBonus}`,
+        `Boss Bonus: ${raid.tokenSources.bossBonus}`,
+        `Failure Mitigation: ${raid.tokenSources.failureMitigation}`
+    ].join("\n");
+    const lootByRarity = Object.entries(raid.lootByRarity)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([rarity, qty]) => `${rarity}: ${qty}`)
+        .join(" | ") || "No loot rarity telemetry yet.";
+    const consumables = Object.entries(balanceTelemetry.consumables)
+        .sort((a, b) => b[1].uses - a[1].uses)
+        .slice(0, 4)
+        .map(([id, data]) => `${catalog_1.ITEM_DEFS[id]?.name || id}: uses ${data.uses}, qty ${data.qty}, fail ${data.failures}`)
+        .join("\n") || "No consumable usage yet.";
+    const crates = Object.entries(balanceTelemetry.crates)
+        .sort((a, b) => b[1].opened - a[1].opened)
+        .slice(0, 4)
+        .map(([id, data]) => `${catalog_1.ITEM_DEFS[id]?.name || id}: opened ${data.opened}, auto ${data.autoOpened}, drops ${data.totalDrops}`)
+        .join("\n") || "No crate telemetry yet.";
+    const commandUsage = Object.entries(balanceTelemetry.commands)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([name, count]) => `${name}: ${count}`)
+        .join(" | ") || "No tracked command usage yet.";
+    return brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x0ea5e9)
+        .setTitle("📈 Balance Telemetry")
+        .setDescription("Weekly raid-economy signal pack for tuning drop rates, payouts, and consumable impact.")
+        .addFields({
+        name: "Raid Core",
+        value: [
+            `Runs: ${raid.runs} | Win Rate: ${winRate}%`,
+            `Avg Bet: ${avgBet} | Avg Net: ${avgNet} | Avg Reward: ${avgReward}`,
+            `Boss Spawns: ${raid.bossSpawns} | Boss Kills: ${raid.bossKills} | Boss Kill Rate: ${bossKillRate}%`
+        ].join("\n"),
+        inline: false
+    }, { name: "Top Tensions", value: topTensions, inline: false }, { name: "Top Maps", value: topMaps, inline: false }, { name: "Top Difficulties", value: topDifficulties, inline: false }, { name: "Top Conditions", value: topConditions, inline: false }, { name: "Token Sources", value: tokenSources, inline: false }, { name: "Loot Rarity Mix", value: lootByRarity, inline: false }, { name: "Consumables", value: consumables, inline: false }, { name: "Crates", value: crates, inline: false }, { name: "Raid Command Usage", value: commandUsage, inline: false })
+        .setFooter({ text: `Reason: ${reason} | Updated: ${new Date(balanceTelemetry.updatedAt).toISOString()}` })
+        .setTimestamp(new Date()), "Titan Economy Observatory", "Balance telemetry stream");
+}
+function getOpsBroadcastChannelId(guildId) {
+    return ACTIVITY_CHANNEL_ID || HEALTH_REPORT_CHANNEL_ID || ensureGuildModeration(guildId).modLogChannelId || "";
+}
+async function sendOpsBroadcastEmbed(guild, embed) {
+    const channelId = getOpsBroadcastChannelId(guild.id);
+    if (!channelId)
+        return;
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel))
+        return;
+    await channel.send({ embeds: [embed] }).catch(() => undefined);
+}
+function buildRaidUnlockBroadcastEmbed(input) {
+    const { user, result } = input;
+    const loot = result.loot || [];
+    const enhancedLoot = loot
+        .filter(entry => entry.id.startsWith("enhanced_") && catalog_1.ITEM_DEFS[entry.id])
+        .map(entry => catalog_1.ITEM_DEFS[entry.id].name);
+    const mythicLoot = loot
+        .filter(entry => catalog_1.ITEM_DEFS[entry.id]?.rarity === "mythic")
+        .map(entry => catalog_1.ITEM_DEFS[entry.id].name);
+    const lines = [
+        result.bossHeartUnlockedName ? `• First-kill heart unlocked: ${result.bossHeartUnlockedName}` : null,
+        result.pmcTierUnlockedLabel ? `• ${result.pmcTierUnlockedBadge || "🏅"} Reached ${result.pmcTierUnlockedLabel} at PMC Level ${result.pmcLevel || "?"}` : null,
+        enhancedLoot.length ? `• Enhanced recoveries: ${enhancedLoot.join(", ")}` : null,
+        mythicLoot.length ? `• Mythic recoveries: ${mythicLoot.join(", ")}` : null
+    ].filter(Boolean);
+    if (!lines.length)
+        return null;
+    return brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle("🌟 Premium Unlock Broadcast")
+        .setDescription(`${user.username} completed a standout raid operation on **${result.mapLabel || "Unknown AO"}**.`)
+        .addFields({
+        name: "Operator",
+        value: `<@${user.id}>`,
+        inline: true
+    }, {
+        name: "Boss Contact",
+        value: result.bossName
+            ? `${result.bossName}${result.bossTitle ? ` • ${result.bossTitle}` : ""}`
+            : "No boss engaged",
+        inline: true
+    }, {
+        name: "Highlights",
+        value: lines.join("\n"),
+        inline: false
+    }), "Titan Premium Progression Feed", "Rare progression event");
+}
+async function sendAutomatedBalanceReport(reason) {
+    const guild = getPrimaryGuild();
+    if (!guild)
+        return;
+    const channelId = HEALTH_REPORT_CHANNEL_ID || ensureGuildModeration(guild.id).modLogChannelId || "";
+    if (!channelId)
+        return;
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel))
+        return;
+    const embed = buildBalanceReportEmbed(reason);
+    await channel.send({ embeds: [embed] }).catch(() => undefined);
+    balanceTelemetry.lastWeeklyReportAt = Date.now();
+    saveBalanceTelemetry();
+    appendAuditEvent("balance_report_sent", { guildId: guild.id, channelId, reason });
+}
+async function runHealthWatchdog(reason) {
+    const now = Date.now();
+    const pointsPrimary = statSummary(POINTS_DATA_FILE);
+    const pointsBackup = statSummary(POINTS_BACKUP_FILE);
+    const ticketsPrimary = statSummary(TICKET_DATA_FILE);
+    const tradePrimary = statSummary(TRADE_DATA_FILE);
+    const telemetryPrimary = statSummary(BALANCE_TELEMETRY_FILE);
+    const warnings = [];
+    const errors = [];
+    if (!pointsPrimary.exists)
+        errors.push("points.json missing");
+    if (!pointsBackup.exists)
+        errors.push("points.json.bak missing");
+    if (pointsPrimary.exists && pointsPrimary.size <= 0)
+        errors.push("points.json empty");
+    if (pointsBackup.exists && pointsBackup.size <= 0)
+        errors.push("points.json.bak empty");
+    if (pointsBackup.exists && now - pointsBackup.mtime > BACKUP_STALE_WARNING_MS) {
+        warnings.push("points backup appears stale");
+    }
+    if (!ticketsPrimary.exists)
+        warnings.push("tickets.json missing");
+    if (!tradePrimary.exists)
+        warnings.push("trades.json missing");
+    if (!telemetryPrimary.exists)
+        warnings.push("balance-telemetry.json missing");
+    if (errors.length) {
+        postOpsAlert("error", "Health watchdog critical state", {
+            reason,
+            errors: errors.join(" | "),
+            warnings: warnings.join(" | ") || "none"
+        });
+    }
+    else if (warnings.length) {
+        postOpsAlert("warn", "Health watchdog warning state", {
+            reason,
+            warnings: warnings.join(" | ")
+        });
+    }
+    appendAuditEvent("health_watchdog", {
+        reason,
+        status: errors.length ? "error" : warnings.length ? "warn" : "ok",
+        errors,
+        warnings,
+        pointsPrimaryExists: pointsPrimary.exists,
+        pointsBackupExists: pointsBackup.exists,
+        pointsPrimarySize: pointsPrimary.size,
+        pointsBackupSize: pointsBackup.size,
+        pointsBackupAgeSec: pointsBackup.exists ? Math.floor((now - pointsBackup.mtime) / 1000) : -1
+    });
+    const guild = getPrimaryGuild();
+    if (guild) {
+        await runTicketSlaWatchdog(guild, reason);
+        purgeResolvedTicketsByRetention(guild.id, now);
+    }
+}
+async function runTicketSlaWatchdog(guild, reason) {
+    const now = Date.now();
+    const activeTickets = ticketStore.tickets.filter(t => t.guildId === guild.id &&
+        (normalizeTicketStatus(t.status) === "open" || normalizeTicketStatus(t.status) === "claimed" || normalizeTicketStatus(t.status) === "archived"));
+    for (const ticket of activeTickets) {
+        const thresholds = buildTicketSlaThresholds(ticket);
+        const sla = (0, ticketOps_1.getTicketSlaEscalationState)(ticket, now, thresholds);
+        const status = normalizeTicketStatus(ticket.status);
+        if (sla.firstResponseWarn && shouldEmitTicketSlaAlert(ticket.id, "fr_warn", now)) {
+            await sendTicketSlaAlert(guild, `⏱️ Ticket #${ticket.id} First Response Warning`, [
+                `Channel: <#${ticket.channelId}>`,
+                `Owner: <@${ticket.ownerId}>`,
+                `State: ${status}/${ticket.workflowStatus}`,
+                `No first response yet after ${Math.round(thresholds.firstResponseWarnMs / 60000)} minutes.`
+            ], "warn");
+            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "fr_warn", reason });
+        }
+        if (sla.firstResponseBreach && shouldEmitTicketSlaAlert(ticket.id, "fr_breach", now)) {
+            await sendTicketSlaAlert(guild, `🚨 Ticket #${ticket.id} First Response Breach`, [
+                `Channel: <#${ticket.channelId}>`,
+                `Owner: <@${ticket.ownerId}>`,
+                `State: ${status}/${ticket.workflowStatus}`,
+                `No first response recorded after ${Math.round(thresholds.firstResponseBreachMs / 60000)} minutes.`
+            ], "error");
+            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "fr_breach", reason });
+        }
+        if (sla.resolveWarn && shouldEmitTicketSlaAlert(ticket.id, "res_warn", now)) {
+            await sendTicketSlaAlert(guild, `⚠️ Ticket #${ticket.id} Resolution Warning`, [
+                `Channel: <#${ticket.channelId}>`,
+                `Owner: <@${ticket.ownerId}>`,
+                `State: ${status}/${ticket.workflowStatus}`,
+                `Ticket is older than ${Math.round(thresholds.resolveWarnMs / 3600000)} hours and still unresolved.`
+            ], "warn");
+            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "res_warn", reason });
+        }
+        if (sla.resolveBreach && shouldEmitTicketSlaAlert(ticket.id, "res_breach", now)) {
+            await sendTicketSlaAlert(guild, `🚨 Ticket #${ticket.id} Resolution Breach`, [
+                `Channel: <#${ticket.channelId}>`,
+                `Owner: <@${ticket.ownerId}>`,
+                `State: ${status}/${ticket.workflowStatus}`,
+                `Ticket exceeded ${Math.round(thresholds.resolveBreachMs / 3600000)} hour resolution target.`
+            ], "error");
+            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "res_breach", reason });
+        }
+    }
+}
+async function resolveXpRoleLines(guild) {
+    if (!guild) {
+        return XP_ROLE_TIERS.map(entry => `${entry.xp.toLocaleString()} XP -> ${entry.name}`);
+    }
+    await guild.roles.fetch().catch(() => undefined);
+    const persisted = getPersistedXpRoleMap();
+    const lines = [];
+    for (const entry of XP_ROLE_TIERS) {
+        const persistedEntry = persisted.get(entry.xp);
+        const roleById = persistedEntry
+            ? await guild.roles.fetch(persistedEntry.roleId).catch(() => null)
+            : await guild.roles.fetch(entry.roleId).catch(() => null);
+        const roleName = `${entry.name} [${entry.xp} XP]`;
+        const roleByName = guild.roles.cache.find(r => r.name === roleName) || null;
+        const role = roleById || roleByName;
+        if (role) {
+            lines.push(`${entry.xp.toLocaleString()} XP -> <@&${role.id}>`);
+        }
+        else {
+            lines.push(`${entry.xp.toLocaleString()} XP -> ${entry.name} (not created yet)`);
+        }
+    }
+    return lines;
+}
+function chunkRoleLines(lines, maxLen = 1000) {
+    const chunks = [];
+    let current = "";
+    for (const line of lines) {
+        const next = current ? `${current}\n${line}` : line;
+        if (next.length > maxLen && current) {
+            chunks.push(current);
+            current = line;
+        }
+        else {
+            current = next;
+        }
+    }
+    if (current)
+        chunks.push(current);
+    return chunks;
+}
+function buildThemedRoleSections(lines) {
+    const sectionNames = [
+        "Comms Cadet (Levels 1-5)",
+        "Pathfinder Wing (Levels 6-10)",
+        "Strike Division (Levels 11-15)",
+        "Warden Command (Levels 16-20)",
+        "Elite Vanguard (Levels 21-25)"
+    ];
+    const sections = [];
+    for (let i = 0; i < sectionNames.length; i++) {
+        const start = i * 5;
+        const group = lines.slice(start, start + 5);
+        if (!group.length)
+            continue;
+        sections.push({ name: sectionNames[i], value: group.join("\n") });
+    }
+    return sections;
+}
+function helpDropdown(selected = "general") {
+    return [
+        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
+            .setCustomId(HELP_IDS.menu)
+            .setPlaceholder("Select a tactical drop box")
+            .addOptions({ label: "Mission Brief", value: HELP_IDS.general, description: "Main command overview", emoji: "🪖", default: selected === "general" }, { label: "XP Ops", value: HELP_IDS.xp, description: "XP, levels, and progression", emoji: "🎖️", default: selected === "xp" }, { label: "Raid Ops", value: HELP_IDS.raids, description: "Raids and risk settings", emoji: "⚔️", default: selected === "raids" }, { label: "Supply Crates", value: HELP_IDS.shop, description: "Shop, items, and inventory", emoji: "📦", default: selected === "shop" }, { label: "Training Grounds", value: HELP_IDS.games, description: "Games and betting", emoji: "🎯", default: selected === "games" }, { label: "Bank and Trade", value: HELP_IDS.bank, description: "Token banking and item exchange", emoji: "🏦", default: selected === "bank" }, { label: "Moderation Desk", value: HELP_IDS.moderation, description: "Moderation and admin safeguards", emoji: "🛡️", default: selected === "moderation" }))
+    ];
+}
+function helpPageGeneral() {
+    return new discord_js_1.EmbedBuilder()
+        .setColor(0x00ffea)
+        .setTitle("🪖 Titan Tactical Help")
+        .setDescription("Use the tactical drop box below to jump into command categories, quick workflows, and support tools.")
+        .addFields({
+        name: "🧭 Core Utility",
+        value: "• `/help` — open command directory\n\n• `/quickstart` — guided first-run mission flow\n\n• `/ping` — bot latency check\n\n• `/status` — runtime identity\n\n• `/findbots` — list bot accounts in this server\n\n• `/balance` — your wallet tokens\n\n• `/token` — token balance for selected user\n\n• `/ticket` — open support ticket"
+    }, {
+        name: "📈 Progress and Economy",
+        value: "• `/xp` — engagement XP panel\n\n• `/xpstats` — detailed progression stats\n\n• `/xproles` — themed rank role directory\n\n• `/xprolesync` — admin force-sync all XP roles\n\n• `/pmc` — persistent raid profile\n\n• `/leaderboard` — top XP players\n\n• `/daily` — streak reward claim"
+    }, {
+        name: "🗂️ Directory Topics",
+        value: "⚔️ Raid Ops\n📦 Supply Crates\n🎯 Training Grounds\n🏦 Bank and Trade\n🛡️ Moderation Desk"
+    })
+        .setFooter({ text: "Tip: use /ticket for direct FN support and /quickstart for the fastest onboarding route." });
+}
+function buildQuickstartEmbed(user) {
+    return new discord_js_1.EmbedBuilder()
+        .setColor(0x22c55e)
+        .setTitle("🚀 Quickstart Mission")
+        .setDescription("Fast launch path for new or returning operators. Follow these in order for the smoothest start.")
+        .addFields({
+        name: "1️⃣ Setup Economy",
+        value: "Run `/balance` then `/daily` to initialize and claim your streak reward.",
+        inline: false
+    }, {
+        name: "2️⃣ Gear Up",
+        value: "Use `/shop` to browse items, `/buy` to purchase gear, and `/inventory` to confirm your loadout.",
+        inline: false
+    }, {
+        name: "3️⃣ Raid Preparation",
+        value: "Run `/loadout` to preview auto-applied gear bonuses, then `/raidintel` for map and trigger projections.",
+        inline: false
+    }, {
+        name: "4️⃣ Run Missions",
+        value: "Start with `/raid bet:10 tension:low`, then scale risk to `medium`/`high` as your inventory and PMC level improve.",
+        inline: false
+    }, {
+        name: "5️⃣ Loop Rewards",
+        value: "Open crates with `/opencrate`, consume support items with `/useitem`, and track consistency via `/raidhistory` + `/pmc`.",
+        inline: false
+    })
+        .setFooter({ text: `Requested by ${user.tag} • Stay consistent and scale risk gradually.` })
+        .setTimestamp(new Date());
+}
+async function helpPageXP(guild) {
+    const rankLines = await resolveXpRoleLines(guild);
+    const rankChunks = chunkRoleLines(rankLines, 900);
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x00ffea)
+        .setTitle("🎖️ XP Operations")
+        .setDescription("Chat XP is earned by eligible messages and drives rank progression.")
+        .addFields({
+        name: "Command Summary",
+        value: "• `/xp` — compact level and progress bar\n\n• `/xpstats` — detailed engagement + PMC progression\n\n• `/xproles` — view 5 themed role sections\n\n• `/xprolesync` — admin force-sync rank roles now\n\n• `/leaderboard` — server-wide engagement XP ranking\n\n• `/daily` — claim streak bonus"
+    }, {
+        name: "🪖 Progression Rules",
+        value: "• Engagement XP gives +1 for communication actions\n  (chat messages, replies, mentions, attachments).\n\n• Raid XP is tracked separately in your PMC profile."
+    });
+    if (!rankChunks.length) {
+        embed.addFields({ name: "🎖️ Rank Unlock Directory", value: "No rank directory entries available." });
+        return embed;
+    }
+    embed.addFields({ name: "🎖️ Rank Unlock Directory", value: rankChunks[0] });
+    for (let i = 1; i < rankChunks.length; i++) {
+        embed.addFields({ name: `🎖️ Rank Unlock Directory (${i + 1})`, value: rankChunks[i] });
+    }
+    return embed;
+}
+function helpPageRaids() {
+    return new discord_js_1.EmbedBuilder()
+        .setColor(0x00ffea)
+        .setTitle("⚔️ Raid Operations")
+        .setDescription("Raids award persistent PMC Raid XP, tokens, and map-based loot with condition triggers plus boss encounters.")
+        .addFields({ name: "📦 Risk Drop Box", value: "• **Low** — safer extract profile\n\n• **Medium** — balanced risk/reward\n\n• **High** — volatile, higher payout potential" }, {
+        name: "🗺️ Raid Maps",
+        value: "• **FN Plagued Cemetery**\n  Beginner map, higher extraction odds, low-mid loot.\n\n• **FN Slaughterhouse**\n  Mid map, harder extracts, better loot spread, 10% boss spawn.\n\n• **FN BoogersWoodZ**\n  Hard map, premium loot tables, harder boss pressure.\n\n• **FN MegaYachtolopolis**\n  Elite map with luxury-tech loot, claustrophobic kill lanes, and vicious apex pressure.\n\n• **FN Warlords Warcamp**\n  Brutal trench map with war salvage jackpots and relentless open-field punishment.\n\n• **FN SUNKEN VILLAGE**\n  Cataclysmic flooded map loaded with varied crate drops and drowned-boss ambushes."
+    }, {
+        name: "🪖 Mission Commands",
+        value: `• \`/raid bet:<amount> tension:<low|medium|high> map:<map_name> weapon:<optional> armor:<optional>\`\n\n• \`/raidhistory\` — recent results (map + boss outcomes)\n\n• \`/bosses\` — full boss roster, stats, and rotation weights\n\n• \`/conditions\` — every raid condition, deltas, and armor counters\n\n• \`/gearintel\` — raid gear stat and trait directory\n\n• \`/pmc\` — milestone PMC progression (up to Level ${utils_1.PMC_LEVEL_CAP})\n\n• \`/loadout\` — best auto-applied weapon/armor bonuses\n\n• \`/raidintel map:<map_name> weapon:<optional> armor:<optional>\``
+    }, { name: "🛡️ Trigger Buffs and Debuffs", value: "• Conditions: `storm`, `fog`, `night`, `heatwave`, `urban`, `radiation`, `drizzle`, `crosswind`, `low_power`, `ashfall`\n\n• Best owned weapon/armor auto-apply with condition-specific modifiers and loss mitigation.\n\n• Some armor pieces now fully negate their matching raid condition." }, { name: "👑 Boss Mechanics", value: "• Maps pull from boss variants or apex signatures with unique names and ferocity.\n\n• Boss pressure scales with map, tension, and PMC progression.\n\n• Defeating bosses grants map-tuned gear drops, bonus Raid XP, extra token rewards, and permanent heart trophies." }, { name: "📈 PMC Progression", value: `• PMC XP is separate from chat XP.\n\n• Milestone tiers unlock at 1000 / 4000 / 8000 / 12000 / ${utils_1.PMC_LEVEL_CAP} with escalating raid buffs.` }, { name: "⏱️ Operation Rules", value: `Cooldown: 5s | Minimum bet: ${MIN_RAID_BET} FN Token$ | Raid XP saved to persistent PMC profile` });
+}
+function helpPageShop() {
+    return new discord_js_1.EmbedBuilder()
+        .setColor(0x00ffea)
+        .setTitle("📦 Supply and Inventory")
+        .setDescription("Buy, sell, store, and open loot crates.")
+        .addFields({ name: "Command Summary", value: "• `/shop` — list purchasable items\n\n• `/inventory` — show owned items and quantities\n\n• `/buy` — purchase item by id and quantity\n\n• `/sell` — sell owned items for tokens\n\n• `/opencrate` — consume crate and roll loot\n\n• `/useitem` — use consumables for instant effects" }, { name: "Loot Notes", value: "• Raid loot now includes broader resources, consumables, elite crates, and boss-specific drops.\n\n• Best owned loadout auto-applies in raids.\n\n• Inventory and token changes are persisted." });
+}
+function helpPageGames() {
+    return new discord_js_1.EmbedBuilder()
+        .setColor(0x00ffea)
+        .setTitle("🎯 Training Grounds")
+        .setDescription("Casino games using FN Token$, ultra-rare coins found only in raids (except owner-issued grants).")
+        .addFields({ name: "Command Summary", value: "• `/dice` — predict number/high-low/odd-even\n\n• `/roulette` — color, parity, or number bets\n\n• `/blackjack` — safe/aggressive strategy auto-play\n\n• `/crash` — target multiplier risk game\n\n• `/slots` — 8-row machine up to 8 paylines\n\n• `/coinflip` — heads/tails\n\n• `/baccarat` — player/banker/tie\n\n• `/hilo` — higher or lower call\n\n• `/keno` — pick 2-10 numbers out of 40" }, { name: "Fairness Model", value: "• All games deduct stake first.\n\n• Lucky multipliers and payouts are tuned for sustainable economy balance." });
+}
+function helpPageBank() {
+    return new discord_js_1.EmbedBuilder()
+        .setColor(0x00ffea)
+        .setTitle("🏦 Banking and Trading Directory")
+        .setDescription("Organized FN Token$ banking and direct player-to-player trading.")
+        .addFields({ name: "📦 Banking Commands", value: "• `/bank` — wallet + bank overview\n\n• `/deposit` — move wallet tokens into bank\n\n• `/withdraw` — move bank tokens to wallet\n\n• `/transfer` — wallet-to-wallet token send" }, { name: "🧾 Trade Commands", value: "• `/tradeoffer` — create item-for-item offer\n\n• `/trades` — list incoming/outgoing open trades\n\n• `/tradeaccept` — complete an incoming offer\n\n• `/tradedecline` — reject/cancel a trade" }, { name: "🛡️ Trade Rules", value: "• Only inventory items can be traded.\n\n• Both inventories are revalidated at accept time." }, { name: "📈 Banking Notes", value: "• Bank stores FN Token$ separately from wallet.\n\n• Raid and casino bets consume wallet tokens." });
+}
+function helpPageModeration() {
+    return new discord_js_1.EmbedBuilder()
+        .setColor(0x00ffea)
+        .setTitle("🛡️ Moderation and Admin Directory")
+        .setDescription("Community safety overview. Sensitive admin command details are intentionally hidden from public help.")
+        .addFields({
+        name: "Community Safety Flow",
+        value: "• Staff can issue warnings and escalations for abuse/spam.\n\n• Repeated violations may trigger timeout, removal, or bans.\n\n• Enforcement actions are logged for audit and accountability."
+    }, {
+        name: "Support Workflow",
+        value: "• Tickets are handled through claim, assignment, workflow updates, archive, reopen, and permanent resolution stages.\n\n• SLA monitoring and audit logs are active for support operations quality."
+    }, {
+        name: "Admin Command Visibility",
+        value: "Sensitive admin and diagnostics commands are intentionally not listed in public help."
+    });
+}
+async function buildHelpPayload(page = "general", guild) {
+    const embed = page === "xp" ? await helpPageXP(guild) :
+        page === "raids" ? helpPageRaids() :
+            page === "shop" ? helpPageShop() :
+                page === "bank" ? helpPageBank() :
+                    page === "moderation" ? helpPageModeration() :
+                        page === "games" ? helpPageGames() :
+                            helpPageGeneral();
+    return { embed: embed.toJSON(), withHelpNav: true, helpPage: page };
+}
+function getAvatar(user) {
+    return user.displayAvatarURL({ extension: "png", size: 256 });
+}
+const RAID_COMMAND_SET = new Set(["raid", "raidintel", "raidhistory", "bosses", "conditions", "gearintel", "loadout", "pmc"]);
+const GAME_COMMAND_SET = new Set(["dice", "roulette", "blackjack", "crash", "slots", "coinflip", "baccarat", "hilo", "keno"]);
+function resolveCommandTheme(commandName) {
+    const cmd = commandName.toLowerCase();
+    const raidCommands = new Set(["raid", "raidintel", "raidhistory", "bosses", "conditions", "gearintel", "loadout", "pmc"]);
+    const xpCommands = new Set(["xp", "xpstats", "xproles", "xprolesync", "leaderboard", "daily", "xpverify"]);
+    const economyCommands = new Set(["balance", "token", "bank", "deposit", "withdraw", "transfer", "shop", "inventory", "buy", "sell", "opencrate", "useitem", "tradeoffer", "trades", "tradeaccept", "tradedecline"]);
+    const gameCommands = new Set(["dice", "roulette", "blackjack", "crash", "slots", "coinflip", "baccarat", "hilo", "keno"]);
+    const moderationCommands = new Set(["warn", "warnings", "clearwarnings", "tempban", "purge", "points", "pointsuser", "addpoints", "addtoken", "timeout", "kick", "ban", "setmodlog", "modconfig", "xprolesync", "health", "rolesanity", "ticketsanity", "xpverify", "incident"]);
+    const ticketCommands = new Set([
+        "ticket",
+        "ticketintake",
+        "ticketforce",
+        "ticketpanel",
+        "claimticket",
+        "ticketassign",
+        "ticketstatus",
+        "reopenticket",
+        "closeticket",
+        "resolveticket",
+        "ticketconfig",
+        "tickets",
+        "ticketanalytics",
+        "ticketsearch",
+        "ticketworkload",
+        "ticketnote",
+        "tickettimeline",
+        "ticketmerge",
+        "ticketlink",
+        "ticketexport",
+        "ticketretention"
+    ]);
+    if (cmd === "pmc")
+        return { color: 0x0b1f3a, icon: "🪖", label: "PMC Profile" };
+    if (raidCommands.has(cmd))
+        return { color: 0xd97706, icon: "⚔️", label: "Raid Ops" };
+    if (xpCommands.has(cmd))
+        return { color: 0x0ea5e9, icon: "🎖️", label: "Progression" };
+    if (economyCommands.has(cmd))
+        return { color: 0x059669, icon: "💰", label: "Economy" };
+    if (gameCommands.has(cmd))
+        return { color: 0xdc2626, icon: "🎯", label: "Games" };
+    if (moderationCommands.has(cmd))
+        return { color: 0x1f2937, icon: "🛡️", label: "Moderation" };
+    if (ticketCommands.has(cmd))
+        return { color: 0x0f766e, icon: "🎫", label: "Support" };
+    if (cmd === "help" || cmd === "quickstart")
+        return { color: 0x06b6d4, icon: "🪖", label: "Command Center" };
+    return { color: 0x3b82f6, icon: "🪖", label: "Operations" };
+}
+function resolveOutcomeSignal(text) {
+    const upper = text.toUpperCase();
+    if (/\b(PUSH|DRAW|TIE)\b/.test(upper))
+        return "push";
+    if (/\b(FAILURE|FAILED|LOSS|LOST|DEFEAT|BUST|ELIMINATED|OPERATION FAILED)\b/.test(upper))
+        return "failure";
+    if (/\b(SUCCESS|WIN|WON|VICTORY|EXTRACTED|DEFEATED|OPERATION EXTRACTED)\b/.test(upper))
+        return "success";
+    return "neutral";
+}
+function resolveOutcomeColor(commandName, text) {
+    const cmd = commandName.toLowerCase();
+    const upper = text.toUpperCase();
+    // /pmc includes neutral terms like "Loss Mitigation" that should not drive red/green outcome coloring.
+    if (cmd === "pmc")
+        return null;
+    // Hard guarantee for /raid responses even if wording/format changes.
+    if (cmd === "raid") {
+        if (/MISSION\s*COMPLETE\s*:\s*SUCCESS/.test(upper) || /OPERATION\s+EXTRACTED/.test(upper))
+            return 0x22c55e;
+        if (/MISSION\s*COMPLETE\s*:\s*FAILURE/.test(upper) || /OPERATION\s+FAILED/.test(upper))
+            return 0xef4444;
+    }
+    if (!RAID_COMMAND_SET.has(cmd) && !GAME_COMMAND_SET.has(cmd))
+        return null;
+    const signal = resolveOutcomeSignal(text);
+    if (signal === "success")
+        return 0x22c55e;
+    if (signal === "failure")
+        return 0xef4444;
+    if (signal === "push")
+        return 0xf59e0b;
+    return null;
+}
+function beautifyCommandText(text) {
+    const trimmed = text.trim();
+    if (!trimmed)
+        return "No data available.";
+    const lines = trimmed.split("\n").map(line => line.trimEnd());
+    const beautified = lines.map(line => {
+        if (!line)
+            return line;
+        if (line.startsWith("* "))
+            return `• ${line.slice(2)}`;
+        if (line.startsWith("- "))
+            return `• ${line.slice(2)}`;
+        const headingOnly = line.match(/^([A-Za-z0-9\s#()/%+\-]{2,40}):$/);
+        if (headingOnly) {
+            const heading = headingOnly[1].trim();
+            return `__${heading}__`;
+        }
+        const keyValue = line.match(/^([A-Za-z0-9\s#()/%+\-]{2,40}):\s+(.+)$/);
+        if (keyValue) {
+            const key = keyValue[1].trim();
+            const value = keyValue[2].trim();
+            return `**${key}:** ${value}`;
+        }
+        return line;
+    });
+    return beautified.join("\n");
+}
+function chunkLines(lines, limit = 1000) {
+    const chunks = [];
+    let current = "";
+    for (const line of lines) {
+        const next = current ? `${current}\n${line}` : line;
+        if (next.length > limit && current) {
+            chunks.push(current);
+            current = line;
+        }
+        else {
+            current = next;
+        }
+    }
+    if (current)
+        chunks.push(current);
+    return chunks;
+}
+function clampText(text, limit) {
+    if (text.length <= limit)
+        return text;
+    return `${text.slice(0, Math.max(0, limit - 3))}...`;
+}
+function sanitizeEmbedBuilder(embed) {
+    const raw = embed.toJSON();
+    const fields = (raw.fields || []).slice(0, 25).map(field => ({
+        name: clampText(field.name || "Field", 256),
+        value: clampText(field.value || "-", 1024),
+        inline: field.inline
+    }));
+    const safe = new discord_js_1.EmbedBuilder();
+    if (raw.title)
+        safe.setTitle(clampText(raw.title, 256));
+    if (raw.description)
+        safe.setDescription(clampText(raw.description, 4096));
+    if (raw.color !== undefined)
+        safe.setColor(raw.color);
+    if (raw.author)
+        safe.setAuthor({
+            name: clampText(raw.author.name || "", 256),
+            iconURL: raw.author.icon_url,
+            url: raw.author.url
+        });
+    if (raw.thumbnail?.url)
+        safe.setThumbnail(raw.thumbnail.url);
+    if (raw.image?.url)
+        safe.setImage(raw.image.url);
+    if (raw.footer?.text)
+        safe.setFooter({ text: clampText(raw.footer.text, 2048), iconURL: raw.footer.icon_url });
+    if (raw.timestamp)
+        safe.setTimestamp(new Date(raw.timestamp));
+    if (fields.length)
+        safe.addFields(fields);
+    return safe;
+}
+function brandEmbedForUser(embed, user, commandLabel) {
+    return sanitizeEmbedBuilder(embed
+        .setColor(embed.data.color ?? 0x4ca7ff)
+        .setAuthor({ name: `${user.username} • ${commandLabel}`, iconURL: getAvatar(user) })
+        .setThumbnail(embed.data.thumbnail?.url || ARMY_ICON_URL)
+        .setFooter({ text: `Titan Premium Command Suite • Requested by ${user.tag}` })
+        .setTimestamp(new Date()));
+}
+function brandLiveEmbed(embed, scopeLabel, footerLabel) {
+    const existingFooter = embed.data.footer?.text?.trim() || "";
+    const footerText = [footerLabel || "Titan Ops Live Feed", existingFooter]
+        .filter(Boolean)
+        .join(" • ");
+    const branded = embed
+        .setColor(embed.data.color ?? 0x14b8a6)
+        .setAuthor({
+        name: scopeLabel,
+        iconURL: ARMY_ICON_URL
+    })
+        .setFooter({ text: footerText.slice(0, 2048) });
+    if (!embed.data.timestamp) {
+        branded.setTimestamp(new Date());
+    }
+    return sanitizeEmbedBuilder(branded);
+}
+function embedFromText(commandName, text, user) {
+    const theme = resolveCommandTheme(commandName);
+    const cmd = commandName.toLowerCase();
+    const bodyRaw = text.length > 4000 ? `${text.slice(0, 3997)}...` : text;
+    const body = beautifyCommandText(bodyRaw);
+    const lines = body.split("\n");
+    const compact = lines.filter(line => line.trim().length > 0);
+    let color = cmd === "pmc" ? 0x0b1f3a : theme.color;
+    const outcomeColor = resolveOutcomeColor(commandName, body);
+    if (outcomeColor !== null)
+        color = outcomeColor;
+    if (cmd === "pmc")
+        color = 0x0b1f3a;
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(color)
+        .setTitle(`${theme.icon} /${commandName} • ${theme.label}`);
+    if (compact.length <= 12 && body.length <= 1600) {
+        embed.setDescription(body);
+    }
+    else {
+        const summary = lines.slice(0, 6).join("\n").trim() || "No data available.";
+        embed.setDescription(clampText(summary, 1200));
+        const details = lines.slice(6).filter(line => line.trim().length > 0);
+        const chunks = chunkLines(details, 950).slice(0, 3);
+        for (let i = 0; i < chunks.length; i++) {
+            embed.addFields({ name: i === 0 ? "Details" : `Details ${i + 1}`, value: chunks[i] });
+        }
+    }
+    return brandEmbedForUser(embed, user, `/${commandName}`).toJSON();
+}
+function embedFromPayload(commandName, raw, user) {
+    const theme = resolveCommandTheme(commandName);
+    const cmd = commandName.toLowerCase();
+    const embed = discord_js_1.EmbedBuilder.from(raw);
+    const payloadText = [
+        embed.data.title || "",
+        embed.data.description || "",
+        ...(embed.data.fields || []).map(field => `${field.name || ""}\n${field.value || ""}`)
+    ].join("\n");
+    const outcomeColor = resolveOutcomeColor(commandName, payloadText);
+    if (outcomeColor !== null) {
+        embed.setColor(outcomeColor);
+    }
+    else if (!embed.data.color) {
+        embed.setColor(theme.color);
+    }
+    if (cmd === "pmc") {
+        embed.setColor(0x0b1f3a);
+    }
+    if (!embed.data.title)
+        embed.setTitle(`${theme.icon} /${commandName} • ${theme.label}`);
+    return brandEmbedForUser(embed, user, `/${commandName}`).toJSON();
+}
+function getShopItems() {
+    return catalog_1.SHOP_ITEMS.map(id => catalog_1.ITEM_DEFS[id]);
+}
+function formatInventory(userId) {
+    const inv = (0, utils_1.ensureUser)(userId).inventory;
+    const entries = Object.entries(inv);
+    if (!entries.length)
+        return "Empty";
+    return entries.map(([id, qty]) => `${qty}x ${catalog_1.ITEM_DEFS[id]?.name || id}`).join("\n");
+}
+const RAID_CONDITIONS = [
+    { key: "storm", label: "Storm Front", description: "Visibility drops and extraction lanes are unstable.", successDelta: -0.03, tokenMultiplierDelta: 0.08, xpMultiplier: 1.1 },
+    { key: "fog", label: "Dense Fog", description: "Long-range pressure is reduced, stealth routing improves.", successDelta: -0.01, tokenMultiplierDelta: 0.05, xpMultiplier: 1.06 },
+    { key: "night", label: "Night Operation", description: "High-risk engagement windows with stealth-focused paths.", successDelta: -0.02, tokenMultiplierDelta: 0.1, xpMultiplier: 1.14 },
+    { key: "heatwave", label: "Heatwave", description: "Thermal strain lowers heavy gear efficiency.", successDelta: -0.015, tokenMultiplierDelta: 0.06, xpMultiplier: 1.08 },
+    { key: "urban", label: "Urban Collapse", description: "Close-quarters terrain rewards mobility and fast weapons.", successDelta: 0.0, tokenMultiplierDelta: 0.04, xpMultiplier: 1.04 },
+    { key: "radiation", label: "Radiation Surge", description: "Hazard zones punish weak protection but increase rewards.", successDelta: -0.025, tokenMultiplierDelta: 0.12, xpMultiplier: 1.18 },
+    { key: "drizzle", label: "Cold Drizzle", description: "Minor moisture slicks lanes and softens sightlines without heavily disrupting tempo.", successDelta: -0.006, tokenMultiplierDelta: 0.025, xpMultiplier: 1.03 },
+    { key: "crosswind", label: "Crosswind Shear", description: "Light lateral wind nudges ranged consistency and extraction timing.", successDelta: -0.009, tokenMultiplierDelta: 0.03, xpMultiplier: 1.04 },
+    { key: "low_power", label: "Low Power Grid", description: "Flickering infrastructure causes subtle routing delays and weaker tactical reads.", successDelta: -0.012, tokenMultiplierDelta: 0.035, xpMultiplier: 1.05 },
+    { key: "ashfall", label: "Ashfall", description: "Airborne ash creates persistent low-grade interference across the operation.", successDelta: -0.018, tokenMultiplierDelta: 0.055, xpMultiplier: 1.08 }
+];
+const RAID_LOOT_TUNING_BY_DIFFICULTY = {
+    Beginner: {
+        successBaseRolls: 1,
+        successHighTensionBonusRolls: 1,
+        successHardMapBonusRolls: 0,
+        failureBaseRolls: 1,
+        gearSuccessBaseChance: 0.18,
+        gearFailureChance: 0.06,
+        fnCoinBaseChance: 0.006,
+        relicBaseChance: 0.018,
+        crateBaseChance: 0.026,
+        ultraRareBaseChance: 0.0003,
+        bossUltraRareBonusChance: 0.0028
+    },
+    Mid: {
+        successBaseRolls: 1,
+        successHighTensionBonusRolls: 1,
+        successHardMapBonusRolls: 0,
+        failureBaseRolls: 1,
+        gearSuccessBaseChance: 0.22,
+        gearFailureChance: 0.08,
+        fnCoinBaseChance: 0.009,
+        relicBaseChance: 0.024,
+        crateBaseChance: 0.035,
+        ultraRareBaseChance: 0.00075,
+        bossUltraRareBonusChance: 0.0035
+    },
+    Hard: {
+        successBaseRolls: 1,
+        successHighTensionBonusRolls: 1,
+        successHardMapBonusRolls: 1,
+        failureBaseRolls: 1,
+        gearSuccessBaseChance: 0.26,
+        gearFailureChance: 0.1,
+        fnCoinBaseChance: 0.012,
+        relicBaseChance: 0.03,
+        crateBaseChance: 0.042,
+        ultraRareBaseChance: 0.0014,
+        bossUltraRareBonusChance: 0.0042
+    },
+    Elite: {
+        successBaseRolls: 2,
+        successHighTensionBonusRolls: 1,
+        successHardMapBonusRolls: 1,
+        failureBaseRolls: 1,
+        gearSuccessBaseChance: 0.29,
+        gearFailureChance: 0.11,
+        fnCoinBaseChance: 0.014,
+        relicBaseChance: 0.034,
+        crateBaseChance: 0.052,
+        ultraRareBaseChance: 0.0019,
+        bossUltraRareBonusChance: 0.0049
+    },
+    Brutal: {
+        successBaseRolls: 2,
+        successHighTensionBonusRolls: 1,
+        successHardMapBonusRolls: 1,
+        failureBaseRolls: 1,
+        gearSuccessBaseChance: 0.31,
+        gearFailureChance: 0.115,
+        fnCoinBaseChance: 0.016,
+        relicBaseChance: 0.039,
+        crateBaseChance: 0.06,
+        ultraRareBaseChance: 0.0023,
+        bossUltraRareBonusChance: 0.0054
+    },
+    Cataclysmic: {
+        successBaseRolls: 2,
+        successHighTensionBonusRolls: 2,
+        successHardMapBonusRolls: 1,
+        failureBaseRolls: 1,
+        gearSuccessBaseChance: 0.34,
+        gearFailureChance: 0.12,
+        fnCoinBaseChance: 0.018,
+        relicBaseChance: 0.044,
+        crateBaseChance: 0.075,
+        ultraRareBaseChance: 0.003,
+        bossUltraRareBonusChance: 0.0062
+    }
+};
+function pickOne(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+}
+function pickWeightedEntry(arr) {
+    const eligible = arr.filter(entry => entry.weight > 0);
+    if (!eligible.length)
+        return arr[0];
+    const total = eligible.reduce((sum, entry) => sum + entry.weight, 0);
+    let roll = Math.random() * total;
+    for (const entry of eligible) {
+        roll -= entry.weight;
+        if (roll <= 0)
+            return entry;
+    }
+    return eligible[eligible.length - 1];
+}
+function rollBossVariant(mapCfg) {
+    const variant = pickWeightedEntry(getBossRotationTable(mapCfg));
+    return {
+        name: variant.boss.name,
+        title: variant.boss.title,
+        ferocity: variant.boss.ferocity,
+        successPenalty: variant.boss.successPenalty,
+        killPenalty: variant.boss.killPenalty,
+        raidPressure: variant.boss.raidPressure,
+        bonusXpRange: variant.boss.bonusXpRange,
+        tokenRewardRange: variant.boss.tokenRewardRange,
+        weaponDrop: pickOne(variant.boss.weaponDrops),
+        armorDrop: pickOne(variant.boss.armorDrops),
+        rareDropChance: variant.boss.rareDropChance,
+        homeMapKey: variant.boss.homeMapKey,
+        homeMapLabel: variant.boss.homeMapLabel,
+        spawnSharePct: variant.sharePct
+    };
+}
+function isAdvancedRaidDifficulty(difficulty) {
+    return difficulty !== "Beginner" && difficulty !== "Mid";
+}
+const RAID_MAPS = {
+    plagued_cemetary: {
+        key: "plagued_cemetary",
+        label: "FN Plagued Cemetery",
+        difficulty: "Beginner",
+        helpSummary: "Beginner map, higher extraction odds, low-mid loot.",
+        description: "Beginner route with calmer extraction lanes and low-mid tier loot opportunities.",
+        lootTier: "Low to Mid",
+        recommendedTension: "low",
+        successDelta: 0.12,
+        tokenMultiplierDelta: -0.12,
+        xpMultiplier: 0.88,
+        lootGearChanceBonus: -0.08,
+        resourceChanceBonus: 0.03,
+        legendaryChanceBonus: -0.025,
+        fnCoinChanceBonus: -0.02,
+        bossName: "The Grave Warden",
+        bossSpawnChance: 0.05,
+        bossSuccessPenalty: 0.05,
+        bossKillPenalty: 0.06,
+        bossRaidPressure: 0.01,
+        bossBonusXpRange: [24, 52],
+        bossPool: [
+            { name: "The Grave Warden", title: "Crypt Marshal", ferocity: 0.7, successPenalty: 0.03, killPenalty: 0.05, raidPressure: 0.012, bonusXpRange: [28, 58], tokenRewardRange: [18, 42], weaponDrops: ["marksman_dmr", "scav_smg"], armorDrops: ["guardian_plate", "storm_shell"], rareDropChance: 0.08 },
+            { name: "Sister Vell", title: "Bone Oracle", ferocity: 0.82, successPenalty: 0.04, killPenalty: 0.06, raidPressure: 0.013, bonusXpRange: [36, 72], tokenRewardRange: [26, 58], weaponDrops: ["thermal_lance", "marksman_dmr"], armorDrops: ["shadow_cloak", "guardian_plate"], rareDropChance: 0.1 },
+            { name: "Morrow Fang", title: "Pit Reaper", ferocity: 0.9, successPenalty: 0.05, killPenalty: 0.07, raidPressure: 0.015, bonusXpRange: [48, 86], tokenRewardRange: [30, 66], weaponDrops: ["mythic_hammer", "plasma_carbine"], armorDrops: ["adaptive_mesh", "juggernaut_frame"], rareDropChance: 0.12 }
+        ],
+        successWeapons: ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr"],
+        failureWeapons: ["rust_blade", "combat_knife", "scav_smg"],
+        successArmor: ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell"],
+        failureArmor: ["field_vest", "scout_weave", "tactical_armor"],
+        bossKit: { weaponId: "marksman_dmr", armorId: "guardian_plate" },
+        scrapBonus: 2,
+        bonusLootPool: [
+            { id: "field_ration", weight: 8 },
+            { id: "common_crate", weight: 3 },
+            { id: "rare_material_small", weight: 6 },
+            { id: "tactical_blueprint", weight: 2 }
+        ],
+        crateDropTable: [{ id: "tactical_crate", weight: 1 }],
+        bossCrateDropTable: [{ id: "tactical_crate", weight: 1 }]
+    },
+    slaughterhouse: {
+        key: "slaughterhouse",
+        label: "FN Slaughterhouse",
+        difficulty: "Mid",
+        helpSummary: "Mid map, harder extracts, better loot spread, 10% boss spawn.",
+        description: "Mid-tier combat map with harder extractions, stronger loot spread, and a 10% boss spawn chance.",
+        lootTier: "Mid to High",
+        recommendedTension: "medium",
+        successDelta: -0.04,
+        tokenMultiplierDelta: 0.14,
+        xpMultiplier: 1.16,
+        lootGearChanceBonus: 0.07,
+        resourceChanceBonus: 0.08,
+        legendaryChanceBonus: 0.03,
+        fnCoinChanceBonus: 0.012,
+        bossName: "Butcher Prime",
+        bossSpawnChance: 0.12,
+        bossSuccessPenalty: 0.09,
+        bossKillPenalty: 0.1,
+        bossRaidPressure: 0.013,
+        bossBonusXpRange: [60, 120],
+        bossPool: [
+            { name: "Butcher Prime", title: "Arena Tyrant", ferocity: 1.05, successPenalty: 0.06, killPenalty: 0.08, raidPressure: 0.016, bonusXpRange: [70, 132], tokenRewardRange: [48, 92], weaponDrops: ["mythic_hammer", "thermal_lance"], armorDrops: ["juggernaut_frame", "void_shield"], rareDropChance: 0.16 },
+            { name: "Shardjaw", title: "Steel Maw", ferocity: 1.12, successPenalty: 0.07, killPenalty: 0.09, raidPressure: 0.018, bonusXpRange: [84, 156], tokenRewardRange: [56, 108], weaponDrops: ["rail_sniper", "plasma_carbine"], armorDrops: ["adaptive_mesh", "aegis_exosuit"], rareDropChance: 0.2 },
+            { name: "Hexline Rook", title: "Execution Marshal", ferocity: 1.2, successPenalty: 0.08, killPenalty: 0.1, raidPressure: 0.02, bonusXpRange: [92, 168], tokenRewardRange: [62, 118], weaponDrops: ["reactor_blade", "rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.22 }
+        ],
+        successWeapons: ["combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer"],
+        failureWeapons: ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr"],
+        successArmor: ["scout_weave", "tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame"],
+        failureArmor: ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell"],
+        bossKit: { weaponId: "mythic_hammer", armorId: "juggernaut_frame" },
+        scrapBonus: 5,
+        bonusLootPool: [
+            { id: "weapon_bolts", weight: 7 },
+            { id: "repair_kit", weight: 5 },
+            { id: "rare_crate", weight: 2 },
+            { id: "reactor_matrix", weight: 2 }
+        ],
+        crateDropTable: [{ id: "tactical_crate", weight: 1 }],
+        bossCrateDropTable: [{ id: "tactical_crate", weight: 1 }]
+    },
+    boogerswoodz: {
+        key: "boogerswoodz",
+        label: "FN BoogersWoodZ",
+        difficulty: "Hard",
+        helpSummary: "Hard map, premium loot tables, harder boss pressure.",
+        description: "Highest-risk territory with elite loot tables, brutal extraction odds, and harder bosses.",
+        lootTier: "High to Legendary",
+        recommendedTension: "high",
+        successDelta: -0.16,
+        tokenMultiplierDelta: 0.28,
+        xpMultiplier: 1.34,
+        lootGearChanceBonus: 0.14,
+        resourceChanceBonus: 0.12,
+        legendaryChanceBonus: 0.07,
+        fnCoinChanceBonus: 0.04,
+        bossName: "Booger King Omega",
+        bossSpawnChance: 0.26,
+        bossSuccessPenalty: 0.16,
+        bossKillPenalty: 0.2,
+        bossRaidPressure: 0.016,
+        bossBonusXpRange: [140, 260],
+        bossPool: [
+            { name: "Booger King Omega", title: "Apex Monstrosity", ferocity: 1.4, successPenalty: 0.1, killPenalty: 0.12, raidPressure: 0.022, bonusXpRange: [160, 280], tokenRewardRange: [120, 210], weaponDrops: ["reactor_blade", "rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.28 },
+            { name: "Queen Sumphex", title: "Rot Sovereign", ferocity: 1.55, successPenalty: 0.12, killPenalty: 0.14, raidPressure: 0.024, bonusXpRange: [190, 320], tokenRewardRange: [140, 245], weaponDrops: ["reactor_blade", "mythic_hammer"], armorDrops: ["titan_carapace", "adaptive_mesh"], rareDropChance: 0.34 },
+            { name: "Warlord Nullhide", title: "Void Cannoneer", ferocity: 1.68, successPenalty: 0.14, killPenalty: 0.16, raidPressure: 0.026, bonusXpRange: [220, 360], tokenRewardRange: [160, 290], weaponDrops: ["rail_sniper", "plasma_carbine", "enhanced_plasma_carbine"], armorDrops: ["aegis_exosuit", "titan_carapace"], rareDropChance: 0.38 }
+        ],
+        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
+        failureWeapons: ["combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon"],
+        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
+        failureArmor: ["tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield"],
+        bossKit: { weaponId: "reactor_blade", armorId: "titan_carapace" },
+        scrapBonus: 8,
+        bonusLootPool: [
+            { id: "servo_motor", weight: 6 },
+            { id: "nanofiber_roll", weight: 4 },
+            { id: "black_ice_lens", weight: 2 },
+            { id: "epic_crate", weight: 2 },
+            { id: "spectral_fiber", weight: 2 }
+        ],
+        crateDropTable: [
+            { id: "tactical_crate", weight: 1 },
+            { id: "mythic_crate", weight: 3 }
+        ],
+        bossCrateDropTable: [
+            { id: "tactical_crate", weight: 1 },
+            { id: "mythic_crate", weight: 4 }
+        ]
+    },
+    megayachtolopolis: {
+        key: "megayachtolopolis",
+        label: "FN MegaYachtolopolis",
+        difficulty: "Elite",
+        helpSummary: "Elite yacht city, luxury-tech loot, punishing CQB bosses.",
+        description: "Skyline-sized superyacht district packed with luxury-tech vaults, tight interior kill lanes, and brutal command deck extracts.",
+        lootTier: "Luxury Tech / High-End",
+        recommendedTension: "high",
+        successDelta: -0.145,
+        tokenMultiplierDelta: 0.31,
+        xpMultiplier: 1.42,
+        lootGearChanceBonus: 0.17,
+        resourceChanceBonus: 0.15,
+        legendaryChanceBonus: 0.085,
+        fnCoinChanceBonus: 0.045,
+        bossName: "Dreadwake Morvane",
+        bossSpawnChance: 0.29,
+        bossSuccessPenalty: 0.18,
+        bossKillPenalty: 0.22,
+        bossRaidPressure: 0.019,
+        bossBonusXpRange: [210, 360],
+        bossPool: [
+            { name: "Dreadwake Morvane", title: "Hull Reaper", ferocity: 1.82, successPenalty: 0.15, killPenalty: 0.18, raidPressure: 0.03, bonusXpRange: [250, 390], tokenRewardRange: [180, 320], weaponDrops: ["reactor_blade", "rail_sniper", "enhanced_rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.42 }
+        ],
+        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
+        failureWeapons: ["pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine"],
+        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
+        failureArmor: ["guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh"],
+        bossKit: { weaponId: "reactor_blade", armorId: "titan_carapace" },
+        scrapBonus: 9,
+        bonusLootPool: [
+            { id: "encrypted_chip", weight: 12 },
+            { id: "nanofiber_roll", weight: 9 },
+            { id: "black_ice_lens", weight: 4 },
+            { id: "legendary_token", weight: 3 },
+            { id: "tactical_crate", weight: 3 },
+            { id: "quantum_logbook", weight: 3 }
+        ],
+        crateDropTable: [
+            { id: "epic_crate", weight: 1 },
+            { id: "tactical_crate", weight: 3 },
+            { id: "mythic_crate", weight: 2 }
+        ],
+        bossCrateDropTable: [
+            { id: "tactical_crate", weight: 2 },
+            { id: "mythic_crate", weight: 3 }
+        ]
+    },
+    warlords_warcamp: {
+        key: "warlords_warcamp",
+        label: "FN Warlords Warcamp",
+        difficulty: "Brutal",
+        helpSummary: "Brutal trench map, war salvage jackpots, relentless field pressure.",
+        description: "Fortified trench sprawl where roaming commanders, artillery scars, and open kill boxes crush sloppy pushes.",
+        lootTier: "War Salvage / High-End",
+        recommendedTension: "high",
+        successDelta: -0.155,
+        tokenMultiplierDelta: 0.34,
+        xpMultiplier: 1.48,
+        lootGearChanceBonus: 0.19,
+        resourceChanceBonus: 0.17,
+        legendaryChanceBonus: 0.09,
+        fnCoinChanceBonus: 0.05,
+        bossName: "Kraghoss the Ashen Standard",
+        bossSpawnChance: 0.31,
+        bossSuccessPenalty: 0.19,
+        bossKillPenalty: 0.23,
+        bossRaidPressure: 0.021,
+        bossBonusXpRange: [240, 390],
+        bossPool: [
+            { name: "Kraghoss the Ashen Standard", title: "Siegeblood Khan", ferocity: 1.96, successPenalty: 0.17, killPenalty: 0.2, raidPressure: 0.033, bonusXpRange: [290, 430], tokenRewardRange: [220, 360], weaponDrops: ["mythic_hammer", "plasma_carbine", "enhanced_thermal_lance"], armorDrops: ["aegis_exosuit", "juggernaut_frame"], rareDropChance: 0.46 }
+        ],
+        successWeapons: ["thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
+        failureWeapons: ["marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer"],
+        successArmor: ["adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
+        failureArmor: ["storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame"],
+        bossKit: { weaponId: "mythic_hammer", armorId: "aegis_exosuit" },
+        scrapBonus: 10,
+        bonusLootPool: [
+            { id: "weapon_bolts", weight: 12 },
+            { id: "servo_motor", weight: 10 },
+            { id: "combat_stim", weight: 8 },
+            { id: "relic_fragment", weight: 4 },
+            { id: "tactical_crate", weight: 4 },
+            { id: "mythic_crate", weight: 1 },
+            { id: "warbond_chip", weight: 2 }
+        ],
+        crateDropTable: [
+            { id: "epic_crate", weight: 1 },
+            { id: "tactical_crate", weight: 3 },
+            { id: "mythic_crate", weight: 2 }
+        ],
+        bossCrateDropTable: [
+            { id: "tactical_crate", weight: 2 },
+            { id: "mythic_crate", weight: 4 }
+        ]
+    },
+    sunken_village: {
+        key: "sunken_village",
+        label: "FN SUNKEN VILLAGE",
+        difficulty: "Cataclysmic",
+        helpSummary: "Cataclysmic ruins, varied crate economy, drowned apex boss.",
+        description: "Flood-choked ruins with submerged cache routes, ambush angles, and crate-rich shrines that reward disciplined clears.",
+        lootTier: "Crate Dense / Legendary",
+        recommendedTension: "high",
+        successDelta: -0.135,
+        tokenMultiplierDelta: 0.3,
+        xpMultiplier: 1.44,
+        lootGearChanceBonus: 0.16,
+        resourceChanceBonus: 0.14,
+        legendaryChanceBonus: 0.095,
+        fnCoinChanceBonus: 0.055,
+        bossName: "Thalrex Mourntide",
+        bossSpawnChance: 0.33,
+        bossSuccessPenalty: 0.2,
+        bossKillPenalty: 0.24,
+        bossRaidPressure: 0.023,
+        bossBonusXpRange: [270, 430],
+        bossPool: [
+            { name: "Thalrex Mourntide", title: "Drowned Godspeaker", ferocity: 2.08, successPenalty: 0.19, killPenalty: 0.22, raidPressure: 0.036, bonusXpRange: [340, 520], tokenRewardRange: [260, 420], weaponDrops: ["rail_sniper", "reactor_blade", "enhanced_reactor_blade", "enhanced_starforged_reaper"], armorDrops: ["titan_carapace", "adaptive_mesh"], rareDropChance: 0.5 }
+        ],
+        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
+        failureWeapons: ["marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "rail_sniper"],
+        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
+        failureArmor: ["shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit"],
+        bossKit: { weaponId: "rail_sniper", armorId: "titan_carapace" },
+        scrapBonus: 7,
+        bonusLootPool: [
+            { id: "common_crate", weight: 7 },
+            { id: "rare_crate", weight: 8 },
+            { id: "epic_crate", weight: 6 },
+            { id: "tactical_crate", weight: 4 },
+            { id: "mythic_crate", weight: 2 },
+            { id: "scav_beacon", weight: 6 },
+            { id: "relic_fragment", weight: 4 },
+            { id: "mythic_circuit", weight: 2 }
+        ],
+        crateDropTable: [
+            { id: "common_crate", weight: 4 },
+            { id: "rare_crate", weight: 5 },
+            { id: "epic_crate", weight: 5 },
+            { id: "tactical_crate", weight: 4 },
+            { id: "mythic_crate", weight: 3 }
+        ],
+        bossCrateDropTable: [
+            { id: "rare_crate", weight: 2 },
+            { id: "epic_crate", weight: 3 },
+            { id: "tactical_crate", weight: 4 },
+            { id: "mythic_crate", weight: 5 }
+        ]
+    }
+};
+const RAID_MAP_CHOICES = Object.values(RAID_MAPS).map(map => ({ name: map.label, value: map.key }));
+const RAID_DIFFICULTY_ORDER = ["Beginner", "Mid", "Hard", "Elite", "Brutal", "Cataclysmic"];
+const RAID_MAP_SHORT_LABELS = {
+    plagued_cemetary: "CEM",
+    slaughterhouse: "SLH",
+    boogerswoodz: "BGZ",
+    megayachtolopolis: "MYO",
+    warlords_warcamp: "WWC",
+    sunken_village: "SVL"
+};
+const RAID_BOSS_ROSTER = Object.values(RAID_MAPS).flatMap(mapCfg => mapCfg.bossPool.map(boss => ({
+    ...boss,
+    homeMapKey: mapCfg.key,
+    homeMapLabel: mapCfg.label,
+    homeMapDifficulty: mapCfg.difficulty
+})));
+function getRaidDifficultyIndex(difficulty) {
+    const idx = RAID_DIFFICULTY_ORDER.indexOf(difficulty);
+    return idx >= 0 ? idx : 0;
+}
+function getBossRotationWeight(boss, mapCfg) {
+    const difficultyDistance = Math.abs(getRaidDifficultyIndex(boss.homeMapDifficulty) - getRaidDifficultyIndex(mapCfg.difficulty));
+    const sameMapBonus = boss.homeMapKey === mapCfg.key ? 8 : 0;
+    const sameDifficultyBonus = boss.homeMapDifficulty === mapCfg.difficulty ? 3 : 0;
+    const distanceBonus = Math.max(0, 4 - difficultyDistance);
+    const ferocityBias = Math.max(1, Math.round(boss.ferocity * 1.8));
+    return Math.max(1, sameMapBonus + sameDifficultyBonus + distanceBonus + ferocityBias);
+}
+function getBossRotationTable(mapCfg) {
+    const weighted = RAID_BOSS_ROSTER.map(boss => ({
+        boss,
+        weight: getBossRotationWeight(boss, mapCfg)
+    }));
+    const total = weighted.reduce((sum, entry) => sum + entry.weight, 0) || 1;
+    return weighted.map(entry => ({
+        ...entry,
+        sharePct: Math.round((entry.weight / total) * 1000) / 10
+    }));
+}
+function formatBossRotationShares(boss) {
+    return Object.values(RAID_MAPS)
+        .map(mapCfg => {
+        const tableEntry = getBossRotationTable(mapCfg).find(entry => entry.boss.name === boss.name);
+        const share = tableEntry?.sharePct ?? 0;
+        return `${RAID_MAP_SHORT_LABELS[mapCfg.key]} ${share.toFixed(1)}%`;
+    })
+        .join(" | ");
+}
+function resolveRaidMap(mapKeyRaw) {
+    const key = (mapKeyRaw || "plagued_cemetary");
+    return RAID_MAPS[key] || RAID_MAPS.plagued_cemetary;
+}
+function mapProjection(mapCfg, tension) {
+    const base = {
+        low: { successChance: 0.8, tokenMultiplier: 1.15, xp: [14, 30] },
+        medium: { successChance: 0.56, tokenMultiplier: 1.6, xp: [22, 54] },
+        high: { successChance: 0.33, tokenMultiplier: 2.38, xp: [38, 88] }
+    };
+    const avgConditionSuccessDelta = -0.0167;
+    const avgConditionTokenDelta = 0.075;
+    const bossExpectedPenalty = mapCfg.bossSpawnChance * (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure);
+    const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
+    const baselineBossKillChance = Math.max(0.12, Math.min(0.88, 0.4 + tensionBossDelta - mapCfg.bossKillPenalty - mapCfg.bossRaidPressure * 0.5));
+    const avgBossBonusXp = Math.round((mapCfg.bossBonusXpRange[0] + mapCfg.bossBonusXpRange[1]) / 2);
+    const successPct = Math.round(Math.max(0.06, Math.min(0.93, base[tension].successChance + mapCfg.successDelta + avgConditionSuccessDelta - bossExpectedPenalty)) * 100);
+    const tokenMultiplier = Math.max(0.7, base[tension].tokenMultiplier + mapCfg.tokenMultiplierDelta + avgConditionTokenDelta);
+    const xpBand = [
+        Math.max(1, Math.floor(base[tension].xp[0] * mapCfg.xpMultiplier)),
+        Math.max(1, Math.floor(base[tension].xp[1] * mapCfg.xpMultiplier))
+    ];
+    const successProb = successPct / 100;
+    const expectedOutcomeTokens = 17;
+    const bet = 100;
+    const expectedNetAt100 = Math.round((successProb * bet * tokenMultiplier) + expectedOutcomeTokens - bet);
+    const expectedBossBonusXp = Math.round(successProb * mapCfg.bossSpawnChance * baselineBossKillChance * avgBossBonusXp);
+    const bossKitDropChancePct = Math.round(successProb * mapCfg.bossSpawnChance * baselineBossKillChance * 100);
+    return { successPct, tokenMultiplier, xpBand, expectedNetAt100, expectedBossBonusXp, bossKitDropChancePct };
+}
+function getInventoryAutocompleteOptions(input) {
+    const focused = input.focusedRaw.trim().toLowerCase();
+    const entries = Object.entries(catalog_1.ITEM_DEFS)
+        .filter(([, def]) => !input.allowedKinds || input.allowedKinds.includes((def.kind || "resource")))
+        .map(([id, def]) => {
+        const owned = (0, utils_1.getInventoryCount)(input.userId, id);
+        const metric = input.metricKind === "weapon"
+            ? Math.round((def.raidAttack || 0) * 100)
+            : input.metricKind === "armor"
+                ? Math.round((def.raidDefense || 0) * 100)
+                : 0;
+        return { id, def, owned, metric };
+    })
+        .filter(entry => input.includeUnowned !== false || entry.owned > 0)
+        .filter(entry => !input.ownedOnly || entry.owned > 0)
+        .filter(entry => {
+        if (!focused)
+            return true;
+        return `${entry.id} ${entry.def.name} ${entry.def.rarity} ${entry.def.kind || ""}`.toLowerCase().includes(focused);
+    })
+        .sort((a, b) => {
+        if (input.sortByOwned && (b.owned > 0 ? 1 : 0) !== (a.owned > 0 ? 1 : 0))
+            return (b.owned > 0 ? 1 : 0) - (a.owned > 0 ? 1 : 0);
+        if (input.sortByOwned && b.owned !== a.owned)
+            return b.owned - a.owned;
+        if (b.metric !== a.metric)
+            return b.metric - a.metric;
+        return a.def.name.localeCompare(b.def.name);
+    })
+        .slice(0, 25);
+    return entries.map(entry => {
+        const status = entry.owned > 0 ? `OWNED x${entry.owned}` : "NOT OWNED";
+        const metricText = input.metricKind === "weapon"
+            ? `ATK +${entry.metric}%`
+            : input.metricKind === "armor"
+                ? `DEF +${entry.metric}%`
+                : `${(entry.def.kind || "item").toUpperCase()}`;
+        const raw = `${status} | ${entry.def.name} | ${metricText}`;
+        return { name: raw.length > 100 ? `${raw.slice(0, 97)}...` : raw, value: entry.id };
+    });
+}
+function getShopItemAutocompleteOptions(userId, focusedRaw) {
+    const focused = focusedRaw.trim().toLowerCase();
+    return catalog_1.SHOP_ITEMS
+        .map(id => {
+        const def = catalog_1.ITEM_DEFS[id];
+        const owned = (0, utils_1.getInventoryCount)(userId, id);
+        return { id, def, owned };
+    })
+        .filter(entry => Boolean(entry.def))
+        .filter(entry => !focused || `${entry.id} ${entry.def.name} ${entry.def.rarity}`.toLowerCase().includes(focused))
+        .sort((a, b) => a.def.price - b.def.price || a.def.name.localeCompare(b.def.name))
+        .slice(0, 25)
+        .map(entry => {
+        const raw = `${entry.def.name} | ${entry.id} | ${entry.def.price} FN Token$ | Owned ${entry.owned}`;
+        return { name: raw.length > 100 ? `${raw.slice(0, 97)}...` : raw, value: entry.id };
+    });
+}
+function getTradeOfferItemAutocompleteOptions(userId, focusedRaw) {
+    return getInventoryAutocompleteOptions({
+        userId,
+        focusedRaw,
+        ownedOnly: true,
+        includeUnowned: false,
+        sortByOwned: true
+    });
+}
+function getTradeRequestItemAutocompleteOptions(userId, focusedRaw) {
+    return getInventoryAutocompleteOptions({
+        userId,
+        focusedRaw,
+        includeUnowned: true,
+        sortByOwned: true
+    });
+}
+function getTradeOfferAutocompleteOptions(userId, focusedRaw, mode) {
+    const focused = focusedRaw.trim().toLowerCase();
+    return tradeStore.offers
+        .filter(offer => offer.status === "open")
+        .filter(offer => mode === "incoming" ? offer.toUserId === userId : (offer.toUserId === userId || offer.fromUserId === userId))
+        .sort((a, b) => b.id - a.id)
+        .filter(offer => {
+        const text = `#${offer.id} ${offer.offerItemId} ${offer.requestItemId} ${catalog_1.ITEM_DEFS[offer.offerItemId]?.name || ""} ${catalog_1.ITEM_DEFS[offer.requestItemId]?.name || ""}`.toLowerCase();
+        return !focused || text.includes(focused);
+    })
+        .slice(0, 25)
+        .map(offer => {
+        const raw = `#${offer.id} | ${offer.offerQty}x ${catalog_1.ITEM_DEFS[offer.offerItemId]?.name || offer.offerItemId} -> ${offer.requestQty}x ${catalog_1.ITEM_DEFS[offer.requestItemId]?.name || offer.requestItemId}`;
+        return { name: raw.length > 100 ? `${raw.slice(0, 97)}...` : raw, value: String(offer.id) };
+    });
+}
+function getBestOwnedGear(userId, ids, metric) {
+    const user = (0, utils_1.ensureUser)(userId);
+    let best = null;
+    for (const id of ids) {
+        const qty = user.inventory[id] || 0;
+        if (qty <= 0)
+            continue;
+        const def = catalog_1.ITEM_DEFS[id];
+        if (!def)
+            continue;
+        if (!best || (def[metric] || 0) > (best[metric] || 0)) {
+            best = def;
+        }
+    }
+    return best;
+}
+function getRaidGearAutocompleteOptions(userId, kind, focusedRaw) {
+    const ids = kind === "weapon" ? catalog_1.WEAPON_IDS : catalog_1.ARMOR_IDS;
+    const focused = focusedRaw.trim().toLowerCase();
+    const metricKey = kind === "weapon" ? "raidAttack" : "raidDefense";
+    const entries = ids
+        .map(id => {
+        const def = catalog_1.ITEM_DEFS[id];
+        if (!def)
+            return null;
+        const owned = (0, utils_1.getInventoryCount)(userId, id);
+        const metric = Math.round((def[metricKey] || 0) * 100);
+        const status = owned > 0 ? `OWNED x${owned}` : "NOT OWNED";
+        const metricText = kind === "weapon" ? `ATK +${metric}%` : `DEF +${metric}%`;
+        const labelRaw = `${status} | ${def.name} | ${metricText}`;
+        const label = labelRaw.length > 100 ? `${labelRaw.slice(0, 97)}...` : labelRaw;
+        return {
+            id,
+            name: def.name,
+            rarity: def.rarity,
+            owned,
+            metric,
+            label
+        };
+    })
+        .filter((entry) => Boolean(entry));
+    const filtered = focused
+        ? entries.filter(entry => {
+            const haystack = `${entry.id} ${entry.name} ${entry.rarity}`.toLowerCase();
+            return haystack.includes(focused);
+        })
+        : entries;
+    return filtered
+        .sort((a, b) => {
+        if ((b.owned > 0 ? 1 : 0) !== (a.owned > 0 ? 1 : 0))
+            return (b.owned > 0 ? 1 : 0) - (a.owned > 0 ? 1 : 0);
+        if (b.owned !== a.owned)
+            return b.owned - a.owned;
+        if (b.metric !== a.metric)
+            return b.metric - a.metric;
+        return a.name.localeCompare(b.name);
+    })
+        .slice(0, 25)
+        .map(entry => ({ name: entry.label, value: entry.id }));
+}
+const OPENABLE_CRATE_IDS = ["common_crate", "rare_crate", "epic_crate", "tactical_crate", "mythic_crate"];
+const CRATE_OPEN_PRIORITY = ["mythic_crate", "tactical_crate", "epic_crate", "rare_crate", "common_crate"];
+const USEITEM_PRIORITY = ["scav_beacon", "combat_stim", "field_ration", "repair_kit"];
+const USABLE_CONSUMABLE_IDS = ["field_ration", "combat_stim", "repair_kit", "scav_beacon"];
+function isSupportedConsumableId(itemId) {
+    return USABLE_CONSUMABLE_IDS.includes(itemId);
+}
+function formatOwnedCratesForPrompt(userId) {
+    const owned = OPENABLE_CRATE_IDS
+        .map(id => ({ id, def: catalog_1.ITEM_DEFS[id], qty: (0, utils_1.getInventoryCount)(userId, id) }))
+        .filter(entry => entry.qty > 0 && entry.def);
+    if (owned.length === 0)
+        return "None owned right now.";
+    return owned
+        .map(entry => `* ${entry.def.name} (${entry.id}) x${entry.qty}`)
+        .join("\n");
+}
+function pickBestOwnedCrate(userId) {
+    for (const id of CRATE_OPEN_PRIORITY) {
+        if ((0, utils_1.getInventoryCount)(userId, id) > 0)
+            return id;
+    }
+    return null;
+}
+function formatOwnedUsableItemsForPrompt(userId) {
+    const owned = Object.entries(catalog_1.ITEM_DEFS)
+        .filter(([id, def]) => def.kind === "consumable" && isSupportedConsumableId(id))
+        .map(([id, def]) => ({ id, def, qty: (0, utils_1.getInventoryCount)(userId, id) }))
+        .filter(entry => entry.qty > 0);
+    if (owned.length === 0)
+        return "None owned right now.";
+    return owned
+        .sort((a, b) => b.qty - a.qty || a.def.name.localeCompare(b.def.name))
+        .map(entry => `* ${entry.def.name} (${entry.id}) x${entry.qty}`)
+        .join("\n");
+}
+function isUsableNow(userId, itemId) {
+    const owned = (0, utils_1.getInventoryCount)(userId, itemId);
+    if (owned < 1)
+        return false;
+    if (itemId === "repair_kit") {
+        return (0, utils_1.getInventoryCount)(userId, "scrap") >= 6;
+    }
+    return true;
+}
+function pickBestUsableItem(userId) {
+    for (const id of USEITEM_PRIORITY) {
+        if (isUsableNow(userId, id))
+            return id;
+    }
+    const fallback = Object.entries(catalog_1.ITEM_DEFS)
+        .filter(([id, def]) => def.kind === "consumable" && isSupportedConsumableId(id))
+        .map(([id]) => id)
+        .find(id => isUsableNow(userId, id));
+    return fallback || null;
+}
+function getOpenCrateAutocompleteOptions(userId, focusedRaw) {
+    const focused = focusedRaw.trim().toLowerCase();
+    return OPENABLE_CRATE_IDS
+        .map(id => {
+        const def = catalog_1.ITEM_DEFS[id];
+        if (!def)
+            return null;
+        const owned = (0, utils_1.getInventoryCount)(userId, id);
+        const status = owned > 0 ? `OWNED x${owned}` : "NOT OWNED";
+        const labelRaw = `${status} | ${def.name} | ${id}`;
+        const label = labelRaw.length > 100 ? `${labelRaw.slice(0, 97)}...` : labelRaw;
+        return { id, name: def.name, owned, label };
+    })
+        .filter((entry) => Boolean(entry))
+        .filter(entry => {
+        if (!focused)
+            return true;
+        return `${entry.id} ${entry.name}`.toLowerCase().includes(focused);
+    })
+        .sort((a, b) => {
+        if ((b.owned > 0 ? 1 : 0) !== (a.owned > 0 ? 1 : 0))
+            return (b.owned > 0 ? 1 : 0) - (a.owned > 0 ? 1 : 0);
+        if (b.owned !== a.owned)
+            return b.owned - a.owned;
+        return a.name.localeCompare(b.name);
+    })
+        .slice(0, 25)
+        .map(entry => ({ name: entry.label, value: entry.id }));
+}
+function getUseItemAutocompleteOptions(userId, focusedRaw) {
+    const focused = focusedRaw.trim().toLowerCase();
+    return Object.entries(catalog_1.ITEM_DEFS)
+        .filter(([id, def]) => def.kind === "consumable" && isSupportedConsumableId(id))
+        .map(([id, def]) => {
+        const owned = (0, utils_1.getInventoryCount)(userId, id);
+        const status = owned > 0 ? `OWNED x${owned}` : "NOT OWNED";
+        const labelRaw = `${status} | ${def.name} | ${id}`;
+        const label = labelRaw.length > 100 ? `${labelRaw.slice(0, 97)}...` : labelRaw;
+        return { id, name: def.name, owned, label };
+    })
+        .filter(entry => {
+        if (!focused)
+            return true;
+        return `${entry.id} ${entry.name}`.toLowerCase().includes(focused);
+    })
+        .sort((a, b) => {
+        if ((b.owned > 0 ? 1 : 0) !== (a.owned > 0 ? 1 : 0))
+            return (b.owned > 0 ? 1 : 0) - (a.owned > 0 ? 1 : 0);
+        if (b.owned !== a.owned)
+            return b.owned - a.owned;
+        return a.name.localeCompare(b.name);
+    })
+        .slice(0, 25)
+        .map(entry => ({ name: entry.label, value: entry.id }));
+}
+function getSellItemAutocompleteOptions(userId, focusedRaw) {
+    return (0, payloads_1.getSellableInventoryOptions)({ inventory: (0, utils_1.ensureUser)(userId).inventory, focusedRaw })
+        .slice(0, 25)
+        .map(entry => {
+        const raw = `[${(0, payloads_1.rarityBadge)(entry.rarity)}] OWNED x${entry.qty} | ${entry.name} | Sell ${entry.unitPrice}`;
+        const label = raw.length > 100 ? `${raw.slice(0, 97)}...` : raw;
+        return { name: label, value: entry.id };
+    });
+}
+function weightedPick(table) {
+    const positive = table.filter(entry => entry.weight > 0);
+    if (!positive.length)
+        return table[0]?.id || "scrap";
+    const total = positive.reduce((sum, entry) => sum + entry.weight, 0);
+    let roll = Math.random() * total;
+    for (const entry of positive) {
+        roll -= entry.weight;
+        if (roll <= 0)
+            return entry.id;
+    }
+    return positive[positive.length - 1].id;
+}
+function pushLootStack(loot, id, qty) {
+    const amount = Math.max(1, Math.floor(qty));
+    const existing = loot.find(entry => entry.id === id);
+    if (existing) {
+        existing.qty += amount;
+        return;
+    }
+    loot.push({ id, qty: amount });
+}
+function buyItem(userId, itemId, qty) {
+    const item = catalog_1.ITEM_DEFS[itemId];
+    if (!item)
+        return { error: "Item does not exist." };
+    if (qty < 1)
+        return { error: "Quantity must be at least 1." };
+    const cost = item.price * qty;
+    if (!(0, utils_1.canAffordTokens)(userId, cost))
+        return { error: `You need ${cost} FN Token$.` };
+    (0, utils_1.removeTokens)(userId, cost);
+    const total = (0, utils_1.addInventoryItem)(userId, itemId, qty);
+    return { cost, total };
+}
+function sellItem(userId, itemId, qty) {
+    const item = catalog_1.ITEM_DEFS[itemId];
+    if (!item)
+        return { error: "Item does not exist." };
+    if (qty < 1)
+        return { error: "Quantity must be at least 1." };
+    const owned = (0, utils_1.getInventoryCount)(userId, itemId);
+    if (owned < qty)
+        return { error: "Not enough item to sell." };
+    const payout = (0, catalog_1.getVendorSellPrice)(itemId) * qty;
+    const remaining = (0, utils_1.removeInventoryItem)(userId, itemId, qty);
+    (0, utils_1.addTokens)(userId, payout);
+    return { payout, remaining };
+}
+function openCrate(userId, crateId) {
+    if (!["common_crate", "rare_crate", "epic_crate", "tactical_crate", "mythic_crate"].includes(crateId)) {
+        return { error: "That crate cannot be opened." };
+    }
+    if ((0, utils_1.getInventoryCount)(userId, crateId) < 1) {
+        return { error: `You do not have any ${catalog_1.ITEM_DEFS[crateId].name}.` };
+    }
+    (0, utils_1.removeInventoryItem)(userId, crateId, 1);
+    const contents = [];
+    const pushLoot = (id, qty) => {
+        (0, utils_1.addInventoryItem)(userId, id, qty);
+        contents.push({ id, qty });
+    };
+    const pullTable = (table, pulls) => {
+        for (let i = 0; i < pulls; i++) {
+            pushLoot(weightedPick(table), 1);
+        }
+    };
+    if (crateId === "common_crate") {
+        pushLoot("scrap", 10 + Math.floor(Math.random() * 8));
+        pullTable([
+            { id: "rare_material_small", weight: 26 },
+            { id: "field_ration", weight: 20 },
+            { id: "repair_kit", weight: 14 },
+            { id: "combat_stim", weight: 8 },
+            { id: "cosmetic_token", weight: 7 },
+            { id: "common_crate", weight: 4 }
+        ], 2);
+    }
+    else if (crateId === "rare_crate") {
+        pushLoot("scrap", 15 + Math.floor(Math.random() * 12));
+        pullTable([
+            { id: "rare_material_small", weight: 28 },
+            { id: "rare_material", weight: 18 },
+            { id: "encrypted_chip", weight: 12 },
+            { id: "combat_stim", weight: 10 },
+            { id: "scav_beacon", weight: 8 },
+            { id: "cosmetic_token", weight: 8 },
+            { id: "legendary_token", weight: 5 },
+            { id: "tactical_crate", weight: 3 }
+        ], 3);
+    }
+    else if (crateId === "epic_crate") {
+        pushLoot("scrap", 20 + Math.floor(Math.random() * 16));
+        pullTable([
+            { id: "rare_material", weight: 24 },
+            { id: "data_shard", weight: 12 },
+            { id: "intel_cache", weight: 8 },
+            { id: "encrypted_chip", weight: 14 },
+            { id: "relic_fragment", weight: 9 },
+            { id: "legendary_token", weight: 10 },
+            { id: "scav_beacon", weight: 8 },
+            { id: "power_cell", weight: 9 },
+            { id: "med_patch", weight: 10 },
+            { id: "mythic_hammer", weight: 5 },
+            { id: "void_shield", weight: 5 },
+            { id: "volt_smg", weight: 5 },
+            { id: "arcskin_vest", weight: 5 },
+            { id: "widowmaker_dmr", weight: 4 },
+            { id: "nightglass_cloak", weight: 4 },
+            { id: "vault_keycard", weight: 3 },
+            { id: "signal_array", weight: 3 },
+            { id: "tactical_crate", weight: 6 },
+            { id: "mythic_crate", weight: 2 }
+        ], 4);
+    }
+    else if (crateId === "tactical_crate") {
+        pushLoot("scrap", 24 + Math.floor(Math.random() * 20));
+        pullTable([
+            { id: "rare_material", weight: 18 },
+            { id: "data_shard", weight: 11 },
+            { id: "intel_cache", weight: 8 },
+            { id: "encrypted_chip", weight: 14 },
+            { id: "legendary_token", weight: 10 },
+            { id: "scav_beacon", weight: 9 },
+            { id: "power_cell", weight: 8 },
+            { id: "thermal_lance", weight: 6 },
+            { id: "juggernaut_frame", weight: 6 },
+            { id: "rail_sniper", weight: 5 },
+            { id: "aegis_exosuit", weight: 5 },
+            { id: "rift_carbine", weight: 4 },
+            { id: "stormpiercer", weight: 3 },
+            { id: "bulwark_plating", weight: 4 },
+            { id: "stormforged_aegis", weight: 3 },
+            { id: "relic_fragment", weight: 6 },
+            { id: "vault_keycard", weight: 4 },
+            { id: "signal_array", weight: 4 },
+            { id: "mythic_crate", weight: 3 }
+        ], 5);
+    }
+    else {
+        pushLoot("scrap", 30 + Math.floor(Math.random() * 28));
+        pullTable([
+            { id: "legendary_token", weight: 16 },
+            { id: "fn_coin", weight: 6 },
+            { id: "relic_fragment", weight: 13 },
+            { id: "data_shard", weight: 10 },
+            { id: "intel_cache", weight: 8 },
+            { id: "blacksite_map", weight: 4 },
+            { id: "reactor_blade", weight: 7 },
+            { id: "titan_carapace", weight: 7 },
+            { id: "rail_sniper", weight: 7 },
+            { id: "aegis_exosuit", weight: 7 },
+            { id: "phantom_scythe", weight: 3 },
+            { id: "sunflare_accelerator", weight: 2 },
+            { id: "starforged_reaper", weight: 1 },
+            { id: "tidelock_panoply", weight: 3 },
+            { id: "voidscale_regalia", weight: 2 },
+            { id: "sovereign_bastion", weight: 1 },
+            { id: "scav_beacon", weight: 10 },
+            { id: "signal_array", weight: 7 },
+            { id: "vault_keycard", weight: 5 },
+            { id: "med_patch", weight: 9 },
+            { id: "encrypted_chip", weight: 12 },
+            { id: "mythic_crate", weight: 5 }
+        ], 6);
+    }
+    return { contents };
+}
+function useItem(userId, itemId, quantity) {
+    const item = catalog_1.ITEM_DEFS[itemId];
+    if (!item)
+        return { error: "Item does not exist." };
+    if (item.kind !== "consumable")
+        return { error: "That item is not usable with /useitem." };
+    if (!isSupportedConsumableId(itemId))
+        return { error: "This consumable has no configured effect yet." };
+    const qty = Math.max(1, Math.floor(quantity));
+    const owned = (0, utils_1.getInventoryCount)(userId, itemId);
+    if (owned < qty)
+        return { error: `You only have ${owned}x ${item.name}.` };
+    (0, utils_1.removeInventoryItem)(userId, itemId, qty);
+    const user = (0, utils_1.ensureUser)(userId);
+    if (itemId === "field_ration") {
+        const gain = qty * (12 + Math.floor(Math.random() * 12));
+        (0, utils_1.addTokens)(userId, gain);
+        return { result: `Used ${qty}x ${item.name}. Gained ${gain} FN Token$.` };
+    }
+    if (itemId === "combat_stim") {
+        const raidXpGain = qty * (20 + Math.floor(Math.random() * 26));
+        const chatXpGain = qty * (8 + Math.floor(Math.random() * 10));
+        user.rxp += raidXpGain;
+        user.pmcXP += raidXpGain;
+        (0, utils_1.addXP)(userId, chatXpGain);
+        (0, utils_1.savePoints)();
+        return { result: `Used ${qty}x ${item.name}. Raid XP +${raidXpGain}, Engagement XP +${chatXpGain}.` };
+    }
+    if (itemId === "repair_kit") {
+        const scrapNeed = qty * 6;
+        const scrapOwned = (0, utils_1.getInventoryCount)(userId, "scrap");
+        if (scrapOwned < scrapNeed) {
+            (0, utils_1.addInventoryItem)(userId, itemId, qty);
+            return { error: `Need ${scrapNeed} scrap to use ${qty}x ${item.name}.` };
+        }
+        (0, utils_1.removeInventoryItem)(userId, "scrap", scrapNeed);
+        const materialYield = qty + Math.floor(Math.random() * (qty + 1));
+        (0, utils_1.addInventoryItem)(userId, "rare_material_small", materialYield);
+        if (Math.random() < 0.35)
+            (0, utils_1.addInventoryItem)(userId, "rare_material", 1);
+        return { result: `Used ${qty}x ${item.name}. Converted ${scrapNeed} scrap into ${materialYield} rare material and possible bonus components.` };
+    }
+    if (itemId === "scav_beacon") {
+        const pulls = qty * 2;
+        const drops = [];
+        for (let i = 0; i < pulls; i++) {
+            const dropId = weightedPick([
+                { id: "rare_material_small", weight: 24 },
+                { id: "rare_material", weight: 14 },
+                { id: "encrypted_chip", weight: 12 },
+                { id: "cosmetic_token", weight: 9 },
+                { id: "legendary_token", weight: 6 },
+                { id: "tactical_crate", weight: 4 },
+                { id: "mythic_crate", weight: 1 }
+            ]);
+            (0, utils_1.addInventoryItem)(userId, dropId, 1);
+            const existing = drops.find(d => d.id === dropId);
+            if (existing)
+                existing.qty += 1;
+            else
+                drops.push({ id: dropId, qty: 1 });
+        }
+        const summary = drops.map(d => `${d.qty}x ${catalog_1.ITEM_DEFS[d.id]?.name || d.id}`).join(", ");
+        return { result: `Used ${qty}x ${item.name}. Retrieved: ${summary}.` };
+    }
+    (0, utils_1.addInventoryItem)(userId, itemId, qty);
+    return { error: "Use action failed safely; item was restored." };
+}
+function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selectedArmorId) {
+    const user = (0, utils_1.ensureUser)(userId);
+    const now = Date.now();
+    if (now - user.lastRaid < RAID_COOLDOWN_MS) {
+        const remain = Math.ceil((RAID_COOLDOWN_MS - (now - user.lastRaid)) / 1000);
+        return { error: `Raid systems recharging. Wait ${remain}s.` };
+    }
+    if (bet < MIN_RAID_BET)
+        return { error: `Minimum raid bet is ${MIN_RAID_BET} FN Token$.` };
+    if (!(0, utils_1.canAffordTokens)(userId, bet))
+        return { error: "Not enough FN Token$." };
+    const mapCfg = resolveRaidMap(mapKeyRaw);
+    const table = {
+        low: { successChance: 0.78, tokenMultiplier: 1.07, baseRxp: 5 },
+        medium: { successChance: 0.53, tokenMultiplier: 1.42, baseRxp: 11 },
+        high: { successChance: 0.31, tokenMultiplier: 2.06, baseRxp: 22 }
+    };
+    const cfg = table[tension] || table.medium;
+    const condition = RaidDomain.rollRaidCondition();
+    const gearBonus = RaidRuntime.getRaidLoadoutBonus({ userId, condition, selectedWeaponId, selectedArmorId, getInventoryCount: utils_1.getInventoryCount, getBestOwnedGear });
+    if (gearBonus.error)
+        return { error: gearBonus.error };
+    const effectiveCondition = gearBonus.negatedCondition
+        ? { ...condition, successDelta: 0, tokenMultiplierDelta: 0, xpMultiplier: 1 }
+        : condition;
+    const pmcLevelBeforeRaid = (0, utils_1.getPmcLevel)(user.pmcXP);
+    const pmcTierBeforeRaid = (0, utils_1.getPmcTierForLevel)(pmcLevelBeforeRaid);
+    const pmcBuffs = (0, utils_1.getPmcBuffs)(pmcLevelBeforeRaid);
+    const levelPressure = Math.max(0, Math.min(0.11, pmcLevelBeforeRaid * 0.00075));
+    const tensionPressure = tension === "high" ? 0.05 : tension === "medium" ? 0.02 : -0.01;
+    const difficultyScalar = 1 + levelPressure + Math.max(0, tensionPressure);
+    const mapDifficultyIndex = getRaidDifficultyIndex(mapCfg.difficulty);
+    const mapDifficultyBossScale = 1 + (mapDifficultyIndex * 0.055);
+    const latePmcBossScale = pmcLevelBeforeRaid >= 8000
+        ? 1 + Math.min(0.18, (pmcLevelBeforeRaid - 8000) / 60000)
+        : 1;
+    const bossSpawnChance = Math.max(0.03, Math.min(0.82, mapCfg.bossSpawnChance + 0.02 + tensionPressure + levelPressure * 0.5 + mapCfg.bossRaidPressure * 0.35));
+    const bossSpawned = Math.random() < bossSpawnChance;
+    const boss = bossSpawned ? rollBossVariant(mapCfg) : null;
+    const bossPressurePenalty = bossSpawned
+        ? (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure + (boss?.successPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * mapDifficultyBossScale * latePmcBossScale
+        : 0;
+    const finalSuccessChance = Math.max(0.06, Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus - bossPressurePenalty));
+    const success = Math.random() < finalSuccessChance;
+    (0, utils_1.removeTokens)(userId, bet);
+    let rewardTokens = 0;
+    if (success) {
+        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus;
+        rewardTokens = Math.max(1, Math.floor(bet * (conditionTokenBoost + (Math.random() * 0.12 - 0.07))));
+        (0, utils_1.addTokens)(userId, rewardTokens);
+    }
+    const outcomeText = (0, raid_1.getRaidOutcome)(userId);
+    const reward = success ? (0, raid_1.getRaidRewards)(outcomeText) : { tokens: 0 };
+    if (reward.tokens > 0)
+        (0, utils_1.addTokens)(userId, reward.tokens);
+    let bossDefeated = false;
+    let bossKillChance = 0;
+    let bossBonusXp = 0;
+    let bossTokenBonus = 0;
+    let bossHeartUnlockedName;
+    if (success && bossSpawned) {
+        const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
+        const mapAndBossKillPenalty = (mapCfg.bossKillPenalty + mapCfg.bossRaidPressure + (boss?.killPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * (1 + mapDifficultyIndex * 0.05) * latePmcBossScale;
+        const pmcRaidMastery = Math.max(0, Math.min(0.14, pmcLevelBeforeRaid * 0.00085));
+        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta - mapAndBossKillPenalty));
+        bossDefeated = Math.random() < bossKillChance;
+        if (bossDefeated) {
+            const rolledBossReward = RaidDomain.rollBossSuccessRewards({
+                bet,
+                tension,
+                mapDifficulty: mapCfg.difficulty,
+                bossFerocity: boss?.ferocity || 1,
+                bonusXpRange: boss?.bonusXpRange || mapCfg.bossBonusXpRange,
+                tokenRewardRange: boss?.tokenRewardRange || [20, 55]
+            });
+            bossBonusXp = Math.max(1, Math.floor(rolledBossReward.bossBonusXp * RaidDomain.RAID_BOSS_XP_SCALE));
+            bossTokenBonus = rolledBossReward.bossTokenBonus;
+            (0, utils_1.addTokens)(userId, bossTokenBonus);
+            user.pmcBossKills = Math.max(0, Math.floor((user.pmcBossKills || 0) + 1));
+            const bossHeartUnlock = (0, bossHearts_1.awardBossHeartAchievement)(userId, boss?.name || mapCfg.bossName);
+            if (bossHeartUnlock.awarded) {
+                bossHeartUnlockedName = bossHeartUnlock.heartName;
+                appendAuditEvent("boss_heart_unlocked", {
+                    userId,
+                    bossName: boss?.name || mapCfg.bossName,
+                    heartName: bossHeartUnlock.heartName || null
+                });
+            }
+        }
+    }
+    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar });
+    for (const drop of loot) {
+        (0, utils_1.addInventoryItem)(userId, drop.id, drop.qty);
+    }
+    const baseRaidXpGain = RaidDomain.rollRaidXpGain(tension, success, bet, effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus), mapCfg);
+    const progressionScale = RaidDomain.getPmcXpGainScale(pmcLevelBeforeRaid, mapCfg, tension, success);
+    const scaledRaidXpGain = Math.max(1, Math.floor(baseRaidXpGain * progressionScale * RaidDomain.RAID_PMC_XP_SCALE));
+    const rxpGain = scaledRaidXpGain + bossBonusXp;
+    user.rxp += rxpGain;
+    user.pmcXP += rxpGain;
+    user.pmcRaids += 1;
+    if (success)
+        user.pmcRaidWins += 1;
+    user.lastRaid = now;
+    const pmcLevelAfterRaid = (0, utils_1.getPmcLevel)(user.pmcXP);
+    const pmcTierAfterRaid = (0, utils_1.getPmcTierForLevel)(pmcLevelAfterRaid);
+    const pmcTierUnlocked = pmcTierAfterRaid && (!pmcTierBeforeRaid || pmcTierAfterRaid.level > pmcTierBeforeRaid.level)
+        ? pmcTierAfterRaid
+        : null;
+    const failureMitigation = success ? 0 : Math.floor(bet * (gearBonus.defenseBoost + pmcBuffs.defenseBonus) * 0.7);
+    if (failureMitigation > 0)
+        (0, utils_1.addTokens)(userId, failureMitigation);
+    const baseRewardTokens = rewardTokens;
+    const outcomeBonusTokens = reward.tokens;
+    const net = baseRewardTokens + outcomeBonusTokens + bossTokenBonus + failureMitigation - bet;
+    user.raidHistory.unshift({
+        timestamp: now,
+        tension,
+        map: mapCfg.label,
+        condition: gearBonus.negatedCondition ? `${condition.label} (Negated)` : condition.label,
+        bet,
+        success,
+        rewardTokens: baseRewardTokens + outcomeBonusTokens + bossTokenBonus,
+        net,
+        rxpGain,
+        bossSpawned,
+        bossDefeated,
+        bossName: bossSpawned ? (boss?.name || mapCfg.bossName) : undefined,
+        bossBonusXp,
+        loot,
+        successChance: Math.round(finalSuccessChance * 100)
+    });
+    if (user.raidHistory.length > 12)
+        user.raidHistory = user.raidHistory.slice(0, 12);
+    (0, utils_1.savePoints)();
+    (0, utils_1.recordGameResult)(userId, "raid", success ? "win" : "loss", bet, rewardTokens + reward.tokens + bossTokenBonus + failureMitigation);
+    appendAuditEvent("raid_result", {
+        userId,
+        map: mapCfg.label,
+        mapDifficulty: mapCfg.difficulty,
+        selectedWeaponId: gearBonus.weapon?.id || null,
+        selectedArmorId: gearBonus.armor?.id || null,
+        pmcBuffs,
+        tension,
+        condition: condition.label,
+        bet,
+        success,
+        bossSpawned,
+        bossDefeated,
+        bossName: boss?.name || mapCfg.bossName,
+        bossTitle: boss?.title || null,
+        bossFerocity: boss?.ferocity || 0,
+        bossSpawnChance: Math.round(bossSpawnChance * 100),
+        bossKillChance: Math.round(bossKillChance * 100),
+        bossBonusXp,
+        bossTokenBonus,
+        progressionScale,
+        baseRaidXpGain,
+        scaledRaidXpGain,
+        net,
+        raidXp: rxpGain,
+        pmcXP: user.pmcXP,
+        pmcLevel: pmcLevelAfterRaid,
+        pmcTierUnlockedLevel: pmcTierUnlocked?.level || null,
+        pmcTierUnlockedLabel: pmcTierUnlocked?.label || null
+    });
+    return {
+        success,
+        net,
+        loot,
+        rxpGain,
+        successChance: Math.round(finalSuccessChance * 100),
+        bet,
+        mapLabel: mapCfg.label,
+        mapDifficulty: mapCfg.difficulty,
+        conditionLabel: condition.label,
+        bossSpawned,
+        bossDefeated,
+        bossName: boss?.name || mapCfg.bossName,
+        bossTitle: boss?.title,
+        bossFerocity: boss?.ferocity,
+        bossBonusXp,
+        bossKillChance: Math.round(bossKillChance * 100),
+        bossHeartUnlockedName,
+        pmcTierUnlockedLabel: pmcTierUnlocked?.label,
+        pmcTierUnlockedBadge: pmcTierUnlocked?.badge,
+        selectedWeaponName: gearBonus.weapon?.name,
+        selectedArmorName: gearBonus.armor?.name,
+        baseRewardTokens,
+        outcomeBonusTokens,
+        bossBonusTokens: bossTokenBonus,
+        failureMitigationTokens: failureMitigation,
+        tension: `${tension} | ${condition.label}`,
+        pmcXP: user.pmcXP,
+        pmcLevel: pmcLevelAfterRaid
+    };
+}
+function formatRaidHistory(userId) {
+    const history = (0, utils_1.ensureUser)(userId).raidHistory.slice(0, 8);
+    if (!history.length)
+        return "No raids yet.";
+    return history.map(entry => {
+        const time = new Date(entry.timestamp).toLocaleString();
+        const status = entry.success ? "Success" : "Fail";
+        const map = entry.map ? ` | Map ${entry.map}` : "";
+        const condition = entry.condition ? ` | Cond ${entry.condition}` : "";
+        const boss = entry.bossSpawned
+            ? ` | Boss ${entry.bossName || "Unknown"} ${entry.bossDefeated ? "defeated" : "engaged"}${entry.bossBonusXp ? ` (+${entry.bossBonusXp} XP)` : ""}`
+            : "";
+        return `* [${time}] ${status} ${entry.tension}${map}${condition}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
+    }).join("\n");
+}
+function buildRaidHistoryPayload(userId) {
+    const history = (0, utils_1.ensureUser)(userId).raidHistory.slice(0, 8);
+    if (!history.length) {
+        return JSON.stringify({
+            embed: new discord_js_1.EmbedBuilder()
+                .setColor(0x334155)
+                .setTitle("📜 Raid History")
+                .setDescription("No raids logged yet. Deploy with `/raid` to start building your combat record.")
+                .toJSON()
+        });
+    }
+    const wins = history.filter(entry => entry.success).length;
+    const net = history.reduce((sum, entry) => sum + entry.net, 0);
+    const totalBossSpawns = history.filter(entry => entry.bossSpawned).length;
+    const totalBossKills = history.filter(entry => entry.bossDefeated).length;
+    const recentLines = history.map(entry => {
+        const status = entry.success ? "✅" : "❌";
+        const boss = entry.bossSpawned
+            ? `${entry.bossName || "Unknown"}${entry.bossDefeated ? " • defeated" : " • escaped"}`
+            : "No boss";
+        return `${status} ${entry.map || "Unknown Map"} • ${entry.tension} • Net ${entry.net >= 0 ? `+${entry.net}` : entry.net} • XP +${entry.rxpGain}\n${boss}`;
+    });
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x7c3aed)
+        .setTitle("📜 Raid History Console")
+        .setDescription("Recent mission log with extraction outcomes, boss encounters, and short-form economy performance.")
+        .addFields({
+        name: "Recent Combat Snapshot",
+        value: [
+            `Entries Loaded: ${history.length}`,
+            `Recent Wins: ${wins}/${history.length}`,
+            `Recent Net: ${net >= 0 ? `+${net}` : net} FN Token$`,
+            `Boss Contacts: ${totalBossSpawns} | Boss Kills: ${totalBossKills}`
+        ].join("\n"),
+        inline: false
+    }, ...chunkDetailLines(recentLines, 2).slice(0, 4).map((chunk, index) => ({
+        name: index === 0 ? "Mission Log" : `Mission Log ${index + 1}`,
+        value: chunk,
+        inline: false
+    })));
+    return JSON.stringify({ embed: embed.toJSON() });
+}
+function buildBossRosterPayload() {
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0xd97706)
+        .setTitle("👑 Raid Boss Roster")
+        .setDescription("Premium tactical index for all bosses, including home map, threat class, reward ranges, and rotation influence.")
+        .addFields({
+        name: "Rotation Key",
+        value: Object.values(RAID_MAPS).map(map => `${RAID_MAP_SHORT_LABELS[map.key]} = ${map.label}`).join("\n"),
+        inline: false
+    }, {
+        name: "Roster Summary",
+        value: [
+            `Total Bosses: ${RAID_BOSS_ROSTER.length}`,
+            `Maps Covered: ${Object.keys(RAID_MAPS).length}`,
+            `Highest Threat: ${Math.max(...RAID_BOSS_ROSTER.map(boss => boss.ferocity)).toFixed(2)} ferocity`
+        ].join("\n"),
+        inline: false
+    });
+    for (const boss of RAID_BOSS_ROSTER) {
+        embed.addFields({
+            name: `${boss.name} (${boss.title})`,
+            value: [
+                `Home Map: ${boss.homeMapLabel} (${boss.homeMapDifficulty})`,
+                `Threat Class: ${boss.ferocity >= 2 ? "Cataclysmic" : boss.ferocity >= 1.7 ? "Apex" : boss.ferocity >= 1.35 ? "Brutal" : boss.ferocity >= 1 ? "Elite" : "Veteran"}`,
+                `Ferocity: ${boss.ferocity.toFixed(2)} | Success Penalty: ${(boss.successPenalty * 100).toFixed(1)}% | Kill Penalty: ${(boss.killPenalty * 100).toFixed(1)}%`,
+                `Boss XP: ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} | Tokens: ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} | Rare Drop: ${(boss.rareDropChance * 100).toFixed(1)}%`,
+                `Drops: Wpn ${boss.weaponDrops.join(", ")} | Arm ${boss.armorDrops.join(", ")}`,
+                `Map Rotation: ${formatBossRotationShares(boss)}`
+            ].join("\n"),
+            inline: false
+        });
+    }
+    return JSON.stringify({ embed: embed.toJSON() });
+}
+function buildLeaderboardPayload() {
+    const top = (0, economy_1.getLeaderboard)();
+    if (!top.length) {
+        return JSON.stringify({
+            embed: new discord_js_1.EmbedBuilder()
+                .setColor(0x334155)
+                .setTitle("🏆 XP Leaderboard")
+                .setDescription("No leaderboard data yet.")
+                .toJSON()
+        });
+    }
+    const medals = ["🥇", "🥈", "🥉"];
+    const topLines = top.slice(0, 10).map((row, idx) => {
+        const medal = medals[idx] || `#${idx + 1}`;
+        return `${medal} <@${row.id}>\nXP ${row.xp.toLocaleString()} • Prestige ${row.prestige}`;
+    });
+    const totalXp = top.reduce((sum, row) => sum + row.xp, 0);
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle("🏆 XP Command Board")
+        .setDescription("Server-wide engagement progression standings with premium podium formatting.")
+        .addFields({
+        name: "Leaderboard Snapshot",
+        value: [
+            `Tracked Players: ${top.length}`,
+            `Total XP Across Board: ${totalXp.toLocaleString()}`,
+            `Top Rank XP: ${top[0]?.xp?.toLocaleString() || 0}`
+        ].join("\n"),
+        inline: false
+    }, ...chunkDetailLines(topLines, 3).slice(0, 4).map((chunk, index) => ({
+        name: index === 0 ? "Podium and Ranks" : `Podium and Ranks ${index + 1}`,
+        value: chunk,
+        inline: false
+    })));
+    return JSON.stringify({ embed: embed.toJSON() });
+}
+function buildPmcProfilePayload(user) {
+    const state = (0, utils_1.ensureUser)(user.id);
+    const gameStats = (0, utils_1.getGameStatsSummary)(user.id);
+    const progress = (0, utils_1.getPmcProgress)(state.pmcXP);
+    const buffs = (0, utils_1.getPmcBuffs)(progress.level);
+    const tier = (0, utils_1.getPmcTierForLevel)(progress.level);
+    const tierVisual = getPmcTierVisual(progress.level);
+    const raids = Math.max(0, state.pmcRaids);
+    const wins = Math.max(0, state.pmcRaidWins);
+    const bossKills = Math.max(0, state.pmcBossKills || 0);
+    const bossHeartNames = (0, bossHearts_1.getUnlockedBossHeartNames)(user.id);
+    const bossHeartsUnlocked = bossHeartNames.length;
+    const collectibleEntries = catalog_1.COLLECTIBLE_ITEM_IDS
+        .map(id => ({ id, def: catalog_1.ITEM_DEFS[id], qty: (0, utils_1.getInventoryCount)(user.id, id) }))
+        .filter(entry => entry.def && entry.qty > 0)
+        .sort((a, b) => b.qty - a.qty || a.def.name.localeCompare(b.def.name));
+    const ownedCollectibles = collectibleEntries.length;
+    const ownedUltraCollectibles = collectibleEntries.filter(entry => catalog_1.ULTRA_RARE_COLLECTIBLE_IDS.includes(entry.id)).length;
+    const collectibleValue = collectibleEntries.reduce((sum, entry) => sum + ((0, catalog_1.getVendorSellPrice)(entry.id) * entry.qty), 0);
+    const collectibleLine = collectibleEntries.length
+        ? collectibleEntries.slice(0, 6).map(entry => `${entry.def.name} x${entry.qty}`).join("\n")
+        : "No collectibles found yet. Ultra-rare collectibles can only be found in raids.";
+    const winRate = raids > 0 ? ((wins / raids) * 100).toFixed(1) : "0.0";
+    const recentTrend = state.raidHistory.slice(0, 5).map(entry => entry.success ? "W" : "L").join(" ") || "No recent raids";
+    const thresholdLine = progress.capped
+        ? `Final tier reached (${utils_1.PMC_LEVEL_CAP}).`
+        : `${progress.intoLevel}/${Math.max(1, progress.nextThreshold - progress.currentThreshold)} XP in level | ${progress.needForNext} XP to next level`;
+    const prestigeLine = progress.capped
+        ? "🌌 Mythic Overlord achieved."
+        : tier
+            ? `${tier.badge} ${tier.label} unlocked at Level ${tier.level}.`
+            : "Tier badge unlocks at Level 1000.";
+    const tierProgressLine = tier
+        ? `${tier.badge} ${tier.label} (Lvl ${tier.level})`
+        : "No badge yet";
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(tierVisual.color)
+        .setTitle(progress.capped ? "🪖 PMC Progression • 👑" : "🪖 PMC Progression")
+        .setDescription("Persistent raid profile with milestone progression, combat buffs, and first-kill trophy tracking.")
+        .setAuthor({ name: `${user.username} · Army Profile`, iconURL: tierVisual.iconUrl })
+        .setThumbnail(tierVisual.iconUrl)
+        .addFields({
+        name: "Profile Header",
+        value: [
+            `Level: ${progress.level}/${utils_1.PMC_LEVEL_CAP}`,
+            `Raid XP: ${state.pmcXP}`,
+            `Win Rate: ${winRate}%`,
+            `Recent Form: ${recentTrend}`
+        ].join("\n"),
+        inline: false
+    }, { name: "Milestone Badge", value: tierProgressLine, inline: true }, { name: "Badge Visual", value: tierVisual.label, inline: true }, { name: "Tier Status", value: prestigeLine, inline: true }, { name: "Raid Standing", value: `Raids ${raids} | Wins ${wins} | Boss Kills ${bossKills}`, inline: true }, { name: "Progress Track", value: `${(0, utils_1.pmcBar)(state.pmcXP)}\n${thresholdLine}`, inline: false }, {
+        name: "Combat Buff Matrix",
+        value: [
+            `Success: +${(buffs.successBonus * 100).toFixed(2)}%`,
+            `Token Yield: +${(buffs.tokenBonus * 100).toFixed(2)}%`,
+            `Loss Mitigation: +${(buffs.defenseBonus * 100).toFixed(2)}%`,
+            `Raid XP Gain: +${(buffs.xpBonus * 100).toFixed(2)}%`
+        ].join(" | "),
+        inline: false
+    }, {
+        name: "Boss Trophy Case",
+        value: [
+            `Boss Kills: ${bossKills}`,
+            `First-Kill Hearts: ${bossHeartsUnlocked}`,
+            `Unlocked Hearts: ${bossHeartNames.length ? bossHeartNames.join(", ") : "None yet. Defeat a boss for your first heart trophy."}`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "Collector Vault",
+        value: [
+            `Owned: ${ownedCollectibles}/${catalog_1.COLLECTIBLE_ITEM_IDS.length}`,
+            `Ultra-Rare Owned: ${ownedUltraCollectibles}/${catalog_1.ULTRA_RARE_COLLECTIBLE_IDS.length}`,
+            `Vendor Value: ${collectibleValue.toLocaleString()} FN Token$`,
+            collectibleLine
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "Lifetime Raid Economy",
+        value: `Wagered: ${gameStats.raid.wagered} | Payout: ${gameStats.raid.payout} | Net: ${gameStats.raid.net >= 0 ? `+${gameStats.raid.net}` : gameStats.raid.net} FN Token$`,
+        inline: false
+    });
+    return JSON.stringify({ embed: embed.toJSON() });
+}
+function chunkDetailLines(lines, maxLines = 8) {
+    const chunks = [];
+    for (let i = 0; i < lines.length; i += maxLines) {
+        chunks.push(lines.slice(i, i + maxLines).join("\n"));
+    }
+    return chunks;
+}
+function buildConditionsPayload() {
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x0ea5e9)
+        .setTitle("🌦️ Raid Conditions")
+        .setDescription("Condition pressure is now clearer, milder on average, and some armor pieces can fully negate matching raid conditions.");
+    for (const condition of RaidDomain.RAID_CONDITIONS) {
+        const counters = Object.entries(RaidDomain.ARMOR_TRAITS)
+            .filter(([, trait]) => trait?.conditionImmunity?.includes(condition.key))
+            .map(([id]) => catalog_1.ITEM_DEFS[id]?.name || id);
+        embed.addFields({
+            name: condition.label,
+            value: [
+                condition.description,
+                `Success Delta: ${(condition.successDelta * 100).toFixed(1)}%`,
+                `Token Delta: ${(condition.tokenMultiplierDelta * 100).toFixed(1)}%`,
+                `Raid XP Multiplier: ${condition.xpMultiplier.toFixed(2)}x`,
+                `Full Counters: ${counters.length ? counters.join(", ") : "None"}`
+            ].join("\n"),
+            inline: false
+        });
+    }
+    return JSON.stringify({ embed: embed.toJSON() });
+}
+function buildGearIntelPayload(kindRaw, conditionRaw) {
+    const kind = kindRaw === "weapon" || kindRaw === "armor" ? kindRaw : "all";
+    const condition = RaidDomain.RAID_CONDITIONS.find(entry => entry.key === conditionRaw);
+    const sections = [];
+    if (kind === "all" || kind === "weapon") {
+        sections.push({ title: "Weapons", ids: catalog_1.WEAPON_IDS, traitSource: RaidDomain.WEAPON_TRAITS, metric: "raidAttack" });
+    }
+    if (kind === "all" || kind === "armor") {
+        sections.push({ title: "Armors", ids: catalog_1.ARMOR_IDS, traitSource: RaidDomain.ARMOR_TRAITS, metric: "raidDefense" });
+    }
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0xd97706)
+        .setTitle("🧰 Gear Intel")
+        .setDescription(condition
+        ? `Filtered for ${condition.label}. Matching bonuses and full immunities are highlighted.`
+        : "Raid gear stat directory with base bonuses and special trigger traits.");
+    for (const section of sections) {
+        const lines = section.ids.map(id => {
+            const def = catalog_1.ITEM_DEFS[id];
+            const trait = section.traitSource[id];
+            const basePct = Math.round((def?.[section.metric] || 0) * 100);
+            const condBonus = condition ? trait?.conditionSuccess?.[condition.key] || 0 : 0;
+            const immunity = condition && trait?.conditionImmunity?.includes(condition.key) ? " | NEGATES" : "";
+            const bonusText = condition && condBonus ? ` | ${condition.key} ${condBonus >= 0 ? "+" : ""}${(condBonus * 100).toFixed(1)}%` : "";
+            return `[${(0, payloads_1.rarityBadge)(def?.rarity)}] ${def?.name || id} | Base ${section.metric === "raidAttack" ? `ATK +${basePct}%` : `DEF +${basePct}%`}${bonusText}${immunity}${trait?.note ? ` | ${trait.note}` : ""}`;
+        });
+        const chunks = chunkDetailLines(lines, 7);
+        chunks.forEach((chunk, index) => {
+            embed.addFields({
+                name: index === 0 ? section.title : `${section.title} ${index + 1}`,
+                value: chunk,
+                inline: false
+            });
+        });
+    }
+    return JSON.stringify({ embed: embed.toJSON() });
+}
+function validateCasinoBet(userId, bet) {
+    if (bet < MIN_BET)
+        return `Minimum bet is ${MIN_BET}.`;
+    if (!(0, utils_1.canAffordTokens)(userId, bet))
+        return `You need at least ${bet} FN Token$.`;
+    return null;
+}
+function rollLuckyMultiplier() {
+    const r = Math.random();
+    if (r < 0.18)
+        return { multiplier: 0.7, label: "Cold 0.70x" };
+    if (r < 0.4)
+        return { multiplier: 0.85, label: "Low 0.85x" };
+    if (r < 0.7)
+        return { multiplier: 1.0, label: "Standard 1.0x" };
+    if (r < 0.9)
+        return { multiplier: 1.15, label: "Boost 1.15x" };
+    if (r < 0.98)
+        return { multiplier: 1.35, label: "Rare 1.35x" };
+    if (r < 0.998)
+        return { multiplier: 1.75, label: "Epic 1.75x" };
+    if (r <= 1.0)
+        return { multiplier: 2.5, label: "Legendary 2.5x" };
+    return { multiplier: 1.0, label: "Standard 1.0x" };
+}
+function formatTokenAmount(value) {
+    return `${value} FN Token$`;
+}
+function formatNetAmount(value) {
+    return `${value >= 0 ? `+${value}` : value} FN Token$`;
+}
+function getCasinoOddsSnapshot(gameKey) {
+    if (gameKey === "dice")
+        return "Exact number pays highest (5.00x base), range calls are safer (2.00x base).";
+    if (gameKey === "roulette")
+        return "Number call is highest variance (36.00x base), color/parity offers steadier hit rates (2.00x base).";
+    if (gameKey === "blackjack")
+        return "Safe style lowers bust risk, aggressive style raises upside volatility.";
+    if (gameKey === "crash")
+        return "Lower targets cash more often, higher targets spike multiplier but fail more often.";
+    if (gameKey === "slots")
+        return "More lines raise hit frequency but increase total wager per spin.";
+    if (gameKey === "coinflip")
+        return "Pure 50/50 call before lucky modifier influence.";
+    if (gameKey === "baccarat")
+        return "Tie has the largest payout but lowest consistency; player/banker are steadier.";
+    if (gameKey === "hilo")
+        return "Large card-distance wins pay more; close outcomes are safer but lower yield.";
+    return "More picks reduce hit chance but can unlock larger multiplier ladders.";
+}
+function getCasinoRiskBand(bet, walletBefore) {
+    const base = Math.max(1, walletBefore);
+    const ratio = bet / base;
+    if (ratio >= 0.4)
+        return "High";
+    if (ratio >= 0.2)
+        return "Medium";
+    return "Low";
+}
+function buildCasinoStatLine(userId, gameKey) {
+    const user = (0, utils_1.ensureUser)(userId);
+    const gameStats = user.gameStats[gameKey];
+    const wr = gameStats.played > 0 ? ((gameStats.wins / gameStats.played) * 100).toFixed(1) : "0.0";
+    return [
+        `Mode: ${gameKey.toUpperCase()}`,
+        `W/L/P: ${gameStats.wins}/${gameStats.losses}/${gameStats.pushes}`,
+        `Win Rate: ${wr}%`,
+        `Lifetime Net: ${formatNetAmount(gameStats.net)}`
+    ].join(" | ");
+}
+function buildCasinoSessionLine(userId) {
+    const stats = (0, utils_1.getGameStatsSummary)(userId);
+    return [
+        `Sessions: ${stats.casinoPlayed}`,
+        `Total W/L/P: ${stats.wins}/${stats.losses}/${stats.pushes}`,
+        `Total Wagered: ${formatTokenAmount(stats.wagered)}`,
+        `Total Net: ${formatNetAmount(stats.net)}`
+    ].join(" | ");
+}
+function getNextCasinoGame(gameKey) {
+    const idx = CASINO_GAME_ORDER.indexOf(gameKey);
+    if (idx < 0)
+        return "dice";
+    return CASINO_GAME_ORDER[(idx + 1) % CASINO_GAME_ORDER.length];
+}
+function defaultCasinoArgForGame(gameKey) {
+    if (gameKey === "dice")
+        return "low";
+    if (gameKey === "roulette")
+        return "red";
+    if (gameKey === "blackjack")
+        return "safe";
+    if (gameKey === "crash")
+        return "1.50";
+    if (gameKey === "slots")
+        return "3";
+    if (gameKey === "coinflip")
+        return "heads";
+    if (gameKey === "baccarat")
+        return "player";
+    if (gameKey === "hilo")
+        return "higher";
+    return "3,8,11,24";
+}
+function sanitizeCasinoActionArg(value) {
+    return String(value || "")
+        .replace(/\s+/g, "")
+        .replace(/[:]/g, "")
+        .slice(0, 36);
+}
+function buildCasinoActionCustomIdForUser(action, gameKey, bet, userId, arg) {
+    const safeBet = Math.max(1, Math.floor(bet));
+    const safeArg = sanitizeCasinoActionArg(arg || defaultCasinoArgForGame(gameKey));
+    const safeUserId = String(userId || "0").replace(/\D/g, "").slice(0, 24) || "0";
+    return `${CASINO_UI_IDS.prefix}:${action}:${gameKey}:${safeBet}:${safeUserId}:${safeArg}`;
+}
+function parseCasinoActionCustomId(customId) {
+    const parts = customId.split(":");
+    if (parts.length < 6)
+        return null;
+    if (parts[0] !== CASINO_UI_IDS.prefix)
+        return null;
+    const action = parts[1];
+    const gameKey = parts[2];
+    const bet = Math.max(1, Math.floor(Number.parseInt(parts[3], 10) || 1));
+    const ownerId = String(parts[4] || "").replace(/\D/g, "");
+    const arg = sanitizeCasinoActionArg(parts.slice(5).join(":"));
+    if (!["replay", "double", "half", "switch"].includes(action))
+        return null;
+    if (!CASINO_GAME_ORDER.includes(gameKey))
+        return null;
+    if (!ownerId)
+        return null;
+    return { action, gameKey, bet, ownerId, arg };
+}
+function buildCasinoActionComponents(meta) {
+    const nextGame = getNextCasinoGame(meta.gameKey);
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(buildCasinoActionCustomIdForUser("replay", meta.gameKey, meta.bet, meta.userId, meta.arg))
+        .setLabel("Replay")
+        .setEmoji("🔁")
+        .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
+        .setCustomId(buildCasinoActionCustomIdForUser("double", meta.gameKey, meta.bet, meta.userId, meta.arg))
+        .setLabel("Double Bet")
+        .setEmoji("📈")
+        .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
+        .setCustomId(buildCasinoActionCustomIdForUser("half", meta.gameKey, meta.bet, meta.userId, meta.arg))
+        .setLabel("Half Bet")
+        .setEmoji("📉")
+        .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+        .setCustomId(buildCasinoActionCustomIdForUser("switch", meta.gameKey, meta.bet, meta.userId, meta.arg))
+        .setLabel(`Switch -> ${nextGame}`)
+        .setEmoji("🎮")
+        .setStyle(discord_js_1.ButtonStyle.Secondary));
+    return [row.toJSON()];
+}
+function formatCasinoResult(options) {
+    const net = options.payout - options.bet;
+    const outcomeLabel = options.outcome === "win" ? "WIN" : options.outcome === "push" ? "PUSH" : "LOSS";
+    const color = options.outcome === "win" ? 0x16a34a : options.outcome === "push" ? 0xeab308 : 0xdc2626;
+    const riskBand = getCasinoRiskBand(options.bet, options.walletBefore);
+    const oddsSnapshot = getCasinoOddsSnapshot(options.gameKey);
+    const detailLines = (options.details || []).map(detail => `• ${detail.label}: ${detail.value}`);
+    const notes = options.notes?.length
+        ? options.notes
+        : options.outcome === "loss"
+            ? ["Reduce risk size or move to lower-variance calls for steadier bankroll control."]
+            : ["Bank partial gains to protect long-run bankroll consistency."];
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(color)
+        .setTitle(`${options.gameIcon} ${options.gameName} • ${outcomeLabel}`)
+        .setDescription("Casino operations panel with round telemetry, risk profile, and long-run performance context.")
+        .addFields({
+        name: "Round Ledger",
+        value: [
+            `Bet: ${formatTokenAmount(options.bet)}`,
+            `Payout: ${formatTokenAmount(options.payout)}`,
+            `Net: ${formatNetAmount(net)}`,
+            `Wallet: ${formatTokenAmount(options.walletBefore)} -> ${formatTokenAmount(options.walletAfter)}`,
+            `Risk Band: ${riskBand}`,
+            `Lucky Multiplier: ${options.luckyLabel || "Standard 1.0x"}`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "Game Intel",
+        value: [
+            oddsSnapshot,
+            buildCasinoStatLine(options.userId, options.gameKey),
+            buildCasinoSessionLine(options.userId)
+        ].join("\n"),
+        inline: false
+    });
+    if (detailLines.length) {
+        const chunks = chunkLines(detailLines, 950).slice(0, 2);
+        for (let i = 0; i < chunks.length; i++) {
+            embed.addFields({
+                name: i === 0 ? "Round Breakdown" : `Round Breakdown ${i + 1}`,
+                value: chunks[i],
+                inline: false
+            });
+        }
+    }
+    if (notes.length) {
+        embed.addFields({ name: "Strategy Notes", value: notes.map(note => `• ${note}`).join("\n"), inline: false });
+    }
+    for (const section of options.sections || []) {
+        embed.addFields({ name: section.title, value: section.value, inline: false });
+    }
+    const payload = {
+        embed: embed.toJSON()
+    };
+    if (options.actionMeta) {
+        payload.components = buildCasinoActionComponents({
+            userId: options.userId,
+            gameKey: options.gameKey,
+            bet: Math.max(1, Math.floor(options.actionMeta.bet)),
+            arg: sanitizeCasinoActionArg(options.actionMeta.arg || defaultCasinoArgForGame(options.gameKey))
+        });
+    }
+    return JSON.stringify(payload);
+}
+function playDice(userId, bet, choice) {
+    const betError = validateCasinoBet(userId, bet);
+    if (betError)
+        return betError;
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, bet);
+    const roll = Math.floor(Math.random() * 6) + 1;
+    const c = choice.toLowerCase();
+    const exact = c === roll.toString();
+    const win = exact || (c === "high" && roll >= 4) || (c === "low" && roll <= 3) || (c === "odd" && roll % 2 === 1) || (c === "even" && roll % 2 === 0);
+    if (!win) {
+        (0, utils_1.recordGameResult)(userId, "dice", "loss", bet, 0);
+        return formatCasinoResult({
+            userId,
+            gameKey: "dice",
+            gameIcon: "🎲",
+            gameName: "Dice",
+            outcome: "loss",
+            bet,
+            payout: 0,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Your Call", value: c },
+                { label: "Roll", value: String(roll) },
+                { label: "Target Bands", value: "Low=1-3 | High=4-6 | Odd/Even parity" }
+            ],
+            notes: ["Exact number calls are high volatility. Use parity calls for steadier hit rates."],
+            actionMeta: { bet, arg: c }
+        });
+    }
+    const lucky = rollLuckyMultiplier();
+    const baseMultiplier = exact ? 5 : 2;
+    const payout = Math.max(1, Math.floor(bet * baseMultiplier * lucky.multiplier));
+    (0, utils_1.addTokens)(userId, payout);
+    (0, utils_1.recordGameResult)(userId, "dice", "win", bet, payout);
+    return formatCasinoResult({
+        userId,
+        gameKey: "dice",
+        gameIcon: "🎲",
+        gameName: "Dice",
+        outcome: "win",
+        bet,
+        payout,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        luckyLabel: lucky.label,
+        details: [
+            { label: "Your Call", value: c },
+            { label: "Roll", value: String(roll) },
+            { label: "Base Multiplier", value: `${baseMultiplier.toFixed(2)}x` }
+        ],
+        notes: ["Protect upside by banking a share of win streak payouts."],
+        actionMeta: { bet, arg: c }
+    });
+}
+function playRoulette(userId, bet, choice) {
+    const betError = validateCasinoBet(userId, bet);
+    if (betError)
+        return betError;
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, bet);
+    const number = Math.floor(Math.random() * 37);
+    const color = number === 0 ? "green" : number % 2 === 0 ? "black" : "red";
+    const c = choice.toLowerCase();
+    let payoutMultiplier = 0;
+    if (c === color)
+        payoutMultiplier = color === "green" ? 14 : 2;
+    else if (c === "odd" && number % 2 === 1)
+        payoutMultiplier = 2;
+    else if (c === "even" && number % 2 === 0 && number !== 0)
+        payoutMultiplier = 2;
+    else if (!Number.isNaN(Number.parseInt(c, 10)) && Number.parseInt(c, 10) === number)
+        payoutMultiplier = 36;
+    if (payoutMultiplier <= 0) {
+        (0, utils_1.recordGameResult)(userId, "roulette", "loss", bet, 0);
+        return formatCasinoResult({
+            userId,
+            gameKey: "roulette",
+            gameIcon: "🎡",
+            gameName: "Roulette",
+            outcome: "loss",
+            bet,
+            payout: 0,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Your Call", value: c },
+                { label: "Landed", value: `${number} (${color})` }
+            ],
+            notes: ["Color/parity calls have lower variance than exact number calls."],
+            actionMeta: { bet, arg: c }
+        });
+    }
+    const lucky = rollLuckyMultiplier();
+    const payout = Math.max(1, Math.floor(bet * payoutMultiplier * lucky.multiplier));
+    (0, utils_1.addTokens)(userId, payout);
+    (0, utils_1.recordGameResult)(userId, "roulette", "win", bet, payout);
+    return formatCasinoResult({
+        userId,
+        gameKey: "roulette",
+        gameIcon: "🎡",
+        gameName: "Roulette",
+        outcome: "win",
+        bet,
+        payout,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        luckyLabel: lucky.label,
+        details: [
+            { label: "Your Call", value: c },
+            { label: "Landed", value: `${number} (${color})` },
+            { label: "Base Multiplier", value: `${payoutMultiplier.toFixed(2)}x` }
+        ],
+        actionMeta: { bet, arg: c }
+    });
+}
+function playBlackjack(userId, bet, style) {
+    const betError = validateCasinoBet(userId, bet);
+    if (betError)
+        return betError;
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, bet);
+    const values = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+    const deck = [];
+    for (const v of values)
+        for (let i = 0; i < 4; i++)
+            deck.push(v);
+    const draw = () => deck.splice(Math.floor(Math.random() * deck.length), 1)[0];
+    const handValue = (hand) => {
+        let total = 0;
+        let aces = 0;
+        for (const card of hand) {
+            if (["J", "Q", "K"].includes(card))
+                total += 10;
+            else if (card === "A") {
+                total += 11;
+                aces += 1;
+            }
+            else
+                total += Number.parseInt(card, 10);
+        }
+        while (total > 21 && aces > 0) {
+            total -= 10;
+            aces -= 1;
+        }
+        return total;
+    };
+    const player = [draw(), draw()];
+    const dealer = [draw(), draw()];
+    while (handValue(player) < (style === "aggressive" ? 18 : 16))
+        player.push(draw());
+    while (handValue(dealer) < 17)
+        dealer.push(draw());
+    const p = handValue(player);
+    const d = handValue(dealer);
+    if (p > 21) {
+        (0, utils_1.recordGameResult)(userId, "blackjack", "loss", bet, 0);
+        return formatCasinoResult({
+            userId,
+            gameKey: "blackjack",
+            gameIcon: "🃏",
+            gameName: "Blackjack",
+            outcome: "loss",
+            bet,
+            payout: 0,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Style", value: style },
+                { label: "Player", value: `${player.join(" ")} (${p})` },
+                { label: "Dealer", value: `${dealer.join(" ")} (${d})` }
+            ],
+            notes: ["Safe style (stand threshold 16) lowers bust frequency compared to aggressive style."],
+            actionMeta: { bet, arg: style }
+        });
+    }
+    if (p === d) {
+        (0, utils_1.addTokens)(userId, bet);
+        (0, utils_1.recordGameResult)(userId, "blackjack", "push", bet, bet);
+        return formatCasinoResult({
+            userId,
+            gameKey: "blackjack",
+            gameIcon: "🃏",
+            gameName: "Blackjack",
+            outcome: "push",
+            bet,
+            payout: bet,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Style", value: style },
+                { label: "Player", value: `${player.join(" ")} (${p})` },
+                { label: "Dealer", value: `${dealer.join(" ")} (${d})` }
+            ],
+            notes: ["Push refunded your stake."],
+            actionMeta: { bet, arg: style }
+        });
+    }
+    if (d > 21 || p > d) {
+        const lucky = rollLuckyMultiplier();
+        const payout = Math.max(1, Math.floor(bet * 1.9 * lucky.multiplier));
+        (0, utils_1.addTokens)(userId, payout);
+        (0, utils_1.recordGameResult)(userId, "blackjack", "win", bet, payout);
+        return formatCasinoResult({
+            userId,
+            gameKey: "blackjack",
+            gameIcon: "🃏",
+            gameName: "Blackjack",
+            outcome: "win",
+            bet,
+            payout,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            luckyLabel: lucky.label,
+            details: [
+                { label: "Style", value: style },
+                { label: "Player", value: `${player.join(" ")} (${p})` },
+                { label: "Dealer", value: `${dealer.join(" ")} (${d})` },
+                { label: "Base Multiplier", value: "1.90x" }
+            ],
+            actionMeta: { bet, arg: style }
+        });
+    }
+    (0, utils_1.recordGameResult)(userId, "blackjack", "loss", bet, 0);
+    return formatCasinoResult({
+        userId,
+        gameKey: "blackjack",
+        gameIcon: "🃏",
+        gameName: "Blackjack",
+        outcome: "loss",
+        bet,
+        payout: 0,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        details: [
+            { label: "Style", value: style },
+            { label: "Player", value: `${player.join(" ")} (${p})` },
+            { label: "Dealer", value: `${dealer.join(" ")} (${d})` }
+        ],
+        actionMeta: { bet, arg: style }
+    });
+}
+function spinSlotSymbol() {
+    const table = [
+        { symbol: "🍒", weight: 28 },
+        { symbol: "🍋", weight: 23 },
+        { symbol: "🔔", weight: 16 },
+        { symbol: "🍀", weight: 13 },
+        { symbol: "💎", weight: 10 },
+        { symbol: "🪖", weight: 7 },
+        { symbol: "7️⃣", weight: 3 }
+    ];
+    const total = table.reduce((sum, entry) => sum + entry.weight, 0);
+    let roll = Math.random() * total;
+    for (const entry of table) {
+        roll -= entry.weight;
+        if (roll <= 0)
+            return entry.symbol;
+    }
+    return "🍒";
+}
+function slotLineMultiplier(a, b, c) {
+    if (a === b && b === c) {
+        if (a === "7️⃣")
+            return 10;
+        if (a === "🪖")
+            return 7;
+        if (a === "💎")
+            return 5;
+        if (a === "🍀")
+            return 3.2;
+        if (a === "🔔")
+            return 2.5;
+        return 2;
+    }
+    if (a === b || b === c || a === c) {
+        return 0.4;
+    }
+    return 0;
+}
+function buildCrashMeter(target, crashPoint) {
+    const max = 10;
+    const width = 12;
+    const targetPos = Math.max(0, Math.min(width - 1, Math.round((target / max) * (width - 1))));
+    const crashPos = Math.max(0, Math.min(width - 1, Math.round((crashPoint / max) * (width - 1))));
+    const cells = [];
+    for (let i = 0; i < width; i++) {
+        if (i === targetPos && i === crashPos)
+            cells.push("🎯");
+        else if (i === targetPos)
+            cells.push("T");
+        else if (i === crashPos)
+            cells.push("X");
+        else
+            cells.push("-");
+    }
+    return `[${cells.join("")}]`;
+}
+function playSlots(userId, bet, lines) {
+    if (lines < 1 || lines > 8)
+        return "Lines must be between 1 and 8.";
+    const totalBet = bet * lines;
+    const betError = validateCasinoBet(userId, totalBet);
+    if (betError)
+        return betError;
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, totalBet);
+    const machineRows = Array.from({ length: 8 }, () => [
+        spinSlotSymbol(),
+        spinSlotSymbol(),
+        spinSlotSymbol()
+    ]);
+    let baseMultiplier = 0;
+    const lineWins = [];
+    const rowMultipliers = [];
+    for (let i = 0; i < lines; i++) {
+        const row = machineRows[i];
+        const [a, b, c] = row;
+        const lineMultiplier = slotLineMultiplier(a, b, c);
+        rowMultipliers[i] = lineMultiplier;
+        if (lineMultiplier > 0) {
+            baseMultiplier += lineMultiplier;
+            lineWins.push({ row: i + 1, symbols: `${a}${b}${c}`, multiplier: lineMultiplier });
+        }
+    }
+    const lucky = rollLuckyMultiplier();
+    const totalMultiplier = Math.max(0, baseMultiplier) * lucky.multiplier;
+    const bonusPayout = totalMultiplier > 0 ? Math.max(1, Math.floor(bet * totalMultiplier)) : 0;
+    const payout = bonusPayout > 0 ? totalBet + bonusPayout : 0;
+    if (payout > 0)
+        (0, utils_1.addTokens)(userId, payout);
+    (0, utils_1.recordGameResult)(userId, "slots", payout > 0 ? "win" : "loss", totalBet, payout);
+    const boardRows = machineRows.map((row, idx) => {
+        const isActive = idx < lines;
+        const rowMultiplier = rowMultipliers[idx] ?? 0;
+        const marker = isActive ? (rowMultiplier > 0 ? "◆" : "•") : "·";
+        const resultTag = isActive && rowMultiplier > 0 ? `  ${rowMultiplier.toFixed(2)}x line hit` : "";
+        return `${marker} L${idx + 1}  ${row[0]} ${row[1]} ${row[2]}${resultTag}`;
+    });
+    const winningLines = lineWins.length
+        ? lineWins.map(win => `L${win.row}: ${win.symbols} -> ${win.multiplier.toFixed(2)}x`).join("\n")
+        : "None";
+    return formatCasinoResult({
+        userId,
+        gameKey: "slots",
+        gameIcon: "🎰",
+        gameName: "Slots",
+        outcome: payout > 0 ? "win" : "loss",
+        bet: totalBet,
+        payout,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        luckyLabel: lucky.label,
+        details: [
+            { label: "Bet Per Line", value: formatTokenAmount(bet) },
+            { label: "Active Lines", value: `${lines}/8` },
+            { label: "Base Multiplier", value: `${baseMultiplier.toFixed(2)}x` },
+            { label: "Winning Lines", value: String(lineWins.length) }
+        ],
+        sections: [
+            { title: "Machine Grid", value: boardRows.join("\n") },
+            { title: "Line Hits", value: winningLines }
+        ],
+        actionMeta: { bet, arg: String(lines) }
+    });
+}
+function playCoinflip(userId, bet, side) {
+    const betError = validateCasinoBet(userId, bet);
+    if (betError)
+        return betError;
+    const pick = side.toLowerCase();
+    if (!["heads", "tails"].includes(pick))
+        return "Choose a valid side: heads or tails.";
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, bet);
+    const landed = Math.random() < 0.5 ? "heads" : "tails";
+    if (pick !== landed) {
+        (0, utils_1.recordGameResult)(userId, "coinflip", "loss", bet, 0);
+        return formatCasinoResult({
+            userId,
+            gameKey: "coinflip",
+            gameIcon: "🪙",
+            gameName: "Coinflip",
+            outcome: "loss",
+            bet,
+            payout: 0,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Your Pick", value: pick },
+                { label: "Landed", value: landed }
+            ],
+            actionMeta: { bet, arg: pick }
+        });
+    }
+    const lucky = rollLuckyMultiplier();
+    const payout = Math.max(1, Math.floor(bet * 2 * lucky.multiplier));
+    (0, utils_1.addTokens)(userId, payout);
+    (0, utils_1.recordGameResult)(userId, "coinflip", "win", bet, payout);
+    return formatCasinoResult({
+        userId,
+        gameKey: "coinflip",
+        gameIcon: "🪙",
+        gameName: "Coinflip",
+        outcome: "win",
+        bet,
+        payout,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        luckyLabel: lucky.label,
+        details: [
+            { label: "Your Pick", value: pick },
+            { label: "Landed", value: landed },
+            { label: "Base Multiplier", value: "2.00x" }
+        ],
+        actionMeta: { bet, arg: pick }
+    });
+}
+function drawCardValue() {
+    const rank = Math.floor(Math.random() * 13) + 1;
+    if (rank >= 10)
+        return 0;
+    return rank;
+}
+function playBaccarat(userId, bet, side) {
+    const betError = validateCasinoBet(userId, bet);
+    if (betError)
+        return betError;
+    const pick = side.toLowerCase();
+    if (!["player", "banker", "tie"].includes(pick))
+        return "Choose a valid side: player, banker, or tie.";
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, bet);
+    const playerCards = [drawCardValue(), drawCardValue()];
+    const bankerCards = [drawCardValue(), drawCardValue()];
+    const playerTotal = (playerCards[0] + playerCards[1]) % 10;
+    const bankerTotal = (bankerCards[0] + bankerCards[1]) % 10;
+    const outcome = playerTotal === bankerTotal ? "tie" : playerTotal > bankerTotal ? "player" : "banker";
+    if (pick !== outcome) {
+        (0, utils_1.recordGameResult)(userId, "baccarat", "loss", bet, 0);
+        return formatCasinoResult({
+            userId,
+            gameKey: "baccarat",
+            gameIcon: "🂡",
+            gameName: "Baccarat",
+            outcome: "loss",
+            bet,
+            payout: 0,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Your Pick", value: pick },
+                { label: "Player Hand", value: `${playerCards.join("+")} => ${playerTotal}` },
+                { label: "Banker Hand", value: `${bankerCards.join("+")} => ${bankerTotal}` },
+                { label: "Outcome", value: outcome }
+            ],
+            actionMeta: { bet, arg: pick }
+        });
+    }
+    const lucky = rollLuckyMultiplier();
+    const base = outcome === "tie" ? 9 : outcome === "banker" ? 1.95 : 2;
+    const payout = Math.max(1, Math.floor(bet * base * lucky.multiplier));
+    (0, utils_1.addTokens)(userId, payout);
+    (0, utils_1.recordGameResult)(userId, "baccarat", "win", bet, payout);
+    return formatCasinoResult({
+        userId,
+        gameKey: "baccarat",
+        gameIcon: "🂡",
+        gameName: "Baccarat",
+        outcome: "win",
+        bet,
+        payout,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        luckyLabel: lucky.label,
+        details: [
+            { label: "Your Pick", value: pick },
+            { label: "Player Hand", value: `${playerCards.join("+")} => ${playerTotal}` },
+            { label: "Banker Hand", value: `${bankerCards.join("+")} => ${bankerTotal}` },
+            { label: "Outcome", value: outcome },
+            { label: "Base Multiplier", value: `${base.toFixed(2)}x` }
+        ],
+        actionMeta: { bet, arg: pick }
+    });
+}
+function playHiLo(userId, bet, call) {
+    const betError = validateCasinoBet(userId, bet);
+    if (betError)
+        return betError;
+    const pick = call.toLowerCase();
+    if (!["higher", "lower"].includes(pick))
+        return "Call must be higher or lower.";
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, bet);
+    const first = Math.floor(Math.random() * 13) + 1;
+    const second = Math.floor(Math.random() * 13) + 1;
+    const firstFace = first === 1 ? "A" : first === 11 ? "J" : first === 12 ? "Q" : first === 13 ? "K" : String(first);
+    const secondFace = second === 1 ? "A" : second === 11 ? "J" : second === 12 ? "Q" : second === 13 ? "K" : String(second);
+    if (first === second) {
+        (0, utils_1.addTokens)(userId, bet);
+        (0, utils_1.recordGameResult)(userId, "hilo", "push", bet, bet);
+        return formatCasinoResult({
+            userId,
+            gameKey: "hilo",
+            gameIcon: "🃏",
+            gameName: "High-Low",
+            outcome: "push",
+            bet,
+            payout: bet,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Your Call", value: pick },
+                { label: "First Card", value: firstFace },
+                { label: "Second Card", value: secondFace }
+            ],
+            notes: ["Tie card refunded your stake."],
+            actionMeta: { bet, arg: pick }
+        });
+    }
+    const outcome = second > first ? "higher" : "lower";
+    if (pick !== outcome) {
+        (0, utils_1.recordGameResult)(userId, "hilo", "loss", bet, 0);
+        return formatCasinoResult({
+            userId,
+            gameKey: "hilo",
+            gameIcon: "🃏",
+            gameName: "High-Low",
+            outcome: "loss",
+            bet,
+            payout: 0,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Your Call", value: pick },
+                { label: "First Card", value: firstFace },
+                { label: "Second Card", value: secondFace },
+                { label: "Outcome", value: outcome }
+            ],
+            actionMeta: { bet, arg: pick }
+        });
+    }
+    const distance = Math.abs(second - first);
+    const base = distance >= 8 ? 2.4 : distance >= 5 ? 2.1 : 1.85;
+    const lucky = rollLuckyMultiplier();
+    const payout = Math.max(1, Math.floor(bet * base * lucky.multiplier));
+    (0, utils_1.addTokens)(userId, payout);
+    (0, utils_1.recordGameResult)(userId, "hilo", "win", bet, payout);
+    return formatCasinoResult({
+        userId,
+        gameKey: "hilo",
+        gameIcon: "🃏",
+        gameName: "High-Low",
+        outcome: "win",
+        bet,
+        payout,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        luckyLabel: lucky.label,
+        details: [
+            { label: "Your Call", value: pick },
+            { label: "First Card", value: firstFace },
+            { label: "Second Card", value: secondFace },
+            { label: "Distance Bonus Tier", value: distance >= 8 ? "Extreme" : distance >= 5 ? "Strong" : "Standard" },
+            { label: "Base Multiplier", value: `${base.toFixed(2)}x` }
+        ],
+        actionMeta: { bet, arg: pick }
+    });
+}
+function playKeno(userId, bet, picksRaw) {
+    const numericTokens = (picksRaw.match(/\d+/g) || [])
+        .map(part => Number.parseInt(part, 10))
+        .filter(n => Number.isInteger(n) && n >= 1 && n <= 40);
+    const picks = Array.from(new Set(numericTokens));
+    if (picks.length < 2 || picks.length > 10) {
+        return "Keno picks must contain 2 to 10 unique numbers from 1 to 40. Accepted formats: 3,8,11,24 or 3 8 11 24.";
+    }
+    const betError = validateCasinoBet(userId, bet);
+    if (betError)
+        return betError;
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, bet);
+    const pool = Array.from({ length: 40 }, (_, i) => i + 1);
+    const draw = [];
+    for (let i = 0; i < 10; i++) {
+        const idx = Math.floor(Math.random() * pool.length);
+        draw.push(pool[idx]);
+        pool.splice(idx, 1);
+    }
+    const hits = picks.filter(n => draw.includes(n));
+    const hitCount = hits.length;
+    const spots = picks.length;
+    const baseTable = {
+        2: [0, 0.3, 2.8],
+        3: [0, 0.2, 1.2, 5.2],
+        4: [0, 0.1, 0.5, 2.1, 10.5],
+        5: [0, 0.1, 0.4, 1.2, 4.4, 15.5],
+        6: [0, 0, 0.3, 0.9, 2.2, 8.8, 23],
+        7: [0, 0, 0.2, 0.7, 1.6, 4.1, 12.5, 31],
+        8: [0, 0, 0.15, 0.55, 1.25, 3.2, 7.8, 18.2, 42],
+        9: [0, 0, 0.1, 0.45, 1.05, 2.5, 6.1, 12.9, 27, 56],
+        10: [0, 0, 0.1, 0.35, 0.8, 1.9, 4.4, 9.5, 19.5, 37, 74]
+    };
+    const baseMultiplier = baseTable[spots]?.[hitCount] || 0;
+    const picksText = picks.sort((a, b) => a - b).join(", ");
+    const drawText = draw.sort((a, b) => a - b).join(", ");
+    const hitsText = hits.sort((a, b) => a - b).join(", ") || "none";
+    if (baseMultiplier <= 0) {
+        (0, utils_1.recordGameResult)(userId, "keno", "loss", bet, 0);
+        return formatCasinoResult({
+            userId,
+            gameKey: "keno",
+            gameIcon: "🎟️",
+            gameName: "Keno",
+            outcome: "loss",
+            bet,
+            payout: 0,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: `Your Picks (${spots})`, value: picksText },
+                { label: "Drawn Numbers", value: drawText },
+                { label: "Hits", value: `${hitCount} (${hitsText})` }
+            ],
+            notes: ["Fewer picks generally improve consistency; more picks chase bigger ladders."],
+            actionMeta: { bet, arg: picks.sort((a, b) => a - b).join(",") }
+        });
+    }
+    const lucky = rollLuckyMultiplier();
+    const payout = Math.max(1, Math.floor(bet * baseMultiplier * lucky.multiplier));
+    (0, utils_1.addTokens)(userId, payout);
+    (0, utils_1.recordGameResult)(userId, "keno", "win", bet, payout);
+    return formatCasinoResult({
+        userId,
+        gameKey: "keno",
+        gameIcon: "🎟️",
+        gameName: "Keno",
+        outcome: "win",
+        bet,
+        payout,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        luckyLabel: lucky.label,
+        details: [
+            { label: `Your Picks (${spots})`, value: picksText },
+            { label: "Drawn Numbers", value: drawText },
+            { label: "Hits", value: `${hitCount} (${hitsText})` },
+            { label: "Base Multiplier", value: `${baseMultiplier.toFixed(2)}x` }
+        ],
+        actionMeta: { bet, arg: picks.sort((a, b) => a - b).join(",") }
+    });
+}
+async function playCrash(userId, bet, target) {
+    const betError = validateCasinoBet(userId, bet);
+    if (betError)
+        return betError;
+    if (!target || target < 1.05 || target > 10)
+        return "Target multiplier must be between 1.05 and 10.0.";
+    const walletBefore = (0, utils_1.getTokens)(userId);
+    (0, utils_1.removeTokens)(userId, bet);
+    const result = (await Promise.resolve().then(() => __importStar(require("./game/economy")))).resolveCrash(bet, target);
+    if (result.win) {
+        const lucky = rollLuckyMultiplier();
+        const payout = Math.max(1, Math.floor(result.payout * lucky.multiplier));
+        (0, utils_1.addTokens)(userId, payout);
+        (0, utils_1.recordGameResult)(userId, "crash", "win", bet, payout);
+        return formatCasinoResult({
+            userId,
+            gameKey: "crash",
+            gameIcon: "📈",
+            gameName: "Crash",
+            outcome: "win",
+            bet,
+            payout,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            luckyLabel: lucky.label,
+            details: [
+                { label: "Target", value: `${target.toFixed(2)}x` },
+                { label: "Crash Point", value: `${result.crashPoint}x` },
+                { label: "Base Payout", value: formatTokenAmount(result.payout) }
+            ],
+            sections: [
+                { title: "Crash Meter", value: buildCrashMeter(target, Number(result.crashPoint)) }
+            ],
+            actionMeta: { bet, arg: target.toFixed(2) }
+        });
+    }
+    (0, utils_1.recordGameResult)(userId, "crash", "loss", bet, 0);
+    return formatCasinoResult({
+        userId,
+        gameKey: "crash",
+        gameIcon: "📈",
+        gameName: "Crash",
+        outcome: "loss",
+        bet,
+        payout: 0,
+        walletBefore,
+        walletAfter: (0, utils_1.getTokens)(userId),
+        details: [
+            { label: "Target", value: `${target.toFixed(2)}x` },
+            { label: "Crash Point", value: `${result.crashPoint}x` }
+        ],
+        sections: [
+            { title: "Crash Meter", value: buildCrashMeter(target, Number(result.crashPoint)) }
+        ],
+        actionMeta: { bet, arg: target.toFixed(2) }
+    });
+}
+async function runCasinoQuickAction(input) {
+    const resolvedGame = input.action === "switch" ? getNextCasinoGame(input.gameKey) : input.gameKey;
+    const sourceBet = Math.max(1, Math.floor(input.bet));
+    const effectiveBet = input.action === "double"
+        ? sourceBet * 2
+        : input.action === "half"
+            ? Math.max(1, Math.floor(sourceBet / 2))
+            : sourceBet;
+    const arg = sanitizeCasinoActionArg(input.action === "switch" ? defaultCasinoArgForGame(resolvedGame) : (input.arg || defaultCasinoArgForGame(resolvedGame)));
+    if (resolvedGame === "dice")
+        return { gameKey: resolvedGame, payload: playDice(input.userId, effectiveBet, arg || "low") };
+    if (resolvedGame === "roulette")
+        return { gameKey: resolvedGame, payload: playRoulette(input.userId, effectiveBet, arg || "red") };
+    if (resolvedGame === "blackjack")
+        return { gameKey: resolvedGame, payload: playBlackjack(input.userId, effectiveBet, arg || "safe") };
+    if (resolvedGame === "crash") {
+        const target = Number.parseFloat(arg || "1.50");
+        return { gameKey: resolvedGame, payload: await playCrash(input.userId, effectiveBet, Number.isFinite(target) ? target : 1.5) };
+    }
+    if (resolvedGame === "slots") {
+        const lines = Math.max(1, Math.min(8, Number.parseInt(arg || "3", 10) || 3));
+        return { gameKey: resolvedGame, payload: playSlots(input.userId, effectiveBet, lines) };
+    }
+    if (resolvedGame === "coinflip")
+        return { gameKey: resolvedGame, payload: playCoinflip(input.userId, effectiveBet, arg || "heads") };
+    if (resolvedGame === "baccarat")
+        return { gameKey: resolvedGame, payload: playBaccarat(input.userId, effectiveBet, arg || "player") };
+    if (resolvedGame === "hilo")
+        return { gameKey: resolvedGame, payload: playHiLo(input.userId, effectiveBet, arg || "higher") };
+    return { gameKey: "keno", payload: playKeno(input.userId, effectiveBet, arg || "3,8,11,24") };
+}
+function buildTicketPanelPayload(guildName) {
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x14b8a6)
+        .setTitle("🎫 FN Support tickets.")
+        .setDescription([
+        `Welcome to **${guildName}** support HQ.`,
+        "",
+        "Open a private ticket to start a tracked case with live status, assignment flow, and SLA visibility.",
+        "",
+        "Need fast help? Include screenshots, IDs, and exact steps so handlers can act quickly."
+    ].join("\n"))
+        .addFields({
+        name: "🧭 Desk Purpose",
+        value: [
+            "Private support lane for reports, appeals, account help, and operations issues.",
+            "",
+            "Built for clean tracking from open to final resolution."
+        ].join("\n")
+    }, {
+        name: "🚀 How To Open",
+        value: [
+            "Press **Open Support Ticket**.",
+            "",
+            "A private channel is created instantly and a live operations panel is posted."
+        ].join("\n")
+    }, {
+        name: "📊 Priority Guide",
+        value: [
+            "**Low**: General questions",
+            "",
+            "**Normal**: Standard support",
+            "",
+            "**High**: Urgent operational issue"
+        ].join("\n")
+    }, {
+        name: "🧩 Workflow",
+        value: "`new` -> `responded` -> `waiting_user` -> `archived` -> `resolved`"
+    }, {
+        name: "🔐 Visibility",
+        value: [
+            "Only ticket owner, admins, and handler role can view ticket channels.",
+            "",
+            "Actions are logged for audit and accountability."
+        ].join("\n")
+    }, {
+        name: "🛠️ Handler Toolkit",
+        value: [
+            "Button actions: Claim, Archive, Resolve",
+            "",
+            "Slash actions: `/claimticket` `/ticketassign` `/ticketstatus` `/reopenticket` `/closeticket` `/resolveticket`"
+        ].join("\n")
+    }, {
+        name: "🧠 Quality Tips",
+        value: [
+            "Include screenshots, message links, and IDs.",
+            "",
+            "Write exact steps and expected vs actual behavior."
+        ].join("\n")
+    }, {
+        name: "⚖️ Rules",
+        value: "One open ticket per user. Spam or abuse may trigger moderation actions."
+    }), "FN Support Front Desk", `${guildName} support panel`);
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(TICKET_IDS.open)
+        .setLabel("Open Support Ticket")
+        .setEmoji("🎫")
+        .setStyle(discord_js_1.ButtonStyle.Success));
+    return {
+        embed: embed.toJSON(),
+        components: [row.toJSON()],
+        isTicketPanel: true
+    };
+}
+function messageHasTicketOpenButton(message) {
+    const rows = Array.isArray(message?.components) ? message.components : [];
+    return rows.some((row) => {
+        const components = Array.isArray(row?.components) ? row.components : [];
+        return components.some((component) => component?.customId === TICKET_IDS.open);
+    });
+}
+async function upsertTicketPanelInChannel(guild, channelId) {
+    const channel = (guild.channels.cache.get(channelId)
+        || await guild.channels.fetch(channelId).catch(() => null));
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+        return { ok: false, error: "Configured ticket panel channel is missing or not a text channel." };
+    }
+    const panel = buildTicketPanelPayload(guild.name);
+    const embed = panel.embed;
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(TICKET_IDS.open)
+        .setLabel("Open Support Ticket")
+        .setEmoji("🎫")
+        .setStyle(discord_js_1.ButtonStyle.Success));
+    let candidateId = null;
+    let beforeId;
+    const expectedTitle = "🎫 FN Support tickets.";
+    for (let i = 0; i < 5; i++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+        if (!batch || !batch.size)
+            break;
+        const candidate = batch.find(message => message.author.id === (client.user?.id || "")
+            && (messageHasTicketOpenButton(message) || message.embeds[0]?.title === expectedTitle));
+        if (candidate) {
+            candidateId = candidate.id;
+            break;
+        }
+        const last = batch.last();
+        beforeId = last?.id;
+        if (!beforeId)
+            break;
+    }
+    if (candidateId) {
+        const candidate = await channel.messages.fetch(candidateId).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+        if (!edited) {
+            return { ok: false, error: "Failed to refresh ticket panel message. Check bot permissions for this channel." };
+        }
+        return { ok: true, action: "updated" };
+    }
+    const sent = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+    if (!sent) {
+        return { ok: false, error: "Failed to post ticket panel message. Check bot permissions for this channel." };
+    }
+    return { ok: true, action: "posted" };
+}
+async function ensurePermanentTicketPanelForGuild(guild) {
+    if (!PERMANENT_TICKET_PANEL_CHANNEL_ID)
+        return;
+    const result = await upsertTicketPanelInChannel(guild, PERMANENT_TICKET_PANEL_CHANNEL_ID);
+    if (result.ok) {
+        appendAuditEvent("ticket_panel_permanent_upsert", {
+            guildId: guild.id,
+            channelId: PERMANENT_TICKET_PANEL_CHANNEL_ID,
+            action: result.action
+        });
+    }
+    else {
+        appendAuditEvent("ticket_panel_permanent_upsert_failed", {
+            guildId: guild.id,
+            channelId: PERMANENT_TICKET_PANEL_CHANNEL_ID,
+            error: result.error
+        });
+        console.warn(`Permanent ticket panel upsert skipped for guild ${guild.id}: ${result.error}`);
+    }
+}
+function buildBotFeatureBriefPayload(guildName) {
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x0891b2)
+        .setTitle(`🛰️ ${guildName} • About Titan Bot`)
+        .setDescription([
+        `Titan Bot is the live operations, progression, and raid-combat system running inside **${guildName}**.`,
+        "",
+        "It combines persistent PMC progression, tactical raid gameplay, economy systems, premium loot loops, moderation tooling, and support workflows into one unified experience.",
+        "",
+        "Use this post as the official about-board for what Titan Bot is, what it does, and where to start."
+    ].join("\n"))
+        .addFields({
+        name: "🧭 What Titan Bot Is",
+        value: [
+            "• A premium progression-focused Discord bot built around raids, bosses, loot, and long-term operator growth.",
+            "• A tactical command suite that mixes game systems, support systems, and live moderation utilities.",
+            "• A persistent profile experience where actions matter over time instead of resetting every session."
+        ].join("\n")
+    }, {
+        name: "⚔️ Core Gameplay Loop",
+        value: [
+            "• Run raids across escalating maps with conditions, boss spawns, and loadout-aware outcomes.",
+            "• Earn raid XP, tokens, enhanced gear, loot crates, and first-kill boss hearts.",
+            "• Progress your PMC through long-horizon milestone tiers with increasing raid buffs and prestige."
+        ].join("\n")
+    }, {
+        name: "🎒 Economy and Loadout Systems",
+        value: [
+            "• Persistent inventory with weapons, armor, consumables, modules, intel, and rare raid artifacts.",
+            "• Wallet, bank, trading, crate openings, and item-use loops that support both progression and economy play.",
+            "• Gear choices matter through buffs, condition counters, loadout synergy, and premium drop tiers."
+        ].join("\n")
+    }, {
+        name: "👑 Boss and Progression Identity",
+        value: [
+            "• Bosses have unique ferocity, drops, reward profiles, and first-kill heart trophies.",
+            "• PMC milestone badges unlock at key thresholds and reflect your long-term raid progression.",
+            "• Rare broadcasts announce major unlock moments like new hearts, enhanced recoveries, and tier jumps."
+        ].join("\n")
+    }, {
+        name: "🎫 Support and Operations",
+        value: [
+            "• Private ticket channels with one-active-ticket-per-user enforcement.",
+            "• Lifecycle coverage: open, claim, assign, workflow updates, archive, reopen, permanent resolve.",
+            "• Live ticket ops panel with SLA state, assignment visibility, and action shortcuts.",
+            "• Staff diagnostics and audit tooling are active behind role-gated access."
+        ].join("\n")
+    }, {
+        name: "🛡️ Moderation and Reliability",
+        value: [
+            "• Warning system with case IDs, history lookup, and clear/reset controls.",
+            "• Moderation actions: timeout, kick, ban, tempban, purge.",
+            "• Singleton protection, audit logging, health reporting, telemetry, and regression verification.",
+            "• Built to be both a player experience system and a maintainable live service."
+        ].join("\n")
+    }, {
+        name: "🚀 Best Starting Commands",
+        value: [
+            "• `/help` — command directory",
+            "• `/quickstart` — guided onboarding",
+            "• `/pmc` — your persistent raid profile",
+            "• `/raid` — launch a mission",
+            "• `/inventory` — review gear and loot",
+            "• `/ticket` — open support"
+        ].join("\n")
+    }, {
+        name: "🔔 About This Post",
+        value: [
+            "• This embed is auto-updated by Titan Bot as the official about-board for the system.",
+            "• Keep this channel readable so members can quickly reference what Titan Bot offers.",
+            "• Future updates can refine this post without breaking the channel history structure."
+        ].join("\n")
+    }, {
+        name: "📌 Titan Bot Identity",
+        value: "Persistent raids • PMC growth • premium loot • boss trophies • support ops • live moderation"
+    }), `${guildName} About Titan Bot`, "About Titan Bot • Live system overview");
+    return {
+        embed: embed.toJSON(),
+        isBotFeatureBrief: true
+    };
+}
+async function upsertBotFeatureBriefInChannel(guild, channelId) {
+    const channel = (guild.channels.cache.get(channelId)
+        || await guild.channels.fetch(channelId).catch(() => null));
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+        return { ok: false, error: "Configured bot feature brief channel is missing or not a text channel." };
+    }
+    const payload = buildBotFeatureBriefPayload(guild.name);
+    const embed = payload.embed;
+    let candidateId = null;
+    let beforeId;
+    const expectedPrefix = `🛰️ ${guild.name} • Titan Bot Feature Brief`;
+    for (let i = 0; i < 5; i++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+        if (!batch || !batch.size)
+            break;
+        const candidate = batch.find(message => message.author.id === (client.user?.id || "")
+            && (message.embeds[0]?.title === expectedPrefix
+                || message.embeds[0]?.footer?.text?.includes("Bot Feature Brief")));
+        if (candidate) {
+            candidateId = candidate.id;
+            break;
+        }
+        const last = batch.last();
+        beforeId = last?.id;
+        if (!beforeId)
+            break;
+    }
+    if (candidateId) {
+        const candidate = await channel.messages.fetch(candidateId).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        if (!edited) {
+            return { ok: false, error: "Failed to refresh bot feature brief message. Check bot permissions for this channel." };
+        }
+        return { ok: true, action: "updated" };
+    }
+    const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+    if (!sent) {
+        return { ok: false, error: "Failed to post bot feature brief message. Check bot permissions for this channel." };
+    }
+    return { ok: true, action: "posted" };
+}
+async function ensureBotFeatureBriefForGuild(guild) {
+    if (!BOT_FEATURE_BRIEF_CHANNEL_ID)
+        return;
+    const result = await upsertBotFeatureBriefInChannel(guild, BOT_FEATURE_BRIEF_CHANNEL_ID);
+    if (result.ok) {
+        appendAuditEvent("bot_feature_brief_upsert", {
+            guildId: guild.id,
+            channelId: BOT_FEATURE_BRIEF_CHANNEL_ID,
+            action: result.action
+        });
+    }
+    else {
+        appendAuditEvent("bot_feature_brief_upsert_failed", {
+            guildId: guild.id,
+            channelId: BOT_FEATURE_BRIEF_CHANNEL_ID,
+            error: result.error
+        });
+        console.warn(`Bot feature brief upsert skipped for guild ${guild.id}: ${result.error}`);
+    }
+}
+function isOwnerTopicMatch(topic, ownerId) {
+    return findChannelOwnerFromTopic(topic) === ownerId;
+}
+async function findOwnerActiveTicketChannels(guild, owner) {
+    const fetched = await guild.channels.fetch().catch(() => null);
+    const channels = fetched ? Array.from(fetched.values()) : Array.from(guild.channels.cache.values());
+    const matches = [];
+    for (const ch of channels) {
+        if (!ch || ch.type !== discord_js_1.ChannelType.GuildText)
+            continue;
+        if (!isOwnerTopicMatch(ch.topic, owner.id))
+            continue;
+        const perms = ch.permissionsFor(owner);
+        const canView = Boolean(perms?.has(discord_js_1.PermissionFlagsBits.ViewChannel));
+        const canSend = Boolean(perms?.has(discord_js_1.PermissionFlagsBits.SendMessages));
+        if (canView && canSend) {
+            matches.push(ch.id);
+        }
+    }
+    matches.sort((a, b) => a.localeCompare(b));
+    return matches;
+}
+async function removeTicketStoreEntryByChannelId(channelId) {
+    const idx = ticketStore.tickets.findIndex(t => t.channelId === channelId);
+    if (idx >= 0) {
+        ticketStore.tickets.splice(idx, 1);
+        saveTicketStore();
+    }
+}
+async function reconcileOwnerTicketDuplicates(guild, owner, canonicalChannelId) {
+    const active = await findOwnerActiveTicketChannels(guild, owner);
+    const duplicates = active.filter(channelId => channelId !== canonicalChannelId);
+    if (!duplicates.length)
+        return;
+    for (const duplicateChannelId of duplicates) {
+        const channel = await guild.channels.fetch(duplicateChannelId).catch(() => null);
+        if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+            continue;
+        const recent = await channel.messages.fetch({ limit: 8 }).catch(() => null);
+        const hasUserMessages = Boolean(recent && Array.from(recent.values()).some(message => !message.author?.bot));
+        if (hasUserMessages)
+            continue;
+        await channel.delete("Duplicate ticket channel auto-cleanup").catch(() => undefined);
+        await removeTicketStoreEntryByChannelId(channel.id);
+        appendAuditEvent("ticket_duplicate_channel_deleted", {
+            guildId: guild.id,
+            ownerId: owner.id,
+            channelId: channel.id,
+            canonicalChannelId
+        });
+    }
+}
+async function createTicketChannel(guild, ownerId, reason, priority = "normal", bypassDeflection = false) {
+    recordTicketCreateAttempt();
+    if (!tryAcquireTicketCreateLock(guild.id, ownerId)) {
+        recordTicketCreateFailure("in_flight_lock");
+        return { error: "Ticket creation is already in progress for your account. Please wait a moment and try again." };
+    }
+    try {
+        if (!bypassDeflection) {
+            const deflection = evaluateTicketDeflection(guild.id, ownerId, reason);
+            if (deflection.blocked) {
+                recordTicketCreateFailure("duplicate_deflection");
+                return { error: deflection.message || "Potential duplicate ticket detected." };
+            }
+        }
+        await pruneDeletedTicketRecords(guild);
+        await pruneInaccessibleOwnerTicketRecords(guild);
+        // Self-heal stale owner records caused by manual/deleted/inaccessible channels so /ticket works immediately.
+        // Iterate until we either find a valid active ticket or no owner-open tickets remain.
+        let existing = findOpenTicketByOwner(guild.id, ownerId);
+        let prunedAny = false;
+        while (existing) {
+            const stale = existing;
+            const existingChannel = guild.channels.cache.get(existing.channelId)
+                || await guild.channels.fetch(existing.channelId).catch(() => null);
+            const ownerMember = await guild.members.fetch(ownerId).catch(() => null);
+            const ownerCanViewExisting = existingChannel && existingChannel.type === discord_js_1.ChannelType.GuildText && ownerMember
+                ? existingChannel.permissionsFor(ownerMember)?.has(discord_js_1.PermissionFlagsBits.ViewChannel)
+                : false;
+            // Keep exactly one valid visible open/claimed ticket for this owner.
+            if (existingChannel && ownerCanViewExisting) {
+                break;
+            }
+            const idx = ticketStore.tickets.findIndex(t => t.id === stale.id);
+            if (idx < 0) {
+                existing = findOpenTicketByOwner(guild.id, ownerId);
+                continue;
+            }
+            ticketStore.tickets.splice(idx, 1);
+            prunedAny = true;
+            appendAuditEvent("ticket_prune_stale_owner_open", {
+                guildId: guild.id,
+                ownerId,
+                ticketId: stale.id,
+                channelId: stale.channelId,
+                reason: "Missing/inaccessible channel during create"
+            });
+            existing = findOpenTicketByOwner(guild.id, ownerId);
+        }
+        if (prunedAny) {
+            saveTicketStore();
+        }
+        if (existing) {
+            recordTicketCreateFailure("existing_open_ticket_record");
+            return { error: `You already have an open ticket: <#${existing.channelId}>` };
+        }
+        const owner = await guild.members.fetch(ownerId).catch(() => null);
+        if (!owner) {
+            recordTicketCreateFailure("owner_fetch_failed");
+            return { error: "Unable to resolve your member record." };
+        }
+        const ownerActiveChannels = await findOwnerActiveTicketChannels(guild, owner);
+        if (ownerActiveChannels.length > 0) {
+            const canonical = ownerActiveChannels[0];
+            await ensureTrackedTicketByChannelId(guild, canonical, owner.id);
+            recordTicketCreateFailure("existing_open_ticket_channel");
+            return { error: `You already have an open ticket: <#${canonical}>` };
+        }
+        const cfg = ensureTicketConfig(guild.id);
+        const configuredOrDefaultCategoryId = cfg.categoryId || TICKET_DEFAULT_CATEGORY_ID;
+        const configuredOrDefaultCategory = await guild.channels.fetch(configuredOrDefaultCategoryId).catch(() => null);
+        const parentCategoryId = configuredOrDefaultCategory && configuredOrDefaultCategory.type === discord_js_1.ChannelType.GuildCategory
+            ? configuredOrDefaultCategory.id
+            : undefined;
+        const channelName = `ops-${owner.user.username.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 18) || "member"}`;
+        const created = await guild.channels.create({
+            name: channelName,
+            type: discord_js_1.ChannelType.GuildText,
+            parent: parentCategoryId,
+            topic: `Support ticket for ${owner.user.tag} (${owner.id})`,
+            permissionOverwrites: [
+                { id: guild.roles.everyone.id, deny: [discord_js_1.PermissionFlagsBits.ViewChannel] },
+                { id: owner.id, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.ReadMessageHistory] },
+                { id: TICKET_HANDLER_ROLE_ID, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.ReadMessageHistory, discord_js_1.PermissionFlagsBits.ManageChannels] },
+                ...(guild.members.me ? [{ id: guild.members.me.id, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.ReadMessageHistory, discord_js_1.PermissionFlagsBits.ManageChannels] }] : [])
+            ],
+            reason: `Ticket opened by ${owner.user.tag}`
+        }).catch(() => null);
+        if (!created || created.type !== discord_js_1.ChannelType.GuildText) {
+            recordTicketCreateFailure("channel_create_failed");
+            return { error: "Failed to create ticket channel." };
+        }
+        // Cross-process safety: if multiple instances raced and created channels, keep only one owner-active channel.
+        const ownerChannelsAfterCreate = await findOwnerActiveTicketChannels(guild, owner);
+        if (ownerChannelsAfterCreate.length > 1) {
+            const canonical = ownerChannelsAfterCreate[0];
+            if (canonical !== created.id) {
+                await created.delete("Duplicate ticket channel prevented by dedupe guard").catch(() => undefined);
+                await removeTicketStoreEntryByChannelId(created.id);
+                await ensureTrackedTicketByChannelId(guild, canonical, owner.id);
+                recordTicketCreateFailure("dedupe_race_duplicate_channel");
+                return { error: `You already have an open ticket: <#${canonical}>` };
+            }
+        }
+        const ticket = createTicketEntry(guild.id, owner.id, created.id, reason, priority);
+        if (!ticket) {
+            await created.delete("Ticket persistence conflict; safe rollback").catch(() => undefined);
+            recordTicketCreateFailure("ticket_store_save_conflict");
+            return { error: "Ticket persistence conflict detected. Please retry in a moment." };
+        }
+        applyTicketMetadata(ticket, reason);
+        appendAuditEvent("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason });
+        const intro = buildTicketOpsEmbed(ticket);
+        const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+            .setCustomId(TICKET_IDS.claim)
+            .setLabel("Claim Ticket")
+            .setEmoji("🛠️")
+            .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+            .setCustomId(TICKET_IDS.close)
+            .setLabel("Archive Ticket")
+            .setEmoji("🔒")
+            .setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
+            .setCustomId(TICKET_IDS.resolve)
+            .setLabel("Resolve Permanently")
+            .setEmoji("✅")
+            .setStyle(discord_js_1.ButtonStyle.Success));
+        const panelMessage = await created.send({ content: `<@&${TICKET_HANDLER_ROLE_ID}> <@${owner.id}>`, embeds: [intro], components: [row], allowedMentions: { parse: ["roles", "users"] } }).catch(() => null);
+        if (panelMessage) {
+            setTicketPanelMessageId(ticket.channelId, panelMessage.id);
+        }
+        await sendTicketLog(guild.id, `Ticket #${ticket.id} Opened`, [
+            { name: "Owner", value: `<@${owner.id}>`, inline: true },
+            { name: "Category", value: String(ticket.category || "general").toUpperCase(), inline: true },
+            { name: "Priority", value: priority.toUpperCase(), inline: true },
+            { name: "Channel", value: `<#${created.id}>`, inline: true },
+            { name: "Reason", value: reason || "No reason provided" }
+        ]);
+        await autoRouteTicket(guild, ticket);
+        await reconcileOwnerTicketDuplicates(guild, owner, created.id);
+        return { channelId: created.id, ticketId: ticket.id };
+    }
+    finally {
+        releaseTicketCreateLock(guild.id, ownerId);
+    }
+}
+async function ensureArchiveCategory(guild) {
+    const cfg = ensureTicketConfig(guild.id);
+    if (cfg.archiveCategoryId && guild.channels.cache.has(cfg.archiveCategoryId)) {
+        return cfg.archiveCategoryId;
+    }
+    const created = await guild.channels.create({
+        name: "ticket-archive-hold",
+        type: discord_js_1.ChannelType.GuildCategory,
+        reason: "Create archive hold category for tickets"
+    }).catch(() => null);
+    if (!created || created.type !== discord_js_1.ChannelType.GuildCategory)
+        return null;
+    cfg.archiveCategoryId = created.id;
+    saveTicketStore();
+    return created.id;
+}
+async function closeTicketChannel(guild, channelId, closedById, closeReason) {
+    const ticket = archiveTicketByChannel(channelId, closeReason);
+    if (!ticket)
+        return "This channel is not an open ticket.";
+    const cfg = ensureTicketConfig(guild.id);
+    const reopenHours = Math.max(1, Number(cfg.reopenWindowHours || 72));
+    ticket.reopenUntilAt = Date.now() + (reopenHours * 60 * 60 * 1000);
+    saveTicketStore();
+    const channel = guild.channels.cache.get(channelId);
+    const archiveCategoryId = await ensureArchiveCategory(guild);
+    if (channel && channel.type === discord_js_1.ChannelType.GuildText) {
+        await channel.setParent(archiveCategoryId, { lockPermissions: false }).catch(() => undefined);
+        await channel.permissionOverwrites.edit(ticket.ownerId, {
+            ViewChannel: true,
+            ReadMessageHistory: true,
+            SendMessages: false
+        }).catch(() => undefined);
+        await channel.permissionOverwrites.edit(TICKET_HANDLER_ROLE_ID, {
+            ViewChannel: true,
+            ReadMessageHistory: true,
+            SendMessages: true,
+            ManageChannels: true
+        }).catch(() => undefined);
+        await channel.send({ content: `🔒 Ticket archived to hold queue.\n📝 Reason: ${closeReason}` }).catch(() => undefined);
+    }
+    await sendTicketLog(guild.id, `Ticket #${ticket.id} Archived`, [
+        { name: "Owner", value: `<@${ticket.ownerId}>`, inline: true },
+        { name: "Archived By", value: `<@${closedById}>`, inline: true },
+        { name: "Channel", value: `<#${ticket.channelId}>`, inline: true },
+        { name: "Close Reason", value: closeReason },
+        { name: "Reopen Window", value: `Until <t:${Math.floor((ticket.reopenUntilAt || Date.now()) / 1000)}:f>` }
+    ]);
+    appendAuditEvent("ticket_archive", { guildId: guild.id, ticketId: ticket.id, closedById, channelId: ticket.channelId, closeReason });
+    return `Archived ticket #${ticket.id} in hold queue. Reason: ${closeReason}`;
+}
+async function claimTicketChannel(guild, channelId, claimerId) {
+    let ticket = await ensureTrackedTicketByChannelId(guild, channelId, claimerId);
+    if (!ticket) {
+        // Permanent QoL fallback: if channel is already in this guild cache, force-import it
+        // so button/command claim does not fail with a false "not tracked" on valid ticket channels.
+        const cached = guild.channels.cache.get(channelId);
+        if (cached && cached.type === discord_js_1.ChannelType.GuildText) {
+            ticket = ensureTrackedTicketFromKnownChannel(guild, cached, claimerId);
+        }
+    }
+    if (!ticket) {
+        return "This channel is not a tracked ticket and could not be imported. Provide ticket_channel_id or run /tickets to verify the channel.";
+    }
+    const status = normalizeTicketStatus(ticket.status);
+    if (status === "resolved")
+        return "This ticket is already permanently resolved.";
+    if (status === "archived")
+        return "This ticket is archived. Use /reopenticket to continue handling or /resolveticket for permanent closure.";
+    if (ticket.claimedById && ticket.claimedById !== claimerId) {
+        return `Ticket already claimed by <@${ticket.claimedById}>.`;
+    }
+    const claimed = claimTicketByChannel(channelId, claimerId);
+    if (!claimed)
+        return "Unable to claim this ticket right now.";
+    const sla = getTicketSlaState(claimed);
+    await updateTicketOpsPanelMessage(guild, claimed);
+    await sendTicketLog(guild.id, `Ticket #${claimed.id} Claimed`, [
+        { name: "Claimed By", value: `<@${claimerId}>`, inline: true },
+        { name: "Owner", value: `<@${claimed.ownerId}>`, inline: true },
+        { name: "Channel", value: `<#${claimed.channelId}>`, inline: true },
+        { name: "Workflow Status", value: claimed.workflowStatus, inline: true },
+        { name: "First Response SLA", value: sla.firstResponseOverdue ? "BREACHED" : "ON TIME", inline: true }
+    ]);
+    appendAuditEvent("ticket_claim", {
+        guildId: guild.id,
+        ticketId: claimed.id,
+        claimedById: claimerId,
+        channelId: claimed.channelId
+    });
+    return `Ticket #${claimed.id} claimed by <@${claimerId}>.`;
+}
+function ensureTrackedTicketFromKnownChannel(guild, channel, fallbackOwnerId) {
+    const existing = findTicketByChannel(channel.id);
+    if (existing)
+        return existing;
+    const ownerFromTopic = findChannelOwnerFromTopic(channel.topic);
+    const ownerId = ownerFromTopic || fallbackOwnerId;
+    const imported = importTicketEntryForChannel(guild.id, ownerId, channel.id, "Imported from known ticket button channel");
+    appendAuditEvent("ticket_import", {
+        guildId: guild.id,
+        ticketId: imported.id,
+        channelId: imported.channelId,
+        ownerId: imported.ownerId,
+        importedFromKnownChannel: true
+    });
+    return imported;
+}
+async function resolveTicketChannel(guild, channelId, resolverId, resolvedReason) {
+    const tracked = findTicketByChannel(channelId);
+    const exported = tracked
+        ? await (0, ticketTranscript_1.exportTicketTranscript)({
+            guild,
+            channelId,
+            ticketId: tracked.id,
+            ownerId: tracked.ownerId,
+            resolverId,
+            resolvedReason,
+            transcriptDir: TICKET_TRANSCRIPT_DIR,
+            projectRootDir: path_1.default.resolve(__dirname, "..")
+        })
+        : { transcriptPath: null, messageCount: 0, truncated: false, fetchErrors: 0 };
+    const transcript = await (0, ticketTranscript_1.buildTicketTranscriptStub)(guild, channelId);
+    if (transcript && exported.transcriptPath) {
+        transcript.transcriptPath = exported.transcriptPath;
+        transcript.transcriptFormat = "txt";
+        transcript.messageCountApprox = Math.max(transcript.messageCountApprox, exported.messageCount);
+    }
+    if (transcript) {
+        transcript.truncated = exported.truncated;
+        transcript.fetchErrors = exported.fetchErrors;
+    }
+    const ticket = resolveTicketByChannel(channelId, resolvedReason, transcript);
+    if (!ticket)
+        return "This channel is not an archived ticket.";
+    const exportWebhook = ensureTicketConfig(guild.id).exportWebhookUrl || TICKET_EXPORT_WEBHOOK_URL;
+    if (exportWebhook) {
+        const exported = await postJsonToWebhook(exportWebhook, {
+            type: "ticket_resolved",
+            guildId: guild.id,
+            ticket: {
+                id: ticket.id,
+                ownerId: ticket.ownerId,
+                channelId: ticket.channelId,
+                category: ticket.category || "general",
+                priority: ticket.priority,
+                status: ticket.status,
+                workflowStatus: ticket.workflowStatus,
+                createdAt: ticket.createdAt,
+                resolvedAt: ticket.resolvedAt,
+                resolvedReason: ticket.resolvedReason,
+                transcript: ticket.transcript,
+                internalNoteCount: ticket.internalNotes?.length || 0
+            }
+        });
+        appendAuditEvent("ticket_export_webhook", {
+            guildId: guild.id,
+            ticketId: ticket.id,
+            ok: exported,
+            sinkConfigured: true
+        });
+    }
+    await sendTicketLog(guild.id, `Ticket #${ticket.id} Resolved`, [
+        { name: "Owner", value: `<@${ticket.ownerId}>`, inline: true },
+        { name: "Resolved By", value: `<@${resolverId}>`, inline: true },
+        { name: "Channel", value: `<#${ticket.channelId}>`, inline: true },
+        { name: "Resolved Reason", value: resolvedReason },
+        { name: "Transcript Stub", value: transcript ? `captured (${transcript.messageCountApprox} msgs approx)` : "not captured" },
+        { name: "Transcript File", value: transcript?.transcriptPath ? transcript.transcriptPath : "not exported" }
+    ]);
+    appendAuditEvent("ticket_resolve", {
+        guildId: guild.id,
+        ticketId: ticket.id,
+        resolverId,
+        channelId: ticket.channelId,
+        resolvedReason,
+        transcript
+    });
+    const ownerUser = await client.users.fetch(ticket.ownerId).catch(() => null);
+    if (ownerUser) {
+        await ownerUser.send({
+            embeds: [new discord_js_1.EmbedBuilder()
+                    .setColor(0x22c55e)
+                    .setTitle(`Ticket #${ticket.id} Resolved`)
+                    .setDescription("How was your support experience? Please rate 1-5 below.")
+                    .addFields({ name: "Category", value: String(ticket.category || "general"), inline: true }, { name: "Priority", value: String(ticket.priority), inline: true }, { name: "Reason", value: String(ticket.resolvedReason || "Resolved"), inline: false })],
+            components: [buildTicketCsatButtons(ticket.id)]
+        }).catch(() => undefined);
+    }
+    void guild.channels.delete(ticket.channelId, "Ticket permanently resolved").catch(() => undefined);
+    return `Resolved ticket #${ticket.id} permanently. Reason: ${resolvedReason}`;
+}
+const slashCommands = (0, slashCatalog_1.buildSlashCommands)({
+    raidConditionChoices: RAID_CONDITION_CHOICES,
+    raidMapChoices: RAID_MAP_CHOICES
+});
+const ticketCommandHandlers = (0, ticketCommands_1.buildTicketCommandHandlers)({
+    requireGuild,
+    requireAdministrator,
+    canManageTicketActions,
+    resolveTicketTargetChannelId,
+    ensureTrackedTicketByChannelId,
+    createTicketChannel,
+    findTicketByChannel,
+    buildTicketCommandEmbedPayload,
+    upsertTicketPanelInChannel,
+    claimTicketChannel,
+    handleTicketAssignCommand,
+    normalizeTicketPriority,
+    normalizeTicketStatus,
+    normalizeTicketWorkflowStatus,
+    rejectIfDuplicateCommand,
+    setTicketWorkflowStatus,
+    updateTicketOpsPanelMessage,
+    sendTicketLog,
+    appendAuditEvent,
+    getTicketNextActionHint,
+    canTransitionTicketStatus,
+    reopenTicketByChannel,
+    findOpenTicketByChannel,
+    closeTicketChannel,
+    findArchivedTicketByChannel,
+    resolveTicketChannel,
+    ensureTicketConfig,
+    saveTicketStore,
+    pruneDeletedTicketRecords,
+    pruneInaccessibleOwnerTicketRecords,
+    getTicketSlaState,
+    ticketStore,
+    TICKET_HANDLER_ROLE_ID,
+    TICKET_DEFAULT_CATEGORY_ID
+});
+const moderationCommandHandlers = (0, moderationCommands_1.buildModerationCommandHandlers)({
+    requireAdministrator,
+    ensureGuildModeration,
+    saveModerationStore,
+    rejectIfDuplicateCommand,
+    sendModLog,
+    parseDurationMs,
+    getAvatar
+});
+const commandHandlers = {
+    ping: async (interaction) => {
+        return "Pong.";
+    },
+    help: async (interaction) => {
+        return JSON.stringify(await buildHelpPayload("general", interaction.guild));
+    },
+    quickstart: async (interaction) => {
+        return JSON.stringify({ embed: buildQuickstartEmbed(interaction.user).toJSON() });
+    },
+    xproles: async (interaction) => {
+        const lines = await resolveXpRoleLines(interaction.guild);
+        const sections = buildThemedRoleSections(lines);
+        const randomColor = Math.floor(Math.random() * 0xffffff);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(randomColor)
+            .setTitle("🎖️ XP Role Directory")
+            .setDescription("Engagement XP rank tiers grouped into 5 themed sections")
+            .setFooter({ text: `Showing ${lines.length} role entries` });
+        for (const section of sections) {
+            embed.addFields(section);
+        }
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    xprolesync: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        if (XP_ROLE_SYNC_RUNNING_GUILDS.has(guild.id)) {
+            return "An XP role sync is already running for this server. Please wait for it to finish.";
+        }
+        XP_ROLE_SYNC_RUNNING_GUILDS.add(guild.id);
+        const sourceChannelId = interaction.channelId || null;
+        const startedByUserId = interaction.user.id;
+        void runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId)
+            .catch(error => {
+            appendAuditEvent("xp_role_sync_failed", {
+                guildId: guild.id,
+                userId: startedByUserId,
+                error: error instanceof Error ? error.message : String(error)
+            });
+        })
+            .finally(() => {
+            XP_ROLE_SYNC_RUNNING_GUILDS.delete(guild.id);
+        });
+        return "XP role sync started in the background. I will post completion results in this channel.";
+    },
+    status: async () => {
+        const memory = process.memoryUsage();
+        return (0, health_1.buildStatusLines)(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())).join("\n");
+    },
+    findbots: async (interaction) => {
+        const guildError = requireGuild(interaction);
+        if (guildError)
+            return guildError;
+        const guild = interaction.guild;
+        await guild.members.fetch().catch(() => undefined);
+        const botMembers = guild.members.cache.filter(member => member.user.bot);
+        if (!botMembers.size) {
+            return "No bot accounts found in this server.";
+        }
+        const selfId = client.user?.id;
+        const lines = botMembers
+            .map(member => {
+            const marker = member.id === selfId ? "(this bot)" : "";
+            return `- ${member.user.tag} | ID: ${member.id} ${marker}`.trim();
+        })
+            .sort((a, b) => a.localeCompare(b));
+        return [
+            `Bots in ${guild.name}:`,
+            ...lines,
+            "",
+            "Remove the extra app in Server Settings -> Members (or Integrations), then keep only the line marked (this bot)."
+        ].join("\n");
+    },
+    balance: async (interaction) => (0, coreCommands_1.handleCoreCommand)("balance", interaction),
+    token: async (interaction) => (0, coreCommands_1.handleCoreCommand)("token", interaction),
+    bank: async (interaction) => (0, coreCommands_1.handleCoreCommand)("bank", interaction),
+    deposit: async (interaction) => {
+        const amount = interaction.options.getInteger("amount", true);
+        if (amount <= 0)
+            return "Amount must be greater than 0.";
+        const before = (0, utils_1.getTokens)(interaction.user.id);
+        if (before < amount)
+            return `You only have ${before} FN Token$ in your wallet.`;
+        const res = (0, utils_1.depositToBank)(interaction.user.id, amount);
+        return `Deposited ${amount} FN Token$. Wallet: ${res.wallet} | Bank: ${res.bank}`;
+    },
+    withdraw: async (interaction) => {
+        const amount = interaction.options.getInteger("amount", true);
+        if (amount <= 0)
+            return "Amount must be greater than 0.";
+        const before = (0, utils_1.getBankTokens)(interaction.user.id);
+        if (before < amount)
+            return `You only have ${before} FN Token$ in bank.`;
+        const res = (0, utils_1.withdrawFromBank)(interaction.user.id, amount);
+        return `Withdrew ${amount} FN Token$. Wallet: ${res.wallet} | Bank: ${res.bank}`;
+    },
+    transfer: async (interaction) => {
+        const target = interaction.options.getUser("user", true);
+        const amount = interaction.options.getInteger("amount", true);
+        if (target.id === interaction.user.id)
+            return "You cannot transfer to yourself.";
+        if (amount <= 0)
+            return "Amount must be greater than 0.";
+        if ((0, utils_1.getTokens)(interaction.user.id) < amount)
+            return "Not enough wallet tokens.";
+        const moved = (0, utils_1.transferWalletTokens)(interaction.user.id, target.id, amount);
+        return `Transferred ${moved.moved} FN Token$ to ${target.username}. Your wallet: ${moved.fromWallet}.`;
+    },
+    addtoken: async (interaction) => {
+        const ownerError = requireGuildOwner(interaction);
+        if (ownerError)
+            return ownerError;
+        const target = interaction.options.getUser("user", true);
+        const amount = interaction.options.getInteger("amount", true);
+        if (amount <= 0)
+            return "Amount must be greater than 0.";
+        const total = (0, utils_1.addTokens)(target.id, amount);
+        await sendModLog(interaction.guildId, "FN Token$ Granted", [
+            { name: "Granted By (Owner)", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Target", value: `<@${target.id}>`, inline: true },
+            { name: "Amount", value: `${amount}`, inline: true },
+            { name: "New Total", value: `${total}`, inline: true }
+        ]);
+        return `${target.username} received ${amount} FN Token$ (ultra-rare coins normally found only in raids). New balance: ${total}.`;
+    },
+    tradeoffer: async (interaction) => {
+        const target = interaction.options.getUser("user", true);
+        const offerItemId = interaction.options.getString("offer_item", true).trim().toLowerCase();
+        const offerQty = interaction.options.getInteger("offer_qty", true);
+        const requestItemId = interaction.options.getString("request_item", true).trim().toLowerCase();
+        const requestQty = interaction.options.getInteger("request_qty", true);
+        if (target.id === interaction.user.id)
+            return "You cannot create a trade with yourself.";
+        if (offerQty <= 0 || requestQty <= 0)
+            return "Trade quantities must be greater than 0.";
+        if (!catalog_1.ITEM_DEFS[offerItemId])
+            return `Unknown offer item: ${offerItemId}`;
+        if (!catalog_1.ITEM_DEFS[requestItemId])
+            return `Unknown request item: ${requestItemId}`;
+        if ((0, utils_1.getInventoryCount)(interaction.user.id, offerItemId) < offerQty)
+            return "You do not own enough of the offered item.";
+        const offer = createTradeOffer({
+            guildId: interaction.guildId,
+            fromUserId: interaction.user.id,
+            toUserId: target.id,
+            offerItemId,
+            offerQty,
+            requestItemId,
+            requestQty
+        });
+        return [
+            `Trade offer #${offer.id} created for ${target.username}.`,
+            `You give: ${offerQty}x ${catalog_1.ITEM_DEFS[offerItemId].name}`,
+            `You request: ${requestQty}x ${catalog_1.ITEM_DEFS[requestItemId].name}`,
+            `Target can accept with /tradeaccept offer_id:${offer.id}`
+        ].join("\n");
+    },
+    trades: async (interaction) => {
+        const userId = interaction.user.id;
+        const open = tradeStore.offers.filter(offer => offer.status === "open" && (offer.fromUserId === userId || offer.toUserId === userId));
+        if (!open.length)
+            return "No open trades for you.";
+        const lines = open.slice(-12).reverse().map(offer => {
+            const direction = offer.fromUserId === userId ? "Outgoing" : "Incoming";
+            return `#${offer.id} ${direction} | ${offer.offerQty}x ${catalog_1.ITEM_DEFS[offer.offerItemId]?.name || offer.offerItemId} -> ${offer.requestQty}x ${catalog_1.ITEM_DEFS[offer.requestItemId]?.name || offer.requestItemId} | <@${offer.fromUserId}> to <@${offer.toUserId}>`;
+        });
+        return `Open trades:\n${lines.join("\n")}`;
+    },
+    tradeaccept: async (interaction) => {
+        const offerId = Number.parseInt(interaction.options.getString("offer_id", true), 10);
+        if (!Number.isFinite(offerId))
+            return "Invalid trade selection.";
+        const offer = getOpenTradeOffer(offerId);
+        if (!offer)
+            return "Trade offer not found or already closed.";
+        if (offer.toUserId !== interaction.user.id)
+            return "Only the target user can accept this trade.";
+        if ((0, utils_1.getInventoryCount)(offer.fromUserId, offer.offerItemId) < offer.offerQty) {
+            offer.status = "cancelled";
+            offer.updatedAt = Date.now();
+            saveTradeStore();
+            return "Trade cancelled because the sender no longer has the offered item.";
+        }
+        if ((0, utils_1.getInventoryCount)(offer.toUserId, offer.requestItemId) < offer.requestQty) {
+            return "You do not have enough of the requested item to complete this trade.";
+        }
+        (0, utils_1.removeInventoryItem)(offer.fromUserId, offer.offerItemId, offer.offerQty);
+        (0, utils_1.removeInventoryItem)(offer.toUserId, offer.requestItemId, offer.requestQty);
+        (0, utils_1.addInventoryItem)(offer.toUserId, offer.offerItemId, offer.offerQty);
+        (0, utils_1.addInventoryItem)(offer.fromUserId, offer.requestItemId, offer.requestQty);
+        offer.status = "accepted";
+        offer.updatedAt = Date.now();
+        saveTradeStore();
+        return `Trade #${offer.id} accepted and completed.`;
+    },
+    tradedecline: async (interaction) => {
+        const offerId = Number.parseInt(interaction.options.getString("offer_id", true), 10);
+        if (!Number.isFinite(offerId))
+            return "Invalid trade selection.";
+        const offer = getOpenTradeOffer(offerId);
+        if (!offer)
+            return "Trade offer not found or already closed.";
+        if (offer.toUserId !== interaction.user.id && offer.fromUserId !== interaction.user.id) {
+            return "You are not part of this trade.";
+        }
+        offer.status = offer.toUserId === interaction.user.id ? "declined" : "cancelled";
+        offer.updatedAt = Date.now();
+        saveTradeStore();
+        return `Trade #${offer.id} ${offer.status}.`;
+    },
+    points: async (interaction) => {
+        const target = interaction.options.getUser("user") || interaction.user;
+        (0, utils_1.ensureUser)(target.id);
+        return `${target.username} has ${(0, utils_1.getPoints)(target.id)} Access Points.`;
+    },
+    xp: async (interaction) => {
+        const userId = interaction.user.id;
+        const user = (0, utils_1.ensureUser)(userId);
+        const accessPoints = (0, utils_1.getPoints)(userId);
+        const badge = getAccessPointBadge(accessPoints);
+        const prestigeBadge = getPrestigeBadge(user.prestige);
+        const tierVisual = getPmcTierVisual((0, utils_1.getPmcLevel)(user.pmcXP));
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(prestigeBadge.color)
+            .setTitle("🎖️ XP Status")
+            .setDescription("Engagement XP is earned from communication activity and levels your chat rank.")
+            .setThumbnail(prestigeBadge.iconUrl)
+            .addFields({ name: "📦 Engagement Rank", value: `Level ${(0, utils_1.getXPLevel)(user.xp)}\nXP: ${user.xp}`, inline: true }, { name: "🪖 Progress Bar", value: (0, utils_1.xpBar)(user.xp), inline: true }, { name: "⚔️ Separate Raid Track", value: `PMC Level: ${(0, utils_1.getPmcLevel)(user.pmcXP)}\nRaid XP: ${user.pmcXP}\nDaily Streak: ${user.dailyStreak}` }, { name: "🛡️ Access Points", value: `${accessPoints}\nBadge: ${badge.label}`, inline: false }, { name: "🌟 Prestige Badge", value: `${prestigeBadge.label}\nPrestige: ${user.prestige}`, inline: true }, { name: "🪖 PMC Tier Badge", value: `${tierVisual.label}\nLevel ${(0, utils_1.getPmcLevel)(user.pmcXP)}`, inline: true });
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    pmc: async (interaction) => buildPmcProfilePayload(interaction.user),
+    xpstats: async (interaction) => {
+        const user = (0, utils_1.ensureUser)(interaction.user.id);
+        const gameStats = (0, utils_1.getGameStatsSummary)(interaction.user.id);
+        const prestigeBadge = getPrestigeBadge(user.prestige);
+        const tierVisual = getPmcTierVisual((0, utils_1.getPmcLevel)(user.pmcXP));
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(prestigeBadge.color)
+            .setTitle(`${interaction.user.username} XP Stats`)
+            .setDescription(`Level ${(0, utils_1.getXPLevel)(user.xp)} | Prestige ${user.prestige}`)
+            .setThumbnail(prestigeBadge.iconUrl)
+            .addFields({ name: "Engagement XP", value: `${user.xp}`, inline: true }, { name: "Daily Streak", value: `${user.dailyStreak}`, inline: true }, { name: "FN Token$", value: `${user.fnTokens}`, inline: true }, { name: "PMC Raid XP", value: `${user.pmcXP}`, inline: true }, { name: "PMC Level", value: `${(0, utils_1.getPmcLevel)(user.pmcXP)}`, inline: true }, { name: "Prestige Badge", value: prestigeBadge.label, inline: true }, { name: "PMC Tier Badge", value: tierVisual.label, inline: true }, { name: "Casino Sessions", value: `${gameStats.casinoPlayed}`, inline: true }, { name: "Games W/L/P", value: `${gameStats.wins}/${gameStats.losses}/${gameStats.pushes}`, inline: true }, { name: "Games Lifetime Net", value: `${gameStats.net >= 0 ? `+${gameStats.net}` : gameStats.net} FN Token$`, inline: true });
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    health: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const embed = buildHealthEmbed();
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    balancereport: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const embed = buildBalanceReportEmbed("manual_command");
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    incident: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const fix = interaction.options.getBoolean("fix") || false;
+        const roleReport = await collectRoleSanityReport(guild);
+        const ticketReport = await collectTicketSanityReport(guild);
+        const issueCount = roleReport.missing.length
+            + roleReport.hierarchyBlocked.length
+            + roleReport.multiTierMembers
+            + ticketReport.missingChannels
+            + ticketReport.duplicateOpenOwners
+            + ticketReport.panelMissing
+            + ticketReport.slaBreaches;
+        let remediationLines = ["No remediation requested."];
+        if (fix) {
+            const roleFix = await runRoleSanityFix(guild, interaction.user.id, interaction.channelId || null);
+            const ticketFix = await runTicketSanityFix(guild);
+            remediationLines = [
+                `Role remediation: ${roleFix.started ? "started" : `skipped (${roleFix.reason || "unknown"})`}`,
+                `Ticket remediation: removed missing ${ticketFix.removedDeleted}, removed inaccessible ${ticketFix.removedInaccessible}, deduped ${ticketFix.deduped}, panel backfill ${ticketFix.panelBackfilled}`
+            ];
+        }
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(issueCount > 0 ? 0xf59e0b : 0x22c55e)
+            .setTitle("🚨 Incident Triage")
+            .setDescription(issueCount > 0 ? "Issues detected. Review sections below." : "No major issues detected.")
+            .addFields({
+            name: "Role Integrity",
+            value: [
+                `Missing role entries: ${roleReport.missing.length}`,
+                `Hierarchy-blocked roles: ${roleReport.hierarchyBlocked.length}`,
+                `Members with multiple tier roles: ${roleReport.multiTierMembers}`,
+                `Manage Roles available: ${roleReport.canManageRoles ? "yes" : "no"}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Ticket Integrity",
+            value: [
+                `Missing channels: ${ticketReport.missingChannels}`,
+                `Duplicate active owners: ${ticketReport.duplicateOpenOwners}`,
+                `Active tickets missing panel IDs: ${ticketReport.panelMissing}`,
+                `Active SLA breaches: ${ticketReport.slaBreaches}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Remediation",
+            value: remediationLines.join("\n"),
+            inline: false
+        }, {
+            name: "Quick Follow-Up",
+            value: "Run `/rolesanity` and `/ticketsanity` for detailed views. Run with `fix:true` for guided remediation.",
+            inline: false
+        })
+            .setFooter({ text: `Issue score: ${issueCount} | Triggered by ${interaction.user.username}` })
+            .setTimestamp(new Date());
+        appendAuditEvent("incident_run", {
+            guildId: guild.id,
+            userId: interaction.user.id,
+            issueCount,
+            fixRequested: fix,
+            roleMissing: roleReport.missing.length,
+            roleHierarchyBlocked: roleReport.hierarchyBlocked.length,
+            roleMultiTierMembers: roleReport.multiTierMembers,
+            ticketMissingChannels: ticketReport.missingChannels,
+            ticketDuplicateOwners: ticketReport.duplicateOpenOwners,
+            ticketPanelMissing: ticketReport.panelMissing,
+            ticketSlaBreaches: ticketReport.slaBreaches
+        });
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    xpverify: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const target = interaction.options.getUser("user", true);
+        const snapshot = (0, utils_1.getXpPersistenceSnapshot)(target.id);
+        const effectiveXp = Math.max(snapshot.memoryXp, snapshot.primaryXp ?? 0, snapshot.backupXp ?? 0);
+        const level = (0, utils_1.getXPLevel)(effectiveXp);
+        const unlocked = XP_ROLE_TIERS.filter(entry => effectiveXp >= entry.xp).pop();
+        let roleStatus = "No XP tier unlocked yet (below first threshold).";
+        if (interaction.guild && unlocked) {
+            await interaction.guild.roles.fetch().catch(() => undefined);
+            const role = interaction.guild.roles.cache.get(unlocked.roleId) || null;
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            const hasRole = Boolean(role && member?.roles.cache.has(role.id));
+            const me = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
+            const hierarchyBlocked = Boolean(role && me && role.position >= me.roles.highest.position);
+            roleStatus = [
+                `Expected tier: ${unlocked.name} (${unlocked.xp.toLocaleString()} XP)`,
+                `Role exists: ${role ? "yes" : "no"}`,
+                `Member has role: ${hasRole ? "yes" : "no"}`,
+                `Hierarchy blocked: ${hierarchyBlocked ? "yes" : "no"}`
+            ].join("\n");
+        }
+        const mismatch = (snapshot.primaryXp !== null && snapshot.primaryXp !== snapshot.memoryXp) || (snapshot.backupXp !== null && snapshot.backupXp !== snapshot.memoryXp);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(mismatch ? 0xf59e0b : 0x22c55e)
+            .setTitle("🔎 XP Persistence Verify")
+            .setDescription(`Diagnostics for <@${target.id}>`)
+            .addFields({
+            name: "XP State",
+            value: [
+                `Effective XP: ${effectiveXp.toLocaleString()}`,
+                `Level: ${level}`,
+                `Memory XP: ${snapshot.memoryXp.toLocaleString()}`,
+                `Primary XP: ${snapshot.primaryXp === null ? "missing" : snapshot.primaryXp.toLocaleString()}`,
+                `Backup XP: ${snapshot.backupXp === null ? "missing" : snapshot.backupXp.toLocaleString()}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Write Metadata",
+            value: [
+                `Memory lastXP: ${toIsoOrNever(snapshot.memoryLastXp)}`,
+                `Primary lastXP: ${toIsoOrNever(snapshot.primaryLastXp)}`,
+                `Backup lastXP: ${toIsoOrNever(snapshot.backupLastXp)}`,
+                `points.json size: ${Math.max(0, snapshot.pointsFileSize)} bytes`,
+                `points.json.bak size: ${Math.max(0, snapshot.pointsBackupSize)} bytes`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Role Assignment Check",
+            value: roleStatus,
+            inline: false
+        })
+            .setFooter({ text: mismatch ? "XP mismatch detected: run /xprolesync after confirming bot instance consistency." : "XP persistence healthy." });
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    rolesanity: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const fix = interaction.options.getBoolean("fix") || false;
+        const report = await collectRoleSanityReport(guild);
+        let fixNote = "No remediation requested.";
+        if (fix) {
+            const fixResult = await runRoleSanityFix(guild, interaction.user.id, interaction.channelId || null);
+            fixNote = fixResult.started
+                ? "Remediation started: background XP role sync launched."
+                : `Remediation skipped: ${fixResult.reason || "unknown reason"}`;
+        }
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor((report.missing.length || report.hierarchyBlocked.length || report.multiTierMembers > 0) ? 0xf59e0b : 0x22c55e)
+            .setTitle("🧪 Role Sanity Audit")
+            .setDescription("XP role readiness and assignment integrity checks.")
+            .addFields({
+            name: "Coverage",
+            value: [
+                `Configured tiers: ${report.configuredTierCount}`,
+                `Existing tier roles: ${report.existingTierCount}`,
+                `Missing tier roles: ${report.missing.length}`,
+                `Members with multiple tier roles: ${report.multiTierMembers}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Bot Permissions and Hierarchy",
+            value: [
+                `Manage Roles: ${report.canManageRoles ? "yes" : "no"}`,
+                `Bot highest role position: ${report.botHighestRolePosition}`,
+                `Blocked tier roles by hierarchy: ${report.hierarchyBlocked.length}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Fix Mode",
+            value: fixNote,
+            inline: false
+        });
+        if (report.missing.length) {
+            embed.addFields({
+                name: "Missing Roles",
+                value: report.missing.slice(0, 12).map(tier => `${tier.name} (${tier.xp.toLocaleString()} XP)`).join("\n"),
+                inline: false
+            });
+        }
+        if (report.hierarchyBlocked.length) {
+            embed.addFields({
+                name: "Hierarchy Blocked Roles",
+                value: report.hierarchyBlocked.slice(0, 12).map(item => `${item.tier.name} (${item.tier.xp.toLocaleString()} XP)`).join("\n"),
+                inline: false
+            });
+        }
+        appendAuditEvent("rolesanity_run", {
+            guildId: guild.id,
+            userId: interaction.user.id,
+            missingRoles: report.missing.length,
+            hierarchyBlockedRoles: report.hierarchyBlocked.length,
+            multiTierMembers: report.multiTierMembers,
+            fixRequested: fix
+        });
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    ticketsanity: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const fix = interaction.options.getBoolean("fix") || false;
+        let fixSummary = "No remediation requested.";
+        if (fix) {
+            const fixResult = await runTicketSanityFix(guild);
+            fixSummary = [
+                `Removed missing-channel tickets: ${fixResult.removedDeleted}`,
+                `Removed inaccessible-owner tickets: ${fixResult.removedInaccessible}`,
+                `Deduped active tickets: ${fixResult.deduped}`,
+                `Panel IDs backfilled: ${fixResult.panelBackfilled}`
+            ].join("\n");
+        }
+        const report = await collectTicketSanityReport(guild);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor((report.missingChannels || report.duplicateOpenOwners || report.slaBreaches) ? 0xf59e0b : 0x22c55e)
+            .setTitle("🧪 Ticket Sanity Audit")
+            .setDescription("Ticket store integrity and live channel consistency checks.")
+            .addFields({
+            name: "Ticket State Totals",
+            value: [
+                `Total: ${report.total}`,
+                `Open: ${report.open}`,
+                `Claimed: ${report.claimed}`,
+                `Archived: ${report.archived}`,
+                `Resolved: ${report.resolved}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Integrity",
+            value: [
+                `Missing channels: ${report.missingChannels}`,
+                `Owners with duplicate active tickets: ${report.duplicateOpenOwners}`,
+                `Active tickets missing panelMessageId: ${report.panelMissing}`,
+                `SLA breaches (active): ${report.slaBreaches}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Fix Mode",
+            value: fixSummary,
+            inline: false
+        });
+        appendAuditEvent("ticketsanity_run", {
+            guildId: guild.id,
+            userId: interaction.user.id,
+            total: report.total,
+            missingChannels: report.missingChannels,
+            duplicateOpenOwners: report.duplicateOpenOwners,
+            panelMissing: report.panelMissing,
+            slaBreaches: report.slaBreaches,
+            fixRequested: fix
+        });
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    ticketops: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const lock = readInstanceLockState();
+        const recent = readRecentTicketOpsEvents(8);
+        const guild = interaction.guild;
+        const ticketTotals = guild
+            ? ticketStore.tickets.filter(t => t.guildId === guild.id)
+            : [];
+        const activeCount = ticketTotals.filter(t => normalizeTicketStatus(t.status) === "open" || normalizeTicketStatus(t.status) === "claimed").length;
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(0x0ea5e9)
+            .setTitle("🧭 Ticket Runtime Ops")
+            .setDescription("Live diagnostics for singleton process lock, ticket-create lock state, and recent dedupe telemetry.")
+            .addFields({
+            name: "Process Lock",
+            value: [
+                `Current PID: ${process.pid}`,
+                `Holding lock in-memory: ${hasInstanceLock ? "yes" : "no"}`,
+                `Lock file exists: ${lock.exists ? "yes" : "no"}`,
+                `Lock owner PID: ${lock.ownerPid || "none"}`,
+                `Lock owner alive: ${lock.ownerAlive ? "yes" : "no"}`,
+                `Owner started: ${toIsoOrNever(lock.ownerStartedAt)}`,
+                `Lock path: ${INSTANCE_LOCK_PATH}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Ticket Create Locks",
+            value: [
+                `In-flight owner locks: ${inFlightTicketCreates.size}`,
+                `Entries:`,
+                describeInFlightTicketCreateLocks(5)
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Ticket Store Snapshot",
+            value: [
+                `Guild tickets tracked: ${ticketTotals.length}`,
+                `Guild active tickets: ${activeCount}`,
+                `Data file: ${statLabel(TICKET_DATA_FILE)}`,
+                `Data backup: ${statLabel(`${TICKET_DATA_FILE}.bak`)}`,
+                `Bot uptime: ${formatDuration(process.uptime())}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Recent Ticket Ops Events",
+            value: recent.length ? recent.join("\n") : "No recent ticket ops events found.",
+            inline: false
+        })
+            .setFooter({ text: `Triggered by ${interaction.user.username}` })
+            .setTimestamp(new Date());
+        appendAuditEvent("ticketops_run", {
+            userId: interaction.user.id,
+            guildId: interaction.guildId,
+            currentPid: process.pid,
+            hasInstanceLock,
+            lockOwnerPid: lock.ownerPid,
+            lockOwnerAlive: lock.ownerAlive,
+            inFlightLocks: inFlightTicketCreates.size,
+            activeTickets: activeCount
+        });
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    ticket: async (interaction) => {
+        return await ticketCommandHandlers.ticket(interaction);
+    },
+    ticketintake: async () => {
+        return "Ticket intake modal is ready. Run /ticketintake again if you did not receive the popup.";
+    },
+    ticketforce: async (interaction) => {
+        const guildError = requireGuild(interaction);
+        if (guildError)
+            return guildError;
+        const reason = (interaction.options.getString("reason", true) || "General support").slice(0, 180);
+        const priority = normalizeTicketPriority(interaction.options.getString("priority") || "normal");
+        const created = await createTicketChannel(interaction.guild, interaction.user.id, reason, priority, true);
+        if (created.error)
+            return created.error;
+        const ticket = created.channelId ? findTicketByChannel(created.channelId) : null;
+        return buildTicketCommandEmbedPayload("🎫 Ticket Force-Opened", "Duplicate/KB deflection bypassed by manual override.", ticket || undefined, [
+            { name: "📝 Reason", value: reason, inline: false },
+            { name: "⚠️ Override", value: "Deflection bypass enabled.", inline: true }
+        ]);
+    },
+    ticketpanel: async (interaction) => {
+        return await ticketCommandHandlers.ticketpanel(interaction);
+    },
+    claimticket: async (interaction) => {
+        return await ticketCommandHandlers.claimticket(interaction);
+    },
+    ticketassign: async (interaction) => {
+        return await ticketCommandHandlers.ticketassign(interaction);
+    },
+    ticketassgin: async (interaction) => {
+        return await ticketCommandHandlers.ticketassgin(interaction);
+    },
+    ticketstatus: async (interaction) => {
+        return await ticketCommandHandlers.ticketstatus(interaction);
+    },
+    reopenticket: async (interaction) => {
+        return await ticketCommandHandlers.reopenticket(interaction);
+    },
+    closeticket: async (interaction) => {
+        return await ticketCommandHandlers.closeticket(interaction);
+    },
+    resolveticket: async (interaction) => {
+        return await ticketCommandHandlers.resolveticket(interaction);
+    },
+    ticketconfig: async (interaction) => {
+        return await ticketCommandHandlers.ticketconfig(interaction);
+    },
+    tickets: async (interaction) => {
+        return await ticketCommandHandlers.tickets(interaction);
+    },
+    ticketanalytics: async (interaction) => {
+        return await ticketCommandHandlers.ticketanalytics(interaction);
+    },
+    ticketsearch: async (interaction) => {
+        const guildError = requireGuild(interaction);
+        if (guildError)
+            return guildError;
+        const member = interaction.member;
+        if (!member || !canManageTicketActions(member)) {
+            return "Only admins or the handler role can search ticket history.";
+        }
+        const guild = interaction.guild;
+        const owner = interaction.options.getUser("owner");
+        const status = interaction.options.getString("status");
+        const category = interaction.options.getString("category");
+        const query = (interaction.options.getString("query") || "").trim().toLowerCase();
+        const page = Math.max(1, interaction.options.getInteger("page") || 1);
+        const pageSize = Math.max(5, Math.min(20, interaction.options.getInteger("page_size") || 10));
+        let scoped = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id);
+        if (owner) {
+            scoped = scoped.filter(ticket => ticket.ownerId === owner.id);
+        }
+        if (status) {
+            scoped = scoped.filter(ticket => normalizeTicketStatus(ticket.status) === status);
+        }
+        if (category) {
+            scoped = scoped.filter(ticket => (0, ticketEnhancements_1.classifyTicketCategory)(ticket.category || ticket.reason) === category);
+        }
+        if (query) {
+            scoped = scoped.filter(ticket => getTicketSearchIndex(ticket).includes(query));
+        }
+        scoped = scoped.sort((a, b) => b.updatedAt - a.updatedAt);
+        const total = scoped.length;
+        if (!total) {
+            return "No tickets matched your filters.";
+        }
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const safePage = Math.min(page, totalPages);
+        const start = (safePage - 1) * pageSize;
+        const visible = scoped.slice(start, start + pageSize);
+        const lines = visible.map(ticket => {
+            const ownerRef = `<@${ticket.ownerId}>`;
+            const categoryLabel = (0, ticketEnhancements_1.classifyTicketCategory)(ticket.category || ticket.reason);
+            const noteCount = ticket.internalNotes?.length || 0;
+            return `#${ticket.id} [${ticket.status}|${ticket.workflowStatus}|${categoryLabel}|${ticket.priority}] <#${ticket.channelId}> | owner ${ownerRef} | notes ${noteCount} | updated <t:${Math.floor(ticket.updatedAt / 1000)}:R>`;
+        });
+        appendAuditEvent("ticket_search", {
+            guildId: guild.id,
+            actorId: interaction.user.id,
+            filters: {
+                ownerId: owner?.id || null,
+                status: status || null,
+                category: category || null,
+                query: query || null,
+                page: safePage,
+                pageSize
+            },
+            total
+        });
+        const filterSummary = [
+            owner ? `owner=<@${owner.id}>` : null,
+            status ? `status=${status}` : null,
+            category ? `category=${category}` : null,
+            query ? `query=${query}` : null
+        ].filter(Boolean).join(", ") || "none";
+        return [
+            `🔎 Ticket Search Results`,
+            `Filters: ${filterSummary}`,
+            `Page ${safePage}/${totalPages} | Showing ${visible.length}/${total}`,
+            "",
+            ...lines
+        ].join("\n");
+    },
+    ticketworkload: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        const active = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id && ticket.status !== "resolved");
+        const byAssignee = new Map();
+        for (const ticket of active) {
+            const assignee = ticket.assignedToId || ticket.claimedById || "unassigned";
+            byAssignee.set(assignee, (byAssignee.get(assignee) || 0) + 1);
+        }
+        const rows = Array.from(byAssignee.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 15)
+            .map(([id, count]) => `${id === "unassigned" ? "Unassigned" : `<@${id}>`}: ${count}`);
+        const breachRisk = active
+            .filter(ticket => {
+            const sla = getTicketSlaState(ticket, Date.now(), buildTicketSlaThresholds(ticket));
+            return sla.firstResponseOverdue || sla.resolveOverdue;
+        }).length;
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(0x0891b2)
+            .setTitle("🧮 Ticket Workload")
+            .addFields({ name: "Active Tickets", value: String(active.length), inline: true }, { name: "SLA Risk", value: String(breachRisk), inline: true }, { name: "Coverage", value: rows.length ? rows.join("\n") : "No active assignments", inline: false })
+            .setTimestamp(new Date());
+        return JSON.stringify({ embed: embed.toJSON() });
+    },
+    ticketnote: async (interaction) => {
+        const guildError = requireGuild(interaction);
+        if (guildError)
+            return guildError;
+        const member = interaction.member;
+        if (!member || !canManageTicketActions(member))
+            return "Only admins or the handler role can add internal notes.";
+        const target = resolveTicketTargetChannelId(interaction);
+        if (target.error || !target.channelId)
+            return target.error || "Unable to resolve ticket channel.";
+        const ticket = await ensureTrackedTicketByChannelId(interaction.guild, target.channelId, interaction.user.id);
+        if (!ticket)
+            return "Ticket not found for this channel.";
+        const note = (interaction.options.getString("note", true) || "").slice(0, 500);
+        const saved = addTicketInternalNote(ticket, { byId: interaction.user.id, at: Date.now(), note });
+        if (!saved)
+            return "Unable to persist ticket note due to a store conflict. Please retry.";
+        return `Saved internal note on ticket #${ticket.id}.`;
+    },
+    tickettimeline: async (interaction) => {
+        const guildError = requireGuild(interaction);
+        if (guildError)
+            return guildError;
+        const member = interaction.member;
+        if (!member || !canManageTicketActions(member))
+            return "Only admins or the handler role can view internal timelines.";
+        const target = resolveTicketTargetChannelId(interaction);
+        if (target.error || !target.channelId)
+            return target.error || "Unable to resolve ticket channel.";
+        const ticket = await ensureTrackedTicketByChannelId(interaction.guild, target.channelId, interaction.user.id);
+        if (!ticket)
+            return "Ticket not found for this channel.";
+        const notes = (ticket.internalNotes || []).slice(-10).map(note => `• <t:${Math.floor(note.at / 1000)}:f> <@${note.byId}>: ${note.note}`);
+        const meta = [
+            `Ticket #${ticket.id}`,
+            `Status: ${ticket.status}/${ticket.workflowStatus}`,
+            `Category: ${ticket.category || "general"}`,
+            `Parent: ${ticket.parentTicketId ? `#${ticket.parentTicketId}` : "none"}`,
+            `Linked: ${ticket.linkedTicketId ? `#${ticket.linkedTicketId}` : "none"}`
+        ];
+        return `${meta.join("\n")}\n\nNotes:\n${notes.length ? notes.join("\n") : "No internal notes yet."}`;
+    },
+    ticketmerge: async (interaction) => {
+        const guildError = requireGuild(interaction);
+        if (guildError)
+            return guildError;
+        const member = interaction.member;
+        if (!member || !canManageTicketActions(member))
+            return "Only admins or the handler role can merge tickets.";
+        const parentId = interaction.options.getInteger("parent_ticket_id", true);
+        const childId = interaction.options.getInteger("child_ticket_id", true);
+        if (parentId === childId)
+            return "Parent and child ticket IDs must differ.";
+        const parent = findTicketById(parentId);
+        const child = findTicketById(childId);
+        if (!parent || !child || parent.guildId !== interaction.guildId || child.guildId !== interaction.guildId) {
+            return "Parent/child ticket was not found in this guild.";
+        }
+        child.mergedIntoTicketId = parent.id;
+        child.linkedTicketId = parent.id;
+        child.updatedAt = Date.now();
+        parent.childTicketIds = Array.from(new Set([...(parent.childTicketIds || []), child.id]));
+        parent.updatedAt = Date.now();
+        if (!saveTicketStore())
+            return "Unable to persist merge due to a store conflict. Please retry.";
+        appendAuditEvent("ticket_merge", { guildId: interaction.guildId, parentId, childId, actorId: interaction.user.id });
+        return `Merged child ticket #${child.id} into parent #${parent.id}.`;
+    },
+    ticketlink: async (interaction) => {
+        const guildError = requireGuild(interaction);
+        if (guildError)
+            return guildError;
+        const member = interaction.member;
+        if (!member || !canManageTicketActions(member))
+            return "Only admins or the handler role can link tickets.";
+        const parentId = interaction.options.getInteger("parent_ticket_id", true);
+        const target = resolveTicketTargetChannelId(interaction);
+        if (target.error || !target.channelId)
+            return target.error || "Unable to resolve ticket channel.";
+        const child = findTicketByChannel(target.channelId);
+        const parent = findTicketById(parentId);
+        if (!child || !parent || parent.guildId !== interaction.guildId || child.guildId !== interaction.guildId)
+            return "Parent/child ticket not found.";
+        child.parentTicketId = parent.id;
+        child.linkedTicketId = parent.id;
+        child.updatedAt = Date.now();
+        parent.childTicketIds = Array.from(new Set([...(parent.childTicketIds || []), child.id]));
+        parent.updatedAt = Date.now();
+        if (!saveTicketStore())
+            return "Unable to persist link due to a store conflict. Please retry.";
+        appendAuditEvent("ticket_link", { guildId: interaction.guildId, parentId: parent.id, childId: child.id, actorId: interaction.user.id });
+        return `Linked ticket #${child.id} under parent #${parent.id}.`;
+    },
+    ticketexport: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        const cfg = ensureTicketConfig(guild.id);
+        const sink = cfg.exportWebhookUrl || TICKET_EXPORT_WEBHOOK_URL;
+        if (!sink)
+            return "No export webhook configured. Set one in ticket config env or /ticketconfig updates.";
+        const limit = Math.max(1, Math.min(50, interaction.options.getInteger("limit") || 10));
+        const resolved = ticketStore.tickets
+            .filter(ticket => ticket.guildId === guild.id && ticket.status === "resolved")
+            .sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0))
+            .slice(0, limit);
+        if (!resolved.length)
+            return "No resolved tickets available for export.";
+        let sent = 0;
+        for (const ticket of resolved) {
+            const ok = await postJsonToWebhook(sink, { type: "ticket_export", guildId: guild.id, ticket });
+            if (ok)
+                sent += 1;
+        }
+        appendAuditEvent("ticket_export_batch", { guildId: guild.id, requested: limit, sent, total: resolved.length });
+        return `Exported ${sent}/${resolved.length} resolved tickets.`;
+    },
+    ticketretention: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        const cfg = ensureTicketConfig(guild.id);
+        const days = interaction.options.getInteger("days");
+        if (typeof days === "number") {
+            cfg.retentionDays = Math.max(1, Math.min(3650, days));
+            saveTicketStore();
+        }
+        const purgeNow = interaction.options.getBoolean("purge_now") || false;
+        const removed = purgeNow ? purgeResolvedTicketsByRetention(guild.id) : 0;
+        return [
+            `Retention: ${cfg.retentionDays || 45} day(s)`,
+            `Reopen window: ${cfg.reopenWindowHours || 72} hour(s)`,
+            purgeNow ? `Purged resolved tickets: ${removed}` : "Purge not requested"
+        ].join("\n");
+    },
+    daily: async (interaction) => {
+        const userId = interaction.user.id;
+        (0, utils_1.ensureUser)(userId);
+        const reward = (0, economy_1.claimDaily)(userId);
+        if (!reward) {
+            return "You already claimed daily rewards. Try again tomorrow.";
+        }
+        return `Daily claimed: +${reward.bonus} XP and +${reward.tokenBonus} FN Token$. Streak: ${reward.streak} days.`;
+    },
+    leaderboard: async () => buildLeaderboardPayload(),
+    loadout: async (interaction) => {
+        trackRaidCommandUsage("loadout");
+        const condition = RaidDomain.rollRaidCondition();
+        const mapCfg = resolveRaidMap("plagued_cemetary");
+        return RaidRuntime.formatLoadoutSummary({ userId: interaction.user.id, condition, mapCfg, getInventoryCount: utils_1.getInventoryCount, getBestOwnedGear });
+    },
+    bosses: async () => {
+        trackRaidCommandUsage("bosses");
+        return buildBossRosterPayload();
+    },
+    conditions: async () => {
+        trackRaidCommandUsage("conditions");
+        return buildConditionsPayload();
+    },
+    gearintel: async (interaction) => {
+        trackRaidCommandUsage("gearintel");
+        const kind = interaction.options.getString("kind") || "all";
+        const condition = interaction.options.getString("condition");
+        return buildGearIntelPayload(kind, condition);
+    },
+    raidintel: async (interaction) => {
+        trackRaidCommandUsage("raidintel");
+        const mapRaw = interaction.options.getString("map") || "plagued_cemetary";
+        const selectedWeaponId = interaction.options.getString("weapon");
+        const selectedArmorId = interaction.options.getString("armor");
+        const mapCfg = resolveRaidMap(mapRaw);
+        const condition = RaidDomain.rollRaidCondition();
+        const details = RaidRuntime.formatLoadoutSummary({ userId: interaction.user.id, condition, mapCfg, selectedWeaponId, selectedArmorId, getInventoryCount: utils_1.getInventoryCount, getBestOwnedGear });
+        if (details.startsWith("Selected weapon") || details.startsWith("Selected armor") || details.startsWith("You do not own")) {
+            return details;
+        }
+        const lowProj = mapProjection(mapCfg, "low");
+        const medProj = mapProjection(mapCfg, "medium");
+        const highProj = mapProjection(mapCfg, "high");
+        const previewBonus = RaidRuntime.getRaidLoadoutBonus({ userId: interaction.user.id, condition, selectedWeaponId, selectedArmorId, getInventoryCount: utils_1.getInventoryCount, getBestOwnedGear });
+        const effectiveConditionSuccess = previewBonus.error || !previewBonus.negatedCondition ? condition.successDelta : 0;
+        const effectiveConditionToken = previewBonus.error || !previewBonus.negatedCondition ? condition.tokenMultiplierDelta : 0;
+        const effectiveConditionXp = previewBonus.error || !previewBonus.negatedCondition ? condition.xpMultiplier : 1;
+        return [
+            `Map Intel: ${mapCfg.label} (${mapCfg.difficulty})`,
+            mapCfg.description,
+            `Loot Tier: ${mapCfg.lootTier} | Recommended Tension: ${mapCfg.recommendedTension}`,
+            `Map Base Success Delta: ${(mapCfg.successDelta * 100).toFixed(1)}%`,
+            `Map Token Delta: ${(mapCfg.tokenMultiplierDelta * 100).toFixed(1)}%`,
+            `Map Raid XP Multiplier: ${mapCfg.xpMultiplier.toFixed(2)}x`,
+            `Boss Spawn Chance: ${(mapCfg.bossSpawnChance * 100).toFixed(1)}% | Favored Boss: ${mapCfg.bossName} | Rotation Pool: ${RAID_BOSS_ROSTER.length} bosses`,
+            `Projected Low: ${lowProj.successPct}% success | ~${lowProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${lowProj.xpBand[0]}-${lowProj.xpBand[1]} | EV@100 ${lowProj.expectedNetAt100 >= 0 ? `+${lowProj.expectedNetAt100}` : lowProj.expectedNetAt100} tokens | Boss kit ~${lowProj.bossKitDropChancePct}% | Boss bonus XP ~${lowProj.expectedBossBonusXp}`,
+            `Projected Medium: ${medProj.successPct}% success | ~${medProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${medProj.xpBand[0]}-${medProj.xpBand[1]} | EV@100 ${medProj.expectedNetAt100 >= 0 ? `+${medProj.expectedNetAt100}` : medProj.expectedNetAt100} tokens | Boss kit ~${medProj.bossKitDropChancePct}% | Boss bonus XP ~${medProj.expectedBossBonusXp}`,
+            `Projected High: ${highProj.successPct}% success | ~${highProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${highProj.xpBand[0]}-${highProj.xpBand[1]} | EV@100 ${highProj.expectedNetAt100 >= 0 ? `+${highProj.expectedNetAt100}` : highProj.expectedNetAt100} tokens | Boss kit ~${highProj.bossKitDropChancePct}% | Boss bonus XP ~${highProj.expectedBossBonusXp}`,
+            "",
+            `Raid Intel Trigger: ${condition.label}`,
+            condition.description,
+            `Base Trigger Success Delta: ${(condition.successDelta * 100).toFixed(1)}% | Effective: ${(effectiveConditionSuccess * 100).toFixed(1)}%`,
+            `Base Trigger Token Delta: ${(condition.tokenMultiplierDelta * 100).toFixed(1)}% | Effective: ${(effectiveConditionToken * 100).toFixed(1)}%`,
+            `Base Trigger Raid XP Multiplier: ${condition.xpMultiplier.toFixed(2)}x | Effective: ${effectiveConditionXp.toFixed(2)}x`,
+            "",
+            details
+        ].join("\n");
+    },
+    raid: async (interaction) => {
+        trackRaidCommandUsage("raid");
+        const userId = interaction.user.id;
+        (0, utils_1.ensureUser)(userId);
+        const bet = interaction.options.getInteger("bet", true);
+        const tension = interaction.options.getString("tension") || "medium";
+        const mapRaw = interaction.options.getString("map") || "plagued_cemetary";
+        const selectedWeaponId = interaction.options.getString("weapon");
+        const selectedArmorId = interaction.options.getString("armor");
+        const mapCfg = resolveRaidMap(mapRaw);
+        if (!["low", "medium", "high"].includes(tension))
+            return "Tension must be low, medium, or high.";
+        const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId);
+        if (result.error)
+            return result.error;
+        const [tensionLabel] = (result.tension || tension).split(" | ");
+        recordRaidTelemetry({
+            mapLabel: result.mapLabel || mapCfg.label,
+            mapDifficulty: result.mapDifficulty || mapCfg.difficulty,
+            conditionLabel: result.conditionLabel || "unknown",
+            tensionLabel,
+            success: Boolean(result.success),
+            successChance: result.successChance || 0,
+            bet,
+            net: result.net || 0,
+            baseRewardTokens: result.baseRewardTokens || 0,
+            outcomeBonusTokens: result.outcomeBonusTokens || 0,
+            bossBonusTokens: result.bossBonusTokens || 0,
+            failureMitigationTokens: result.failureMitigationTokens || 0,
+            loot: result.loot || [],
+            bossSpawned: result.bossSpawned,
+            bossDefeated: result.bossDefeated
+        });
+        const raidBroadcast = interaction.guild
+            ? buildRaidUnlockBroadcastEmbed({ user: interaction.user, result })
+            : null;
+        if (interaction.guild && raidBroadcast) {
+            void sendOpsBroadcastEmbed(interaction.guild, raidBroadcast);
+            appendAuditEvent("raid_unlock_broadcast", {
+                guildId: interaction.guild.id,
+                userId: interaction.user.id,
+                mapLabel: result.mapLabel || mapCfg.label,
+                bossHeartUnlockedName: result.bossHeartUnlockedName || null,
+                pmcTierUnlockedLabel: result.pmcTierUnlockedLabel || null
+            });
+        }
+        return (0, payloads_1.buildRaidResultPayload)({ result, mapCfg, fallbackTension: tensionLabel, armyIconUrl: ARMY_ICON_URL });
+    },
+    raidhistory: async (interaction) => {
+        trackRaidCommandUsage("raidhistory");
+        return buildRaidHistoryPayload(interaction.user.id);
+    },
+    shop: async (interaction) => {
+        const user = (0, utils_1.ensureUser)(interaction.user.id);
+        return (0, payloads_1.buildShopPayload)({
+            shopItemIds: catalog_1.SHOP_ITEMS,
+            inventory: user.inventory,
+            wallet: user.fnTokens
+        });
+    },
+    inventory: async (interaction) => {
+        return (0, payloads_1.buildInventoryPayload)({ inventory: (0, utils_1.ensureUser)(interaction.user.id).inventory, wallet: (0, utils_1.getTokens)(interaction.user.id) });
+    },
+    buy: async (interaction) => {
+        const item = interaction.options.getString("item", true).trim().toLowerCase();
+        const qty = interaction.options.getInteger("quantity", true);
+        const res = buyItem(interaction.user.id, item, qty);
+        if (res.error)
+            return res.error;
+        return (0, payloads_1.buildTradeActionPayload)({
+            title: "🛒 Procurement Confirmed",
+            color: 0x16a34a,
+            description: "Armory purchase accepted and inventory updated.",
+            summaryLines: [
+                `Item: ${catalog_1.ITEM_DEFS[item].name} (${item})`,
+                `Quantity: ${qty}`,
+                `Cost: ${res.cost} FN Token$`,
+                `Owned After Purchase: ${res.total}`
+            ],
+            nextSteps: ["• /inventory", "• /loadout", "• /raidintel"]
+        });
+    },
+    sell: async (interaction) => {
+        const item = interaction.options.getString("item");
+        const qty = interaction.options.getInteger("quantity") || 1;
+        if (!item) {
+            return (0, payloads_1.buildSellPickerPayload)({ inventory: (0, utils_1.ensureUser)(interaction.user.id).inventory, menuId: SELL_UI_IDS.menu });
+        }
+        const res = sellItem(interaction.user.id, item, qty);
+        if (res.error)
+            return res.error;
+        return (0, payloads_1.buildTradeActionPayload)({
+            title: "💸 Vendor Sale Completed",
+            color: 0x0f766e,
+            description: "Marketplace sale executed and wallet balance updated.",
+            summaryLines: [
+                `Item: ${catalog_1.ITEM_DEFS[item].name} (${item})`,
+                `Quantity Sold: ${qty}`,
+                `Payout: ${res.payout} FN Token$`,
+                `Remaining: ${res.remaining}`
+            ],
+            nextSteps: ["• /inventory", "• /sell", "• /shop"]
+        });
+    },
+    opencrate: async (interaction) => {
+        trackRaidCommandUsage("opencrate");
+        const hadExplicitCrate = Boolean(interaction.options.getString("crate"));
+        let crate = interaction.options.getString("crate");
+        if (!crate) {
+            const autoCrate = pickBestOwnedCrate(interaction.user.id);
+            if (!autoCrate) {
+                return `No crates available to open.\n\nOwned crates:\n${formatOwnedCratesForPrompt(interaction.user.id)}`;
+            }
+            crate = autoCrate;
+        }
+        if (!OPENABLE_CRATE_IDS.includes(crate)) {
+            return `Invalid crate id: ${crate}\n\nOwned crates:\n${formatOwnedCratesForPrompt(interaction.user.id)}`;
+        }
+        if ((0, utils_1.getInventoryCount)(interaction.user.id, crate) < 1) {
+            return `You do not own any ${catalog_1.ITEM_DEFS[crate].name}.\n\nOwned crates:\n${formatOwnedCratesForPrompt(interaction.user.id)}`;
+        }
+        const res = openCrate(interaction.user.id, crate);
+        if (res.error)
+            return `${res.error}\n\nOwned crates:\n${formatOwnedCratesForPrompt(interaction.user.id)}`;
+        recordCrateTelemetry(crate, !hadExplicitCrate, res.contents || []);
+        const remaining = (0, utils_1.getInventoryCount)(interaction.user.id, crate);
+        return (0, payloads_1.buildCrateOpenPayload)({
+            crateId: crate,
+            contents: res.contents || [],
+            remaining,
+            autoSelected: !hadExplicitCrate
+        });
+    },
+    useitem: async (interaction) => {
+        trackRaidCommandUsage("useitem");
+        const hadExplicitItem = Boolean(interaction.options.getString("item"));
+        let item = interaction.options.getString("item");
+        const quantity = interaction.options.getInteger("quantity") || 1;
+        if (!item) {
+            const autoItem = pickBestUsableItem(interaction.user.id);
+            if (!autoItem) {
+                return `No usable consumables available right now.\n\nOwned usable items:\n${formatOwnedUsableItemsForPrompt(interaction.user.id)}`;
+            }
+            item = autoItem;
+        }
+        const itemDef = catalog_1.ITEM_DEFS[item];
+        if (!itemDef || itemDef.kind !== "consumable") {
+            return `That item cannot be used with /useitem.\n\nOwned usable items:\n${formatOwnedUsableItemsForPrompt(interaction.user.id)}`;
+        }
+        const owned = (0, utils_1.getInventoryCount)(interaction.user.id, item);
+        if (owned < 1) {
+            return `You do not own any ${itemDef.name}.\n\nOwned usable items:\n${formatOwnedUsableItemsForPrompt(interaction.user.id)}`;
+        }
+        let useQty = Math.max(1, Math.floor(quantity));
+        let adjustmentNote = "";
+        if (useQty > owned) {
+            useQty = owned;
+            adjustmentNote = `Quantity adjusted to owned amount (${owned}).`;
+        }
+        if (item === "repair_kit") {
+            const scrapOwned = (0, utils_1.getInventoryCount)(interaction.user.id, "scrap");
+            const maxByScrap = Math.floor(scrapOwned / 6);
+            if (maxByScrap < 1) {
+                return `You need at least 6 scrap to use ${itemDef.name}.\n\nOwned usable items:\n${formatOwnedUsableItemsForPrompt(interaction.user.id)}`;
+            }
+            if (useQty > maxByScrap) {
+                useQty = maxByScrap;
+                adjustmentNote = `Quantity adjusted to ${useQty} based on current scrap reserves.`;
+            }
+        }
+        const res = useItem(interaction.user.id, item, useQty);
+        if (res.error) {
+            recordConsumableTelemetry(item, useQty, !hadExplicitItem, true);
+            return `${res.error}\n\nOwned usable items:\n${formatOwnedUsableItemsForPrompt(interaction.user.id)}`;
+        }
+        recordConsumableTelemetry(item, useQty, !hadExplicitItem, false);
+        const resultText = res.result || `Used ${useQty}x ${itemDef.name}.`;
+        return (0, payloads_1.buildConsumableUsePayload)({
+            itemId: item,
+            quantity: useQty,
+            resultText,
+            autoSelected: !hadExplicitItem,
+            adjustmentNote: adjustmentNote || undefined
+        });
+    },
+    dice: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const choice = interaction.options.getString("choice", true);
+        return playDice(interaction.user.id, bet, choice);
+    },
+    roulette: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const choice = interaction.options.getString("choice", true);
+        return playRoulette(interaction.user.id, bet, choice);
+    },
+    blackjack: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const style = interaction.options.getString("style") || "safe";
+        return playBlackjack(interaction.user.id, bet, style);
+    },
+    crash: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const target = interaction.options.getNumber("target", true);
+        return await playCrash(interaction.user.id, bet, target);
+    },
+    slots: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const lines = interaction.options.getInteger("lines", true);
+        return playSlots(interaction.user.id, bet, lines);
+    },
+    coinflip: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const side = interaction.options.getString("side", true);
+        return playCoinflip(interaction.user.id, bet, side);
+    },
+    baccarat: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const side = interaction.options.getString("side", true);
+        return playBaccarat(interaction.user.id, bet, side);
+    },
+    hilo: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const call = interaction.options.getString("call", true);
+        return playHiLo(interaction.user.id, bet, call);
+    },
+    keno: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        const picks = interaction.options.getString("picks", true);
+        return playKeno(interaction.user.id, bet, picks);
+    },
+    addpoints: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const user = interaction.options.getUser("user", true);
+        const amount = interaction.options.getInteger("amount", true);
+        const addPointsDedupeError = rejectIfDuplicateCommand(interaction, `addpoints:user:${user.id}:amount:${amount}`);
+        if (addPointsDedupeError)
+            return addPointsDedupeError;
+        const total = (0, utils_1.addPoints)(user.id, amount);
+        await sendModLog(interaction.guildId, "Access Points Added", [
+            { name: "Admin", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Target", value: `<@${user.id}>`, inline: true },
+            { name: "Amount", value: `${amount}`, inline: true },
+            { name: "New Total", value: `${total}`, inline: true }
+        ]);
+        return `${user.username} now has ${total} Access Points.`;
+    },
+    pointsuser: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const user = interaction.options.getUser("user", true);
+        return `${user.username} has ${(0, utils_1.getPoints)(user.id)} Access Points.`;
+    },
+    timeout: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const target = interaction.options.getUser("user", true);
+        const timeoutDedupeError = rejectIfDuplicateCommand(interaction, `timeout:user:${target.id}`);
+        if (timeoutDedupeError)
+            return timeoutDedupeError;
+        const member = interaction.guild ? await interaction.guild.members.fetch(target.id).catch(() => null) : null;
+        if (!member)
+            return "Unable to find that member in this server.";
+        await member.timeout(5 * 60 * 1000, "Timeout by administrator action");
+        await sendModLog(interaction.guildId, "Timeout", [
+            { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Target", value: `<@${target.id}>`, inline: true },
+            { name: "Duration", value: "5m", inline: true },
+            { name: "Reason", value: "Timeout by administrator action" }
+        ]);
+        return `${target.username} has been timed out for 5 minutes.`;
+    },
+    kick: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const target = interaction.options.getUser("user", true);
+        const kickDedupeError = rejectIfDuplicateCommand(interaction, `kick:user:${target.id}`);
+        if (kickDedupeError)
+            return kickDedupeError;
+        const member = interaction.guild ? await interaction.guild.members.fetch(target.id).catch(() => null) : null;
+        if (!member)
+            return "Unable to find that member in this server.";
+        await member.kick("Kick by administrator action");
+        await sendModLog(interaction.guildId, "Kick", [
+            { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Target", value: `<@${target.id}>`, inline: true },
+            { name: "Reason", value: "Kick by administrator action" }
+        ]);
+        return `${target.username} has been kicked.`;
+    },
+    ban: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const target = interaction.options.getUser("user", true);
+        const banDedupeError = rejectIfDuplicateCommand(interaction, `ban:user:${target.id}`);
+        if (banDedupeError)
+            return banDedupeError;
+        const member = interaction.guild ? await interaction.guild.members.fetch(target.id).catch(() => null) : null;
+        if (!member)
+            return "Unable to find that member in this server.";
+        await member.ban({ reason: "Ban by administrator action" });
+        await sendModLog(interaction.guildId, "Ban", [
+            { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Target", value: `<@${target.id}>`, inline: true },
+            { name: "Reason", value: "Ban by administrator action" }
+        ]);
+        return `${target.username} has been banned.`;
+    },
+    setmodlog: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.setmodlog(interaction);
+    },
+    setlockdown: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.setlockdown(interaction);
+    },
+    lockdownnotice: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.lockdownnotice(interaction);
+    },
+    modconfig: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.modconfig(interaction);
+    },
+    warn: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.warn(interaction);
+    },
+    warnings: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.warnings(interaction);
+    },
+    clearwarnings: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.clearwarnings(interaction);
+    },
+    tempban: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.tempban(interaction);
+    },
+    purge: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.purge(interaction);
+    },
+    announce: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        return await moderationCommandHandlers.announce(interaction);
+    }
+};
+client.once("clientReady", async () => {
+    console.log(`Logged in as ${client.user?.tag ?? "unknown-user"}`);
+    updateBotPresence();
+    console.log(`[startup] ${(0, health_1.buildStartupSummary)(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
+    appendAuditEvent("startup", {
+        userTag: client.user?.tag,
+        guildCount: client.guilds.cache.size
+    });
+    // Keep this bot guild-scoped to avoid duplicate global+guild slash entries.
+    await client.application?.commands.set([]).catch(() => undefined);
+    if (DISCORD_GUILD_ID) {
+        const guild = await client.guilds.fetch(DISCORD_GUILD_ID).catch(() => null);
+        if (guild) {
+            await guild.commands.set(slashCommands);
+            console.log(`Registered slash commands for guild ${guild.id}`);
+            await ensurePermanentTicketPanelForGuild(guild);
+            await ensureBotFeatureBriefForGuild(guild);
+        }
+        else {
+            console.warn("DISCORD_GUILD_ID is set but the guild could not be fetched.");
+        }
+        return;
+    }
+    if (client.guilds.cache.size > 0) {
+        for (const guild of client.guilds.cache.values()) {
+            await guild.commands.set(slashCommands).catch(() => undefined);
+            await ensurePermanentTicketPanelForGuild(guild);
+            await ensureBotFeatureBriefForGuild(guild);
+        }
+        console.log(`Registered slash commands in ${client.guilds.cache.size} guild(s) for instant updates.`);
+    }
+    console.log("Global slash commands cleared to prevent duplicate command entries.");
+    console.log("Guild-only slash commands are active.");
+});
+setInterval(() => {
+    checkpointState("interval_30s");
+}, 30000).unref();
+setInterval(() => {
+    updateBotPresence();
+}, 10 * 60 * 1000).unref();
+if (COMMAND_IDEMPOTENCY_WINDOW_MS > 0) {
+    setInterval(() => {
+        pruneRecentCommandExecutions();
+    }, Math.max(5000, COMMAND_IDEMPOTENCY_WINDOW_MS)).unref();
+}
+setInterval(() => {
+    void sendAutomatedHealthReport("interval_24h");
+}, DAILY_HEALTH_REPORT_MS).unref();
+setInterval(() => {
+    void runHealthWatchdog("interval_10m");
+}, HEALTH_WATCHDOG_INTERVAL_MS).unref();
+setInterval(() => {
+    void sendAutomatedBalanceReport("interval_7d");
+}, WEEKLY_BALANCE_REPORT_MS).unref();
+setTimeout(() => {
+    void sendAutomatedHealthReport("startup_warmup");
+}, 90000).unref();
+setTimeout(() => {
+    void runHealthWatchdog("startup_warmup");
+}, 45000).unref();
+setTimeout(() => {
+    void sendAutomatedBalanceReport("startup_warmup");
+}, 120000).unref();
+process.on("SIGINT", () => {
+    recordRuntimeShutdown("sigint");
+    checkpointState("sigint");
+    releaseInstanceLock();
+    process.exit(0);
+});
+process.on("SIGTERM", () => {
+    recordRuntimeShutdown("sigterm");
+    checkpointState("sigterm");
+    releaseInstanceLock();
+    process.exit(0);
+});
+process.on("beforeExit", () => {
+    recordRuntimeShutdown("before_exit");
+    checkpointState("before_exit");
+    releaseInstanceLock();
+});
+process.on("uncaughtException", error => {
+    recordRuntimeShutdown("uncaught_exception");
+    appendAuditEvent("uncaught_exception", { message: error.message, stack: error.stack });
+    checkpointState("uncaught_exception");
+    releaseInstanceLock();
+});
+process.on("unhandledRejection", reason => {
+    recordRuntimeShutdown("unhandled_rejection");
+    appendAuditEvent("unhandled_rejection", { reason: String(reason) });
+    checkpointState("unhandled_rejection");
+    releaseInstanceLock();
+});
+client.on("interactionCreate", async (interaction) => {
+    if (interaction.isAutocomplete()) {
+        const focused = interaction.options.getFocused(true);
+        let options = [];
+        if (["raid", "raidintel"].includes(interaction.commandName) && (focused.name === "weapon" || focused.name === "armor")) {
+            const kind = focused.name === "weapon" ? "weapon" : "armor";
+            options = getRaidGearAutocompleteOptions(interaction.user.id, kind, String(focused.value || ""));
+        }
+        else if (interaction.commandName === "buy" && focused.name === "item") {
+            options = getShopItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
+        }
+        else if (interaction.commandName === "tradeoffer" && focused.name === "offer_item") {
+            options = getTradeOfferItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
+        }
+        else if (interaction.commandName === "tradeoffer" && focused.name === "request_item") {
+            options = getTradeRequestItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
+        }
+        else if (interaction.commandName === "tradeaccept" && focused.name === "offer_id") {
+            options = getTradeOfferAutocompleteOptions(interaction.user.id, String(focused.value || ""), "incoming");
+        }
+        else if (interaction.commandName === "tradedecline" && focused.name === "offer_id") {
+            options = getTradeOfferAutocompleteOptions(interaction.user.id, String(focused.value || ""), "all");
+        }
+        else if (interaction.commandName === "opencrate" && focused.name === "crate") {
+            options = getOpenCrateAutocompleteOptions(interaction.user.id, String(focused.value || ""));
+        }
+        else if (interaction.commandName === "useitem" && focused.name === "item") {
+            options = getUseItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
+        }
+        else if (interaction.commandName === "sell" && focused.name === "item") {
+            options = getSellItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
+        }
+        else {
+            return;
+        }
+        await interaction.respond(options).catch(() => undefined);
+        return;
+    }
+    if (interaction.isChatInputCommand() && interaction.commandName === "ticketintake") {
+        const guildError = requireGuild(interaction);
+        if (guildError) {
+            await interaction.reply({ content: guildError, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(buildTicketIntakeModal()).catch(async () => {
+            await interaction.reply({ content: "Unable to open intake modal right now.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId === TICKET_IDS.intakeModal) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Ticket intake can only be used in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const summary = interaction.fields.getTextInputValue(TICKET_IDS.intakeSummary) || "General support";
+        const category = interaction.fields.getTextInputValue(TICKET_IDS.intakeCategory) || "general";
+        const details = interaction.fields.getTextInputValue(TICKET_IDS.intakeDetails) || "";
+        const platform = interaction.fields.getTextInputValue(TICKET_IDS.intakePlatform) || "";
+        const evidence = interaction.fields.getTextInputValue(TICKET_IDS.intakeEvidence) || "";
+        const reason = (0, ticketEnhancements_1.buildTicketIntakeReason)({ category, summary, details, platform, evidence });
+        const priority = category.toLowerCase().includes("billing") ? "high" : "normal";
+        const created = await createTicketChannel(guild, interaction.user.id, reason, priority, false);
+        if (created.error) {
+            await interaction.reply({ content: created.error, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const ticket = created.channelId ? findTicketByChannel(created.channelId) : null;
+        await interaction.reply({
+            embeds: [buildTicketCommandEmbed("🎫 Intake Submitted", "Your structured support request was submitted successfully.", ticket || undefined, [
+                    { name: "Category", value: (0, ticketEnhancements_1.classifyTicketCategory)(category), inline: true },
+                    { name: "Summary", value: summary.slice(0, 120), inline: false },
+                    { name: "KB References", value: (0, ticketEnhancements_1.getKbSuggestions)(reason).map(item => `• ${item}`).join("\n"), inline: false }
+                ])],
+            flags: discord_js_1.MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(`${TICKET_IDS.csatPrefix}:`)) {
+        const parts = interaction.customId.split(":");
+        const ticketId = Number(parts[1]);
+        const rating = Math.max(1, Math.min(5, Number(parts[2]) || 5));
+        const ticket = findTicketById(ticketId);
+        if (!ticket) {
+            if (interaction.guildId) {
+                await interaction.reply({ content: "Ticket was not found for this feedback.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            }
+            else {
+                await interaction.reply({ content: "Ticket was not found for this feedback." }).catch(() => undefined);
+            }
+            return;
+        }
+        ticket.csat = {
+            rating,
+            submittedAt: Date.now(),
+            submittedById: interaction.user.id
+        };
+        ticket.updatedAt = Date.now();
+        const saved = saveTicketStore();
+        if (!saved) {
+            if (interaction.guildId) {
+                await interaction.reply({ content: "Unable to save feedback due to a store conflict. Please try again.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            }
+            else {
+                await interaction.reply({ content: "Unable to save feedback due to a store conflict. Please try again." }).catch(() => undefined);
+            }
+            return;
+        }
+        appendAuditEvent("ticket_csat", {
+            ticketId: ticket.id,
+            guildId: ticket.guildId,
+            rating,
+            submittedById: interaction.user.id
+        });
+        if (interaction.guildId) {
+            await interaction.reply({ content: `Thanks for rating ticket #${ticket.id} with ${rating}/5.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        }
+        else {
+            await interaction.reply({ content: `Thanks for rating ticket #${ticket.id} with ${rating}/5.` }).catch(() => undefined);
+        }
+        return;
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId === HELP_IDS.menu) {
+        const selected = interaction.values[0];
+        const page = ["general", "xp", "raids", "shop", "games", "bank", "moderation"].includes(selected)
+            ? selected
+            : "general";
+        const payload = await buildHelpPayload(page, interaction.guild);
+        try {
+            const embed = embedFromPayload("help", payload.embed, interaction.user);
+            await interaction.update({ embeds: [embed], components: helpDropdown(page) });
+        }
+        catch (error) {
+            if (!isUnknownInteractionError(error)) {
+                console.error("Help menu interaction failed:", error);
+            }
+        }
+        return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(`${CASINO_UI_IDS.prefix}:`)) {
+        const parsedAction = parseCasinoActionCustomId(interaction.customId);
+        if (!parsedAction) {
+            await interaction.reply({ content: "This casino action is invalid or expired.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (parsedAction.ownerId !== interaction.user.id) {
+            await interaction.reply({ content: "These controls belong to another player. Run your own casino command to get personal quick actions.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const throttleError = rejectIfRateLimitedForCasinoAction(interaction.guildId, interaction.user.id, parsedAction.gameKey);
+        if (throttleError) {
+            await interaction.reply({ content: "Action cooldown active. Wait a moment before triggering another casino quick action.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const actionResult = await runCasinoQuickAction({
+            userId: interaction.user.id,
+            action: parsedAction.action,
+            gameKey: parsedAction.gameKey,
+            bet: parsedAction.bet,
+            arg: parsedAction.arg
+        });
+        try {
+            const parsedPayload = JSON.parse(actionResult.payload);
+            if (parsedPayload && parsedPayload.embed) {
+                const embed = embedFromPayload(actionResult.gameKey, parsedPayload.embed, interaction.user);
+                await interaction.reply({
+                    embeds: [embed],
+                    components: Array.isArray(parsedPayload.components) ? parsedPayload.components : [],
+                    flags: discord_js_1.MessageFlags.Ephemeral
+                }).catch(() => undefined);
+                return;
+            }
+        }
+        catch {
+            // Fall through to text rendering.
+        }
+        await interaction.reply({
+            embeds: [embedFromText(actionResult.gameKey, actionResult.payload, interaction.user)],
+            flags: discord_js_1.MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId === SELL_UI_IDS.menu) {
+        const itemId = interaction.values[0] || "";
+        const item = catalog_1.ITEM_DEFS[itemId];
+        const owned = (0, utils_1.getInventoryCount)(interaction.user.id, itemId);
+        if (!item || owned < 1) {
+            await interaction.update({
+                embeds: [embedFromText("sell", "That item is no longer available to sell. Run /sell again.", interaction.user)],
+                components: []
+            }).catch(() => undefined);
+            return;
+        }
+        const unitPayout = Math.max(1, Math.floor(item.price * 0.6));
+        const qtyChoices = [1, 5, 10].filter(q => q <= owned);
+        const row = new discord_js_1.ActionRowBuilder().addComponents(...qtyChoices.map(q => new discord_js_1.ButtonBuilder()
+            .setCustomId(`${SELL_UI_IDS.qtyPrefix}:${itemId}:${q}`)
+            .setLabel(`Sell ${q}`)
+            .setStyle(discord_js_1.ButtonStyle.Secondary)), new discord_js_1.ButtonBuilder()
+            .setCustomId(`${SELL_UI_IDS.qtyPrefix}:${itemId}:all`)
+            .setLabel("Sell All")
+            .setStyle(discord_js_1.ButtonStyle.Danger));
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(0x0e7490)
+            .setTitle("🧾 Confirm Item Sale")
+            .setDescription("Choose how many units to sell.")
+            .addFields({ name: "Item", value: `${item.name} (${item.id})`, inline: false }, { name: "Rarity", value: String(item.rarity || "common"), inline: true }, { name: "Owned", value: `${owned}`, inline: true }, { name: "Per Unit", value: `${unitPayout} FN Token$`, inline: true }, { name: "Max Payout", value: `${unitPayout * owned} FN Token$`, inline: false });
+        await interaction.update({ embeds: [embed], components: [row] }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(`${SELL_UI_IDS.qtyPrefix}:`)) {
+        const parts = interaction.customId.split(":");
+        const itemId = parts[1] || "";
+        const qtyRaw = parts[2] || "1";
+        const item = catalog_1.ITEM_DEFS[itemId];
+        const owned = (0, utils_1.getInventoryCount)(interaction.user.id, itemId);
+        if (!item || owned < 1) {
+            await interaction.update({
+                embeds: [embedFromText("sell", "That item is no longer available to sell. Run /sell again.", interaction.user)],
+                components: []
+            }).catch(() => undefined);
+            return;
+        }
+        const qty = qtyRaw === "all" ? owned : Math.max(1, Math.min(owned, Number.parseInt(qtyRaw, 10) || 1));
+        const result = sellItem(interaction.user.id, itemId, qty);
+        if (result.error) {
+            await interaction.update({ embeds: [embedFromText("sell", result.error, interaction.user)], components: [] }).catch(() => undefined);
+            return;
+        }
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(0x16a34a)
+            .setTitle("💸 Sale Completed")
+            .setDescription(`Sold ${qty}x ${item.name} for ${result.payout} FN Token$.`)
+            .addFields({ name: "Remaining", value: `${result.remaining}`, inline: true }, { name: "Unit Value", value: `${Math.max(1, Math.floor(item.price * 0.6))} FN Token$`, inline: true }, { name: "Tip", value: "Run /sell again to open the picker for another item.", inline: false });
+        await interaction.update({ embeds: [embed], components: [] }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === TICKET_IDS.open) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Tickets can only be opened in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(buildTicketIntakeModal()).catch(async () => {
+            await interaction.reply({ content: "Unable to open intake modal right now.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === TICKET_IDS.close) {
+        const guild = interaction.guild;
+        if (!guild || !interaction.channel) {
+            await interaction.reply({ content: "This action must be used inside a ticket channel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const tracked = await ensureTrackedTicketByChannelId(guild, interaction.channel.id, interaction.user.id);
+        if (!tracked) {
+            await interaction.reply({ content: "This channel is not a tracked ticket and could not be imported.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const ticket = findOpenTicketByChannel(interaction.channel.id);
+        if (!ticket) {
+            await interaction.reply({ content: "This is not an open ticket.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member;
+        if (!member || !canManageTicketActions(member)) {
+            await interaction.reply({ content: "Only admins or the handler role can archive tickets.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const msg = await closeTicketChannel(guild, interaction.channel.id, interaction.user.id, "Archived by support panel action");
+        const archived = findArchivedTicketByChannel(interaction.channel.id);
+        if (archived) {
+            await interaction.reply({
+                embeds: [buildTicketCommandEmbed("🔒 Ticket Archived", "Ticket moved to archive hold queue from panel action.", archived, [
+                        { name: "Archived By", value: `<@${interaction.user.id}>`, inline: true },
+                        { name: "Reason", value: "Archived by support panel action", inline: false },
+                        { name: "Next Step", value: "Use resolve button or `/resolveticket` when fully complete." }
+                    ])],
+                flags: discord_js_1.MessageFlags.Ephemeral
+            }).catch(() => undefined);
+        }
+        else {
+            await interaction.reply({ content: msg, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        }
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === TICKET_IDS.claim) {
+        const guild = interaction.guild;
+        if (!guild || !interaction.channel) {
+            await interaction.reply({ content: "This action must be used inside a ticket channel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member;
+        if (!member || !canManageTicketActions(member)) {
+            await interaction.reply({ content: "Only admins or the handler role can claim tickets.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        // QoL hardening: if this is a valid ticket channel context, ensure it is tracked
+        // before claim to avoid false "not tracked" responses from stale/missing store rows.
+        if (interaction.channel.isTextBased() && interaction.channel.type === discord_js_1.ChannelType.GuildText) {
+            ensureTrackedTicketFromKnownChannel(guild, interaction.channel, interaction.user.id);
+        }
+        let msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
+        if (msg.includes("not a tracked ticket") && interaction.channel.isTextBased() && interaction.channel.type === discord_js_1.ChannelType.GuildText) {
+            ensureTrackedTicketFromKnownChannel(guild, interaction.channel, interaction.user.id);
+            msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
+        }
+        const claimed = findTicketByChannel(interaction.channel.id);
+        if (claimed && msg.toLowerCase().includes("claimed")) {
+            await interaction.reply({
+                embeds: [buildTicketCommandEmbed("🛠️ Ticket Claimed", "Claim succeeded and panel values were updated live.", claimed, [
+                        { name: "Claimed By", value: `<@${interaction.user.id}>`, inline: true },
+                        { name: "Result", value: msg, inline: false },
+                        { name: "Next Step", value: "Assign handler (`/ticketassign`) or update workflow (`/ticketstatus`)." }
+                    ])],
+                flags: discord_js_1.MessageFlags.Ephemeral
+            }).catch(() => undefined);
+        }
+        else {
+            await interaction.reply({ content: msg, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        }
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === TICKET_IDS.resolve) {
+        const guild = interaction.guild;
+        if (!guild || !interaction.channel) {
+            await interaction.reply({ content: "This action must be used inside a ticket channel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const tracked = await ensureTrackedTicketByChannelId(guild, interaction.channel.id, interaction.user.id);
+        if (!tracked) {
+            await interaction.reply({ content: "This channel is not a tracked ticket and could not be imported.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const ticket = findArchivedTicketByChannel(interaction.channel.id);
+        if (!ticket) {
+            await interaction.reply({ content: "This ticket must be archived before it can be permanently resolved.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member;
+        if (!member || !canManageTicketActions(member)) {
+            await interaction.reply({ content: "Only admins or the handler role can permanently resolve tickets.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const msg = await resolveTicketChannel(guild, interaction.channel.id, interaction.user.id, "Resolved by support panel action");
+        const resolved = findTicketByChannel(interaction.channel.id);
+        if (resolved && normalizeTicketStatus(resolved.status) === "resolved") {
+            await interaction.reply({
+                embeds: [buildTicketCommandEmbed("✅ Ticket Resolved Permanently", "Ticket was resolved and closed out from panel action.", resolved, [
+                        { name: "Resolved By", value: `<@${interaction.user.id}>`, inline: true },
+                        { name: "Resolution", value: "Resolved by support panel action", inline: false },
+                        { name: "Transcript", value: resolved.transcript ? "Captured in ticket metadata/logs." : "No transcript snapshot available." }
+                    ])],
+                flags: discord_js_1.MessageFlags.Ephemeral
+            }).catch(() => undefined);
+        }
+        else {
+            await interaction.reply({ content: msg, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        }
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.inventory) {
+        const payload = JSON.parse((0, payloads_1.buildInventoryPayload)({ inventory: (0, utils_1.ensureUser)(interaction.user.id).inventory, wallet: (0, utils_1.getTokens)(interaction.user.id) }));
+        await interaction.reply({
+            embeds: [embedFromPayload("inventory", payload.embed, interaction.user)],
+            flags: discord_js_1.MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.history) {
+        const payload = JSON.parse(buildRaidHistoryPayload(interaction.user.id));
+        await interaction.reply({
+            embeds: [embedFromPayload("raidhistory", payload.embed, interaction.user)],
+            flags: discord_js_1.MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.bosses) {
+        const payload = JSON.parse(buildBossRosterPayload());
+        await interaction.reply({
+            embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
+            flags: discord_js_1.MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+    if (!interaction.isChatInputCommand())
+        return;
+    const handler = commandHandlers[interaction.commandName];
+    if (!handler) {
+        const unknown = embedFromText("unknown", "Unknown command.", interaction.user);
+        try {
+            await interaction.reply({ embeds: [unknown] });
+        }
+        catch (error) {
+            if (!isUnknownInteractionError(error)) {
+                console.error("Unknown command reply failed:", error);
+            }
+        }
+        return;
+    }
+    const throttleError = rejectIfRateLimitedForInteraction(interaction);
+    if (throttleError) {
+        await interaction.reply({ content: throttleError, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+    try {
+        const startedAt = Date.now();
+        await interaction.deferReply();
+        const rawResult = await handler(interaction);
+        const result = typeof rawResult === "string"
+            ? rawResult
+            : JSON.stringify(rawResult ?? "No response returned.");
+        const elapsedMs = Date.now() - startedAt;
+        recordCommandOutcome(interaction.commandName, true, elapsedMs);
+        appendAuditEvent("slash_command", {
+            command: interaction.commandName,
+            userId: interaction.user.id,
+            guildId: interaction.guildId,
+            channelId: interaction.channelId,
+            durationMs: elapsedMs
+        });
+        try {
+            const parsed = JSON.parse(result);
+            if (parsed && parsed.embed && parsed.withHelpNav) {
+                const embed = embedFromPayload(interaction.commandName, parsed.embed, interaction.user);
+                const page = parsed.helpPage || "general";
+                await interaction.editReply({
+                    embeds: [embed],
+                    components: helpDropdown(page),
+                    allowedMentions: { parse: ["roles"] }
+                });
+            }
+            else if (parsed && parsed.embed) {
+                const embed = embedFromPayload(interaction.commandName, parsed.embed, interaction.user);
+                await interaction.editReply({
+                    embeds: [embed],
+                    components: Array.isArray(parsed.components) ? parsed.components : [],
+                    allowedMentions: { parse: ["roles"] }
+                });
+            }
+            else {
+                await interaction.editReply({ embeds: [embedFromText(interaction.commandName, result, interaction.user)] });
+            }
+        }
+        catch {
+            await interaction.editReply({ embeds: [embedFromText(interaction.commandName, result, interaction.user)] });
+        }
+    }
+    catch (error) {
+        if (isUnknownInteractionError(error)) {
+            return;
+        }
+        console.error("Command execution failed:", error);
+        const failureReason = clampText(error instanceof Error ? error.message : String(error), 220);
+        appendAuditEvent("slash_command_error", {
+            command: interaction.commandName,
+            userId: interaction.user.id,
+            guildId: interaction.guildId,
+            channelId: interaction.channelId,
+            reason: failureReason
+        });
+        recordCommandOutcome(interaction.commandName, false, 0);
+        try {
+            const failText = `Command failed: ${failureReason}`;
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply({ embeds: [embedFromText(interaction.commandName, failText, interaction.user)] });
+            }
+            else {
+                await interaction.reply({ embeds: [embedFromText(interaction.commandName, failText, interaction.user)] });
+            }
+        }
+        catch (responseError) {
+            if (!isUnknownInteractionError(responseError)) {
+                console.error("Command failure response could not be sent:", responseError);
+            }
+            // Ignore secondary response errors (e.g. interaction expired)
+        }
+    }
+});
+client.on("messageCreate", async (message) => {
+    if (message.author.bot)
+        return;
+    if (message.guildId) {
+        const state = ensureGuildModeration(message.guildId);
+        if (state.lockdownChannelId && message.channelId === state.lockdownChannelId) {
+            const member = message.member ?? await message.guild?.members.fetch(message.author.id).catch(() => null);
+            const isAdmin = Boolean(member?.permissions?.has(discord_js_1.PermissionFlagsBits.Administrator));
+            if (!isAdmin) {
+                const reason = "Lockdown channel violation: non-admin message sent in protected channel.";
+                await message.delete().catch(() => undefined);
+                if (member) {
+                    await member.ban({ reason }).catch(() => undefined);
+                }
+                await sendModLog(message.guildId, "Lockdown Ban", [
+                    { name: "Target", value: `<@${message.author.id}>`, inline: true },
+                    { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+                    { name: "Reason", value: reason }
+                ]).catch(() => undefined);
+                appendAuditEvent("lockdown_ban", {
+                    guildId: message.guildId,
+                    channelId: message.channelId,
+                    userId: message.author.id,
+                    reason
+                });
+                return;
+            }
+        }
+    }
+    const isCommunicationEvent = message.content.trim().length > 0 ||
+        message.mentions.users.size > 0 ||
+        Boolean(message.reference) ||
+        message.attachments.size > 0;
+    if (isCommunicationEvent) {
+        const nextXp = (0, utils_1.addXP)(message.author.id, 1);
+        appendAuditEvent("engagement_xp", {
+            userId: message.author.id,
+            guildId: message.guildId,
+            channelId: message.channelId,
+            xpDelta: 1,
+            totalXp: nextXp,
+            reference: Boolean(message.reference),
+            mentionCount: message.mentions.users.size,
+            attachmentCount: message.attachments.size
+        });
+        if (message.guild) {
+            const member = message.member ?? await message.guild.members.fetch(message.author.id).catch(() => null);
+            if (member) {
+                await syncMemberXpRoles(member, nextXp);
+                // Retry once with a forced fetch to avoid cache/race misses right at threshold crossings.
+                const refreshed = await message.guild.members.fetch(message.author.id).catch(() => null);
+                if (refreshed) {
+                    await syncMemberXpRoles(refreshed, nextXp);
+                }
+            }
+        }
+    }
+    if (message.content.trim().toLowerCase() === `${PREFIX}ping`) {
+        void message.reply("Pong.");
+    }
+});
+process.on("unhandledRejection", reason => {
+    console.error("Unhandled promise rejection:", reason);
+    recordRuntimeShutdown("unhandled_rejection_late_handler");
+    postOpsAlert("error", "Unhandled promise rejection", {
+        reason: toSafeString(reason)
+    });
+    releaseInstanceLock();
+});
+process.on("uncaughtException", error => {
+    console.error("Uncaught exception:", error);
+    recordRuntimeShutdown("uncaught_exception_late_handler");
+    postOpsAlert("error", "Uncaught exception", {
+        name: error.name,
+        message: error.message
+    });
+    releaseInstanceLock();
+    setTimeout(() => process.exit(1), 250);
+});
+async function bootServices() {
+    const lock = acquireInstanceLock();
+    if (!lock.ok) {
+        console.error(`[preflight] ${lock.reason}`);
+        process.exit(1);
+        return;
+    }
+    const preflight = await runStartupPreflight();
+    for (const warning of preflight.warnings) {
+        console.warn(`[preflight] ${warning}`);
+    }
+    if (preflight.errors.length > 0) {
+        for (const error of preflight.errors) {
+            console.error(`[preflight] ${error}`);
+        }
+        postOpsAlert("error", "Startup preflight failed", {
+            errors: preflight.errors.join(" | "),
+            warnings: preflight.warnings.join(" | ")
+        });
+        process.exit(1);
+        return;
+    }
+    recordRuntimeStartup();
+    await client.login(process.env.DISCORD_TOKEN);
+}
+void bootServices().catch(error => {
+    console.error("Boot failed:", error);
+    recordRuntimeShutdown("boot_failed");
+    postOpsAlert("error", "Boot failed", {
+        reason: toSafeString(error)
+    });
+    process.exit(1);
+});

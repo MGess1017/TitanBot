@@ -1,0 +1,12 @@
+Ticket #30 Transcript
+Guild: Fₙ Fᵣᵢₑₙdₗy ₙₐyggₑᵣₛ™ ₑₓcₗᵤₛᵢᵥₑ (1491266115933048914)
+Channel: ops-3bn8 (1530046224001011753)
+Owner: 1511903830474883270
+Resolved By: 1511903830474883270
+Resolved Reason: Resolved by support panel action
+Exported At: 2026-07-24T02:57:36.367Z
+Messages: 2
+
+--- Messages ---
+[2026-07-24T02:57:29.343Z] FN Dev#6036 (1524100788664926309): <@&1506184638207361145> <@1511903830474883270>
+[2026-07-24T02:57:34.147Z] FN Dev#6036 (1524100788664926309): 🔒 Ticket archived to hold queue. 📝 Reason: Archived by support panel action

@@ -1,0 +1,68 @@
+{
+    "raids": [
+        {
+            "id": 1,
+            "name": "Scav Raid",
+            "description": "A quick raid to gather supplies and loot from abandoned areas.",
+            "duration": "5 minutes",
+            "difficulty": "Easy",
+            "rewards": {
+                "xp": 50,
+                "fnTokens": 10,
+                "loot": [
+                    "Basic Medkit",
+                    "Food Rations",
+                    "Water Bottle"
+                ]
+            }
+        },
+        {
+            "id": 2,
+            "name": "PMC Raid",
+            "description": "A more dangerous raid against other PMCs for high-value loot.",
+            "duration": "10 minutes",
+            "difficulty": "Medium",
+            "rewards": {
+                "xp": 100,
+                "fnTokens": 25,
+                "loot": [
+                    "Weapon Parts",
+                    "Armor Vest",
+                    "High-Quality Medkit"
+                ]
+            }
+        },
+        {
+            "id": 3,
+            "name": "Night Raid",
+            "description": "A stealthy raid during the night, requiring careful planning.",
+            "duration": "8 minutes",
+            "difficulty": "Hard",
+            "rewards": {
+                "xp": 150,
+                "fnTokens": 30,
+                "loot": [
+                    "Night Vision Goggles",
+                    "Rare Weapon",
+                    "Specialized Ammo"
+                ]
+            }
+        },
+        {
+            "id": 4,
+            "name": "Extraction Mission",
+            "description": "A high-stakes mission to extract valuable items from a heavily guarded area.",
+            "duration": "15 minutes",
+            "difficulty": "Very Hard",
+            "rewards": {
+                "xp": 200,
+                "fnTokens": 50,
+                "loot": [
+                    "Gold Bars",
+                    "Rare Artifacts",
+                    "High-End Weapon"
+                ]
+            }
+        }
+    ]
+}

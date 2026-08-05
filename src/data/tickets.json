@@ -1,0 +1,53 @@
+{
+  "nextId": 37,
+  "version": 508,
+  "guildConfigs": {
+    "1491266115933048914": {
+      "supportRoleId": null,
+      "categoryId": null,
+      "logChannelId": null,
+      "archiveCategoryId": "1528248001212973256",
+      "retentionDays": 45,
+      "reopenWindowHours": 72,
+      "exportWebhookUrl": null
+    }
+  },
+  "tickets": [
+    {
+      "id": 36,
+      "guildId": "1491266115933048914",
+      "ownerId": "1511903830474883270",
+      "channelId": "1534499665255333959",
+      "reason": "Panel request",
+      "status": "claimed",
+      "priority": "normal",
+      "workflowStatus": "responded",
+      "claimedById": "1511903830474883270",
+      "assignedToId": "1511903830474883270",
+      "panelMessageId": "1534499666899632311",
+      "firstResponseAt": 1785923662418,
+      "archivedAt": null,
+      "resolvedAt": null,
+      "closedReason": null,
+      "resolvedReason": null,
+      "transcript": null,
+      "createdAt": 1785923629345,
+      "updatedAt": 1785923719836,
+      "category": "general",
+      "tags": [],
+      "linkedTicketId": null,
+      "parentTicketId": null,
+      "childTicketIds": [],
+      "mergedIntoTicketId": null,
+      "reopenUntilAt": null,
+      "reopenedCount": 0,
+      "internalNotes": [],
+      "csat": null,
+      "slaPolicy": {
+        "name": "General",
+        "firstResponseMs": 900000,
+        "resolveMs": 86400000
+      }
+    }
+  ]
+}

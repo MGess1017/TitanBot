@@ -1,0 +1,52 @@
+{
+  "name": "titan-raid-bot",
+  "version": "1.0.0",
+  "description": "A Discord bot for managing XP, FN Token$, and a raid system inspired by Escape from Tarkov.",
+  "main": "src/bot.ts",
+  "scripts": {
+    "start": "ts-node src/bot.ts",
+    "build": "tsc",
+    "dev": "ts-node-dev src/bot.ts",
+    "start:pm2": "npx pm2 start ecosystem.config.cjs --only titan-raid-bot --update-env",
+    "restart:pm2": "npx pm2 restart titan-raid-bot --update-env",
+    "stop:pm2": "npx pm2 stop titan-raid-bot",
+    "logs:pm2": "npx pm2 logs titan-raid-bot --lines 200",
+    "delete:pm2": "npx pm2 delete titan-raid-bot",
+    "test:runtime": "npm run test:runtime:health && npm run test:runtime:economy-raid && npm run test:runtime:ticket-system && npm run test:runtime:ticket-enhancements",
+    "test:runtime:health": "node -r ts-node/register/transpile-only src/runtime/health.test.ts",
+    "test:runtime:economy-raid": "node -r ts-node/register/transpile-only src/runtime/economyRaid.test.ts",
+    "test:runtime:ticket-system": "node -r ts-node/register/transpile-only src/runtime/ticketSystem.test.ts",
+    "test:runtime:ticket-enhancements": "node -r ts-node/register/transpile-only src/runtime/ticketEnhancements.test.ts",
+    "verify:slash-contracts": "node scripts/verify-slash-contracts.js",
+    "verify:contracts": "node scripts/verify-contracts.js && npm run verify:slash-contracts",
+    "verify:data": "node scripts/verify-data-integrity.js",
+    "verify:premium": "node scripts/verify-premium.js",
+    "verify:integrity": "npm run build && npm run verify:contracts && npm run verify:data",
+    "verify:regression": "node scripts/verify-regression.js",
+    "verify:runtime": "node scripts/verify-runtime.js",
+    "verify:all": "npm run verify:integrity && npm run verify:regression && npm run verify:premium && npm run verify:runtime && npm run test:runtime",
+    "health:strict": "npm run verify:integrity && npm run verify:regression && npm run verify:premium && npm run verify:data && npm run test:runtime && node scripts/verify-runtime.js --strict --boot-smoke",
+    "simulate:raids": "ts-node src/raid/simulator.ts"
+  },
+  "dependencies": {
+    "discord.js": "^14.0.0",
+    "dotenv": "^16.6.1",
+    "fs-extra": "^10.0.0",
+    "typescript": "^5.6.3"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^1.1.8"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "gaming",
+    "xp",
+    "tokens",
+    "raid"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

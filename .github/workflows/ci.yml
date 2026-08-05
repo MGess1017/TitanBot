@@ -1,0 +1,40 @@
+name: Titan Bot CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["*"]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify contracts and data
+        run: npm run verify:contracts && npm run verify:data
+
+      - name: Verify regression and premium
+        run: npm run verify:regression && npm run verify:premium
+
+      - name: Runtime tests
+        run: npm run test:runtime
+
+      - name: Runtime preflight checks
+        run: npm run verify:runtime

@@ -1,0 +1,32 @@
+{
+    "token": "YOUR_DISCORD_BOT_TOKEN",
+    "clientId": "YOUR_CLIENT_ID",
+    "guildId": "YOUR_GUILD_ID",
+    "dashboardPort": 3000,
+    "raid": {
+        "minReward": 10,
+        "maxReward": 100,
+        "failurePenalty": 5,
+        "successChance": 0.7
+    },
+    "characters": [
+        {
+            "name": "Operator",
+            "health": 100,
+            "stamina": 100,
+            "specialAbility": "Stealth"
+        },
+        {
+            "name": "Raider",
+            "health": 120,
+            "stamina": 80,
+            "specialAbility": "Aggression"
+        },
+        {
+            "name": "Sniper",
+            "health": 80,
+            "stamina": 100,
+            "specialAbility": "Long Range"
+        }
+    ]
+}
