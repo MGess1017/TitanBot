@@ -19,6 +19,7 @@ exports.withdrawFromBank = withdrawFromBank;
 exports.transferWalletTokens = transferWalletTokens;
 exports.addXP = addXP;
 exports.getXPLevel = getXPLevel;
+exports.formatProgressPercent = formatProgressPercent;
 exports.xpBar = xpBar;
 exports.getPmcTierForLevel = getPmcTierForLevel;
 exports.getPmcLevel = getPmcLevel;
@@ -418,6 +419,16 @@ function getXPLevel(xp) {
     }
     return 0;
 }
+function formatProgressPercent(ratio) {
+    const pct = Math.max(0, Math.min(100, ratio * 100));
+    if (pct === 0 || pct === 100)
+        return `${Math.round(pct)}%`;
+    if (pct < 1)
+        return `${pct.toFixed(2)}%`;
+    if (pct < 10)
+        return `${pct.toFixed(1)}%`;
+    return `${Math.round(pct)}%`;
+}
 function xpBar(xp) {
     const level = getXPLevel(xp);
     const thresholds = [0, ...exports.XP_LEVEL_THRESHOLDS];
@@ -428,10 +439,12 @@ function xpBar(xp) {
         ? 1
         : Math.max(0, Math.min(1, (xp - current) / denom));
     const width = 14;
-    const filled = Math.round(ratio * width);
+    const filled = ratio > 0 && ratio < 1
+        ? Math.max(1, Math.round(ratio * width))
+        : Math.round(ratio * width);
     const solidGreen = "🟩".repeat(filled);
-    const softGreen = "🟢".repeat(width - filled);
-    return `${solidGreen}${softGreen} ${Math.round(ratio * 100)}%`;
+    const emptySlots = "⬜".repeat(width - filled);
+    return `${solidGreen}${emptySlots} ${formatProgressPercent(ratio)}`;
 }
 exports.PMC_LEVEL_CAP = 20000;
 exports.PMC_TIER_MILESTONES = [

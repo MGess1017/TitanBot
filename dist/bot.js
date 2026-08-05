@@ -6409,8 +6409,8 @@ const commandHandlers = {
         const xpIntoLevel = Math.max(0, user.xp - currentThreshold);
         const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - user.xp) : 0;
         const progressPercent = nextThreshold > currentThreshold
-            ? Math.round((xpIntoLevel / levelSpan) * 100)
-            : 100;
+            ? (0, utils_1.formatProgressPercent)(xpIntoLevel / levelSpan)
+            : "100%";
         const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
         const streakText = user.dailyStreak > 0 ? `${user.dailyStreak} day streak` : "No active streak";
         const achievements = user.achievements.length > 0
@@ -6430,7 +6430,7 @@ const commandHandlers = {
             value: [
                 `Level: **${engagementLevel.toLocaleString()}**`,
                 `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
-                `Completion: **${progressPercent}%**`
+                `Completion: **${progressPercent}**`
             ].join("\n"),
             inline: true
         }, {
@@ -6487,8 +6487,8 @@ const commandHandlers = {
         const xpIntoLevel = Math.max(0, user.xp - currentThreshold);
         const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - user.xp) : 0;
         const progressPercent = nextThreshold > currentThreshold
-            ? Math.round((xpIntoLevel / levelSpan) * 100)
-            : 100;
+            ? (0, utils_1.formatProgressPercent)(xpIntoLevel / levelSpan)
+            : "100%";
         const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
         const achievements = user.achievements.length > 0
             ? user.achievements.slice(0, 6).join("\n")
@@ -6508,7 +6508,7 @@ const commandHandlers = {
             value: [
                 `Level: **${engagementLevel.toLocaleString()}**`,
                 `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
-                `Completion: **${progressPercent}%**`
+                `Completion: **${progressPercent}**`
             ].join("\n"),
             inline: true
         }, {

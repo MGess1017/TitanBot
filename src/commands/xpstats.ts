@@ -1,5 +1,5 @@
 import { CommandInteraction } from "discord.js";
-import { ensureUser, getXPLevel, XP_LEVEL_THRESHOLDS, xpBar } from "../utils";
+import { ensureUser, formatProgressPercent, getXPLevel, XP_LEVEL_THRESHOLDS, xpBar } from "../utils";
 
 export const xpStatsCommand = {
     name: "xpstats",
@@ -12,8 +12,8 @@ export const xpStatsCommand = {
         const levelSpan = Math.max(1, nextThreshold - currentThreshold);
         const xpIntoLevel = Math.max(0, userStats.xp - currentThreshold);
         const progressPercent = nextThreshold > currentThreshold
-            ? Math.round((xpIntoLevel / levelSpan) * 100)
-            : 100;
+            ? formatProgressPercent(xpIntoLevel / levelSpan)
+            : "100%";
         const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - userStats.xp) : 0;
         const achievements = userStats.achievements.length > 0
             ? userStats.achievements.slice(0, 6).join("\n")
@@ -38,7 +38,7 @@ export const xpStatsCommand = {
                     name: "🎯 Progress",
                     value: [
                         `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
-                        `Completion: **${progressPercent}%**`,
+                        `Completion: **${progressPercent}**`,
                         `Last XP: **${lastXpAt}**`
                     ].join("\n"),
                     inline: true

@@ -471,6 +471,14 @@ export function getXPLevel(xp: number): number {
     return 0;
 }
 
+export function formatProgressPercent(ratio: number): string {
+    const pct = Math.max(0, Math.min(100, ratio * 100));
+    if (pct === 0 || pct === 100) return `${Math.round(pct)}%`;
+    if (pct < 1) return `${pct.toFixed(2)}%`;
+    if (pct < 10) return `${pct.toFixed(1)}%`;
+    return `${Math.round(pct)}%`;
+}
+
 export function xpBar(xp: number): string {
     const level = getXPLevel(xp);
     const thresholds = [0, ...XP_LEVEL_THRESHOLDS];
@@ -481,10 +489,12 @@ export function xpBar(xp: number): string {
         ? 1
         : Math.max(0, Math.min(1, (xp - current) / denom));
     const width = 14;
-    const filled = Math.round(ratio * width);
+    const filled = ratio > 0 && ratio < 1
+        ? Math.max(1, Math.round(ratio * width))
+        : Math.round(ratio * width);
     const solidGreen = "🟩".repeat(filled);
-    const softGreen = "🟢".repeat(width - filled);
-    return `${solidGreen}${softGreen} ${Math.round(ratio * 100)}%`;
+    const emptySlots = "⬜".repeat(width - filled);
+    return `${solidGreen}${emptySlots} ${formatProgressPercent(ratio)}`;
 }
 
 export const PMC_LEVEL_CAP = 20000;

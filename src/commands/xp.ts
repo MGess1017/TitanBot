@@ -1,5 +1,5 @@
 import { CommandInteraction } from "discord.js";
-import { ensureUser, getPoints, getTokens, getXPLevel, XP_LEVEL_THRESHOLDS, xpBar } from "../utils";
+import { ensureUser, formatProgressPercent, getPoints, getTokens, getXPLevel, XP_LEVEL_THRESHOLDS, xpBar } from "../utils";
 
 export const execute = async (interaction: CommandInteraction) => {
     const userId = interaction.user.id;
@@ -17,8 +17,8 @@ export const execute = async (interaction: CommandInteraction) => {
         : 0;
     const levelSpan = Math.max(1, nextThreshold - currentThreshold);
     const progressPercent = nextThreshold > currentThreshold
-        ? Math.round((xpIntoLevel / levelSpan) * 100)
-        : 100;
+        ? formatProgressPercent(xpIntoLevel / levelSpan)
+        : "100%";
     const lastXpAt = user.lastXP > 0
         ? `<t:${Math.floor(user.lastXP / 1000)}:R>`
         : "No XP earned yet";
@@ -52,7 +52,7 @@ export const execute = async (interaction: CommandInteraction) => {
                 name: "🧭 Progress",
                 value: [
                     `📍 In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
-                    `📊 Completion: **${progressPercent}%**`,
+                    `📊 Completion: **${progressPercent}**`,
                     `⏱️ Last XP: **${lastXpAt}**`
                 ].join("\n"),
                 inline: true
