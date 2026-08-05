@@ -19,6 +19,9 @@ export function buildSlashCommands(input: {
             .setName("quickstart")
             .setDescription("Guided first-run command flow for raids and economy."),
         new SlashCommandBuilder()
+            .setName("testupdate")
+            .setDescription("Test command that replies with Updated."),
+        new SlashCommandBuilder()
             .setName("xproles")
             .setDescription("View XP rank roles in a randomized color embed."),
         new SlashCommandBuilder()

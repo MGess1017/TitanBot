@@ -7248,6 +7248,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const memory = process.memoryUsage();
         return buildStatusLines(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())).join("\n");
     },
+    testupdate: async () => "Updated",
     findbots: async interaction => {
         const guildError = requireGuild(interaction);
         if (guildError) return guildError;
