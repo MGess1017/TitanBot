@@ -178,7 +178,13 @@ function readPointsFile() {
 }
 const store = readPointsFile();
 exports.points = store.users;
+function shouldSkipPointsPersistence() {
+    return process.env.RUNTIME_TEST_NO_POINTS_SAVE === "1";
+}
 function savePoints() {
+    // Runtime tests can disable disk writes to avoid polluting live JSON stores.
+    if (shouldSkipPointsPersistence())
+        return;
     writePointsFileAtomic({ users: exports.points });
 }
 function getXpPersistenceSnapshot(userId) {
