@@ -32,6 +32,19 @@ function ferocityLabel(value: number | undefined): string {
     return "Standard";
 }
 
+function toPercent(current: number, max: number): number {
+    if (max <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round((current / max) * 100)));
+}
+
+function healthBar(currentRaw: number, maxRaw: number, width = 14): string {
+    const max = Math.max(1, Math.floor(Number(maxRaw) || 0));
+    const current = Math.max(0, Math.min(max, Math.floor(Number(currentRaw) || 0)));
+    const fill = Math.max(0, Math.min(width, Math.round((current / max) * width)));
+    const empty = Math.max(0, width - fill);
+    return `[${"#".repeat(fill)}${"-".repeat(empty)}] ${current}/${max} (${toPercent(current, max)}%)`;
+}
+
 export function rarityBadge(rarityRaw?: string): string {
     const rarity = String(rarityRaw || "common").toLowerCase();
     if (rarity === "common") return "C";
@@ -406,6 +419,11 @@ export function buildRaidResultPayload(input: {
         bossFerocity?: number;
         bossBonusXp?: number;
         bossKillChance?: number;
+        bossImageUrl?: string;
+        pmcHpMax?: number;
+        pmcHpRemaining?: number;
+        bossHpMax?: number;
+        bossHpRemaining?: number;
         bossHeartUnlockedName?: string;
         pmcTierUnlockedLabel?: string;
         pmcTierUnlockedBadge?: string;
@@ -453,6 +471,12 @@ export function buildRaidResultPayload(input: {
     const bossFerocityLine = result.bossSpawned
         ? `Threat Class: ${ferocityLabel(result.bossFerocity)}${result.bossFerocity ? ` • Ferocity ${result.bossFerocity.toFixed(2)}` : ""}`
         : "Threat Class: Clear";
+    const pmcHealthLine = typeof result.pmcHpMax === "number" && typeof result.pmcHpRemaining === "number"
+        ? healthBar(result.pmcHpRemaining, result.pmcHpMax)
+        : "No direct PMC contact telemetry.";
+    const bossHealthLine = result.bossSpawned && typeof result.bossHpMax === "number" && typeof result.bossHpRemaining === "number"
+        ? healthBar(result.bossHpRemaining, result.bossHpMax)
+        : "No boss contact telemetry.";
 
     const specialMoments = [
         result.bossHeartUnlockedName ? `• New Boss Heart Unlocked: ${result.bossHeartUnlockedName}` : null,
@@ -467,7 +491,7 @@ export function buildRaidResultPayload(input: {
         .setDescription(result.success
             ? "Strike team returned with confirmed extraction and premium-grade combat telemetry."
             : "Extraction failed. Review loadout synergy, map pressure, and tension before redeploy.")
-        .setThumbnail(armyIconUrl)
+        .setThumbnail(result.bossSpawned && result.bossImageUrl ? result.bossImageUrl : armyIconUrl)
         .addFields(
             {
                 name: "Mission Header",
@@ -507,6 +531,15 @@ export function buildRaidResultPayload(input: {
                     bossFerocityLine,
                     bossResolution,
                     heartLine
+                ].join("\n"),
+                inline: false
+            },
+            {
+                name: "PMC Health Profile",
+                value: [
+                    `PMC: ${pmcHealthLine}`,
+                    `Boss: ${bossHealthLine}`,
+                    result.bossSpawned ? "Snapshot: Captured at encounter resolution." : "Snapshot: No boss engagement in this raid."
                 ].join("\n"),
                 inline: false
             },

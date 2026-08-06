@@ -75,6 +75,7 @@ import {
 import { claimDaily, getLeaderboard } from "./game/economy";
 import { ARMOR_IDS, BOSS_HEART_DEFS, BOSS_HEART_IDS, COLLECTIBLE_ITEM_IDS, getVendorSellPrice, ITEM_DEFS, SHOP_ITEMS, ULTRA_RARE_COLLECTIBLE_IDS, type ItemDef, WEAPON_IDS } from "./game/catalog";
 import { awardBossHeartAchievement, getUnlockedBossHeartNames } from "./game/bossHearts";
+import { getBossPortraitUrl } from "./game/bossPortraits";
 import { buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload, buildRaidResultPayload, buildSellPickerPayload, buildShopPayload, buildTradeActionPayload, getSellableInventoryOptions, RAID_RESULT_ACTION_IDS, rarityBadge } from "./game/payloads";
 import { getRaidOutcome, getRaidRewards } from "./game/raid";
 import * as RaidDomain from "./raid/domain";
@@ -3129,6 +3130,7 @@ function buildRaidUnlockBroadcastEmbed(input: {
         mapLabel?: string;
         bossName?: string;
         bossTitle?: string;
+        bossImageUrl?: string;
         bossHeartUnlockedName?: string;
         pmcTierUnlockedLabel?: string;
         pmcTierUnlockedBadge?: string;
@@ -3158,6 +3160,7 @@ function buildRaidUnlockBroadcastEmbed(input: {
         .setColor(0xf59e0b)
         .setTitle("🌟 Premium Unlock Broadcast")
         .setDescription(`${user.username} completed a standout raid operation on **${result.mapLabel || "Unknown AO"}**.`)
+        .setThumbnail(result.bossImageUrl || ARMY_ICON_URL)
         .addFields(
             {
                 name: "Operator",
@@ -5012,6 +5015,11 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     bossFerocity?: number;
     bossBonusXp?: number;
     bossKillChance?: number;
+    bossImageUrl?: string;
+    pmcHpMax?: number;
+    pmcHpRemaining?: number;
+    bossHpMax?: number;
+    bossHpRemaining?: number;
     bossHeartUnlockedName?: string;
     pmcTierUnlockedLabel?: string;
     pmcTierUnlockedBadge?: string;
@@ -5123,6 +5131,39 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         }
     }
 
+    let pmcHpMax = 0;
+    let pmcHpRemaining = 0;
+    let bossHpMax = 0;
+    let bossHpRemaining = 0;
+    if (bossSpawned) {
+        const pmcPool = 500
+            + Math.round(Math.min(260, pmcLevelBeforeRaid * 0.02))
+            + Math.round(Math.max(0, gearBonus.defenseBoost) * 340);
+        const bossPool = Math.round(
+            (520 + mapDifficultyIndex * 45)
+            * (boss?.ferocity || 1)
+            * (1 + mapCfg.bossRaidPressure * 0.35)
+        );
+
+        let pmcRemainingPct = 0;
+        let bossRemainingPct = 1;
+        if (!success) {
+            pmcRemainingPct = Math.max(0.04, Math.min(0.32, 0.11 + gearBonus.defenseBoost * 0.7 + finalSuccessChance * 0.08));
+            bossRemainingPct = Math.max(0.62, Math.min(1, 0.82 + (1 - finalSuccessChance) * 0.14));
+        } else if (bossDefeated) {
+            pmcRemainingPct = Math.max(0.14, Math.min(0.9, 0.28 + bossKillChance * 0.42 + gearBonus.defenseBoost * 0.5));
+            bossRemainingPct = 0;
+        } else {
+            pmcRemainingPct = Math.max(0.06, Math.min(0.54, 0.12 + bossKillChance * 0.24 + gearBonus.defenseBoost * 0.4));
+            bossRemainingPct = Math.max(0.1, Math.min(0.88, 0.22 + (1 - bossKillChance) * 0.52));
+        }
+
+        pmcHpMax = Math.max(120, pmcPool);
+        bossHpMax = Math.max(180, bossPool);
+        pmcHpRemaining = Math.max(0, Math.min(pmcHpMax, Math.round(pmcHpMax * pmcRemainingPct)));
+        bossHpRemaining = Math.max(0, Math.min(bossHpMax, Math.round(bossHpMax * bossRemainingPct)));
+    }
+
     const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar });
     for (const drop of loot) {
         addInventoryItem(userId, drop.id, drop.qty);
@@ -5223,6 +5264,11 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         bossFerocity: boss?.ferocity,
         bossBonusXp,
         bossKillChance: Math.round(bossKillChance * 100),
+        bossImageUrl: bossSpawned ? getBossPortraitUrl(boss?.name || mapCfg.bossName, boss?.title) || undefined : undefined,
+        pmcHpMax: bossSpawned ? pmcHpMax : undefined,
+        pmcHpRemaining: bossSpawned ? pmcHpRemaining : undefined,
+        bossHpMax: bossSpawned ? bossHpMax : undefined,
+        bossHpRemaining: bossSpawned ? bossHpRemaining : undefined,
         bossHeartUnlockedName,
         pmcTierUnlockedLabel: pmcTierUnlocked?.label,
         pmcTierUnlockedBadge: pmcTierUnlocked?.badge,
@@ -5325,6 +5371,7 @@ function buildBossRosterPayload(): string {
         );
 
     for (const boss of RAID_BOSS_ROSTER) {
+        const portraitUrl = getBossPortraitUrl(boss.name, boss.title);
         embed.addFields({
             name: `${boss.name} (${boss.title})`,
             value: [
@@ -5333,7 +5380,8 @@ function buildBossRosterPayload(): string {
                 `Ferocity: ${boss.ferocity.toFixed(2)} | Success Penalty: ${(boss.successPenalty * 100).toFixed(1)}% | Kill Penalty: ${(boss.killPenalty * 100).toFixed(1)}%`,
                 `Boss XP: ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} | Tokens: ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} | Rare Drop: ${(boss.rareDropChance * 100).toFixed(1)}%`,
                 `Drops: Wpn ${boss.weaponDrops.join(", ")} | Arm ${boss.armorDrops.join(", ")}`,
-                `Map Rotation: ${formatBossRotationShares(boss)}`
+                `Map Rotation: ${formatBossRotationShares(boss)}`,
+                `Portrait: ${portraitUrl ? `[View](${portraitUrl})` : "Unavailable"}`
             ].join("\n"),
             inline: false
         });
