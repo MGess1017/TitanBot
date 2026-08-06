@@ -18,6 +18,7 @@ import {
     MessageFlags,
     PermissionFlagsBits,
     StringSelectMenuBuilder,
+    TextChannel,
     TextInputBuilder,
     TextInputStyle,
     User
@@ -642,6 +643,9 @@ type GiveawayEntry = {
     hostId: string;
     prize: string;
     description: string;
+    rewardKind: "generic" | "item";
+    rewardItemId: string | null;
+    rewardQty: number;
     winnerCount: number;
     roleRequiredId: string | null;
     createdAt: number;
@@ -1552,6 +1556,7 @@ function normalizeGiveawayStore(raw: unknown): GiveawayStore | null {
         .map(row => {
             const entry = row as Partial<GiveawayEntry>;
             const status: GiveawayStatus = entry.status === "ended" || entry.status === "cancelled" ? entry.status : "active";
+            const rewardKind: GiveawayEntry["rewardKind"] = entry.rewardKind === "item" ? "item" : "generic";
             return {
             id: Math.max(1, Math.floor(Number(row.id) || 0)),
             guildId: String(entry.guildId || ""),
@@ -1560,6 +1565,9 @@ function normalizeGiveawayStore(raw: unknown): GiveawayStore | null {
             hostId: String(entry.hostId || ""),
             prize: String(entry.prize || "Giveaway"),
             description: String(entry.description || ""),
+            rewardKind,
+            rewardItemId: entry.rewardItemId ? String(entry.rewardItemId) : null,
+            rewardQty: Math.max(1, Math.floor(Number(entry.rewardQty) || 1)),
             winnerCount: Math.max(1, Math.floor(Number(entry.winnerCount) || 1)),
             roleRequiredId: entry.roleRequiredId ? String(entry.roleRequiredId) : null,
             createdAt: Math.max(0, Math.floor(Number(entry.createdAt) || Date.now())),
@@ -1631,6 +1639,9 @@ function pickGiveawayWinners(giveaway: GiveawayEntry): string[] {
 function buildGiveawayEmbed(giveaway: GiveawayEntry, now = Date.now()): EmbedBuilder {
     const remainingMs = Math.max(0, giveaway.endAt - now);
     const winnersText = giveaway.winners.length ? giveaway.winners.map(id => `<@${id}>`).join(", ") : "Pending draw";
+    const rewardDetail = giveaway.rewardKind === "item" && giveaway.rewardItemId
+        ? `${ITEM_DEFS[giveaway.rewardItemId]?.name || giveaway.rewardItemId} x${giveaway.rewardQty}`
+        : giveaway.prize;
     return new EmbedBuilder()
         .setColor(giveaway.status === "active" ? 0xf59e0b : 0x22c55e)
         .setTitle(`🎉 ${giveaway.prize}`)
@@ -1641,6 +1652,7 @@ function buildGiveawayEmbed(giveaway: GiveawayEntry, now = Date.now()): EmbedBui
             { name: "Status", value: giveaway.status.toUpperCase(), inline: true },
             { name: "Winners", value: `${giveaway.winnerCount}`, inline: true },
             { name: "Entries", value: `${giveaway.entries.length}`, inline: true },
+            { name: "Reward", value: rewardDetail, inline: false },
             { name: "Role Requirement", value: giveaway.roleRequiredId ? `<@&${giveaway.roleRequiredId}>` : "None", inline: true },
             { name: giveaway.status === "active" ? "Ends" : "Ended", value: giveaway.status === "active" ? `<t:${Math.floor(giveaway.endAt / 1000)}:R>\n${formatGiveawayDuration(remainingMs)} remaining` : (giveaway.endedAt ? `<t:${Math.floor(giveaway.endedAt / 1000)}:R>` : "Ended"), inline: false },
             { name: "Current Winners", value: winnersText, inline: false }
@@ -1687,6 +1699,56 @@ async function syncGiveawayMessage(giveaway: GiveawayEntry): Promise<void> {
     await message.edit({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)] }).catch(() => undefined);
 }
 
+async function createAndPostGiveaway(input: {
+    guild: Guild;
+    channel: TextChannel;
+    hostId: string;
+    prize: string;
+    description: string;
+    durationMs: number;
+    winnerCount: number;
+    roleRequiredId: string | null;
+    rewardKind: "generic" | "item";
+    rewardItemId?: string | null;
+    rewardQty?: number;
+}): Promise<GiveawayEntry | null> {
+    const giveaway: GiveawayEntry = {
+        id: giveawayStore.nextId++,
+        guildId: input.guild.id,
+        channelId: input.channel.id,
+        messageId: null,
+        hostId: input.hostId,
+        prize: input.prize,
+        description: input.description,
+        rewardKind: input.rewardKind,
+        rewardItemId: input.rewardItemId || null,
+        rewardQty: Math.max(1, input.rewardQty || 1),
+        winnerCount: input.winnerCount,
+        roleRequiredId: input.roleRequiredId,
+        createdAt: Date.now(),
+        endAt: Date.now() + input.durationMs,
+        updatedAt: Date.now(),
+        status: "active",
+        entries: [],
+        winners: [],
+        endedAt: null
+    };
+    giveawayStore.giveaways.push(giveaway);
+    saveGiveawayStore();
+
+    const sent = await input.channel.send({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)], allowedMentions: { parse: [] } }).catch(() => null);
+    if (!sent) {
+        giveawayStore.giveaways = giveawayStore.giveaways.filter(entry => entry.id !== giveaway.id);
+        saveGiveawayStore();
+        return null;
+    }
+
+    giveaway.messageId = sent.id;
+    giveaway.updatedAt = Date.now();
+    saveGiveawayStore();
+    return giveaway;
+}
+
 async function finalizeGiveaway(giveaway: GiveawayEntry, reason: "timer" | "manual" | "reroll" = "timer"): Promise<void> {
     if (giveaway.status !== "active" && reason !== "reroll") return;
     if (reason !== "reroll") {
@@ -1694,6 +1756,11 @@ async function finalizeGiveaway(giveaway: GiveawayEntry, reason: "timer" | "manu
         giveaway.endedAt = Date.now();
     }
     giveaway.winners = giveaway.entries.length ? pickGiveawayWinners(giveaway) : [];
+    if (giveaway.rewardKind === "item" && giveaway.rewardItemId) {
+        for (const winnerId of giveaway.winners) {
+            addInventoryItem(winnerId, giveaway.rewardItemId, giveaway.rewardQty);
+        }
+    }
     giveaway.updatedAt = Date.now();
     saveGiveawayStore();
     await syncGiveawayMessage(giveaway);
@@ -1761,6 +1828,11 @@ type GuildModerationState = {
     lockdownChannelId: string | null;
     nextCaseId: number;
     warnings: Record<string, WarnEntry[]>;
+    panelMessageIds?: {
+        welcome?: string | null;
+        report?: string | null;
+        featureBrief?: string | null;
+    };
 };
 
 type ModerationStore = {
@@ -2275,6 +2347,29 @@ function buildReportIntakeModal(): ModalBuilder {
         );
 }
 
+function buildRaidItemGiveawayModal(): ModalBuilder {
+    return new ModalBuilder()
+        .setCustomId(GIVEAWAY_IDS.raidItemModal)
+        .setTitle("Raid Item Giveaway")
+        .addComponents(
+            new ActionRowBuilder<TextInputBuilder>().addComponents(
+                new TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidItemId).setLabel("Raid Item ID").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80).setPlaceholder("mythic_crate, fn_coin, reactor_blade")
+            ),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(
+                new TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidItemQty).setLabel("Quantity Per Winner").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(10).setPlaceholder("1")
+            ),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(
+                new TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidDuration).setLabel("Duration").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20).setPlaceholder("30m, 6h, 2d")
+            ),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(
+                new TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidWinners).setLabel("Winner Count").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(10).setPlaceholder("1")
+            ),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(
+                new TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidDescription).setLabel("Description").setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(400).setPlaceholder("Optional context or event blurb")
+            )
+        );
+}
+
 function buildTicketCsatButtons(ticketId: number): ActionRowBuilder<ButtonBuilder> {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:1`).setLabel("1").setStyle(ButtonStyle.Secondary),
@@ -2683,7 +2778,8 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
             modLogChannelId: MOD_LOG_CHANNEL_ID || null,
             lockdownChannelId: null,
             nextCaseId: 1,
-            warnings: {}
+            warnings: {},
+            panelMessageIds: {}
         };
         saveModerationStore();
     }
@@ -2693,9 +2789,23 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     if (g.lockdownChannelId === undefined) g.lockdownChannelId = null;
     if (g.nextCaseId === undefined || g.nextCaseId < 1) g.nextCaseId = 1;
     if (!g.warnings || typeof g.warnings !== "object") g.warnings = {};
+    if (!g.panelMessageIds || typeof g.panelMessageIds !== "object") g.panelMessageIds = {};
     moderationStore.guilds[guildId] = g as GuildModerationState;
     saveModerationStore();
     return moderationStore.guilds[guildId];
+}
+
+function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "featureBrief"): string | null {
+    const cfg = ensureGuildModeration(guildId);
+    const value = cfg.panelMessageIds?.[panel];
+    return value ? String(value) : null;
+}
+
+function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "featureBrief", messageId: string | null): void {
+    const cfg = ensureGuildModeration(guildId);
+    if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
+    cfg.panelMessageIds[panel] = messageId;
+    saveModerationStore();
 }
 
 function parseDurationMs(raw: string): number | null {
@@ -2936,7 +3046,14 @@ const REPORT_IDS = {
 } as const;
 
 const GIVEAWAY_IDS = {
-    enterPrefix: "giveaway_enter"
+    enterPrefix: "giveaway_enter",
+    raidPanelOpen: "giveaway_raid_item_open",
+    raidItemModal: "giveaway_raid_item_modal",
+    raidItemId: "giveaway_raid_item_id",
+    raidItemQty: "giveaway_raid_item_qty",
+    raidDuration: "giveaway_raid_duration",
+    raidWinners: "giveaway_raid_winners",
+    raidDescription: "giveaway_raid_description"
 } as const;
 
 const SELL_UI_IDS = {
@@ -5030,6 +5147,15 @@ function getRaidGearAutocompleteOptions(userId: string, kind: "weapon" | "armor"
         })
         .slice(0, 25)
         .map(entry => ({ name: entry.label, value: entry.id }));
+}
+
+function getCatalogItemAutocompleteOptions(userId: string, focusedRaw: string): Array<{ name: string; value: string }> {
+    return getInventoryAutocompleteOptions({
+        userId,
+        focusedRaw,
+        includeUnowned: true,
+        sortByOwned: true
+    });
 }
 
 const OPENABLE_CRATE_IDS = ["common_crate", "rare_crate", "epic_crate", "tactical_crate", "mythic_crate"] as const;
@@ -7153,6 +7279,31 @@ function buildReportPanelPayload(guildName: string) {
     };
 }
 
+function buildRaidItemGiveawayPanelPayload(guildName: string) {
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle("🎁 Titan Raid Item Giveaway Desk")
+        .setDescription([
+            `Create auto-awarded raid item giveaways for **${guildName}** using the full raid item catalog.`,
+            "",
+            "This panel is admin-facing and creates giveaways where winners automatically receive the configured raid item in inventory."
+        ].join("\n"))
+        .addFields(
+            { name: "Modes", value: "• `/giveaway` for any freeform prize\n• `/itemgiveaway` for slash-driven raid item rewards\n• Button below for quick raid-item creation", inline: false },
+            { name: "Auto Reward", value: "Raid-item giveaways automatically deliver the selected item to each winner when the giveaway ends.", inline: false }
+        ), "Titan Giveaway Control", `${guildName} raid item giveaway panel`);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(GIVEAWAY_IDS.raidPanelOpen)
+            .setLabel("Create Raid Item Giveaway")
+            .setEmoji("🎁")
+            .setStyle(ButtonStyle.Primary)
+    );
+
+    return { embed: embed.toJSON(), components: [row.toJSON()] };
+}
+
 function messageHasTicketOpenButton(message: MessageWithComponents | null | undefined): boolean {
     const rows = Array.isArray(message?.components) ? message.components : [];
     return rows.some((row: ComponentRowLike) => {
@@ -7378,22 +7529,37 @@ async function upsertWelcomePanelInChannel(guild: Guild, channelId: string): Pro
     const payload = buildWelcomePayload(guild.name);
     const embed = payload.embed as APIEmbed;
 
+    const storedMessageId = getGuildPanelMessageId(guild.id, "welcome");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) {
+            return { ok: true, action: "updated" };
+        }
+        setGuildPanelMessageId(guild.id, "welcome", null);
+    }
+
     let candidateId: string | null = null;
+    const duplicateIds: string[] = [];
     let beforeId: string | undefined;
     const expectedTitle = `🌤️ Welcome to ${guild.name}`;
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
         const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
         if (!batch || !batch.size) break;
 
-        const candidate = batch.find(message =>
+        const candidates = batch.filter(message =>
             message.author.id === (client.user?.id || "")
             && (
                 message.embeds[0]?.title === expectedTitle
                 || message.embeds[0]?.footer?.text?.includes("rules board")
             )
         );
+        const candidate = candidates.first();
         if (candidate) {
             candidateId = candidate.id;
+            for (const duplicate of candidates.values()) {
+                if (duplicate.id !== candidate.id) duplicateIds.push(duplicate.id);
+            }
             break;
         }
 
@@ -7408,6 +7574,12 @@ async function upsertWelcomePanelInChannel(guild: Guild, channelId: string): Pro
         if (!edited) {
             return { ok: false, error: "Failed to refresh welcome panel message. Check bot permissions for this channel." };
         }
+        setGuildPanelMessageId(guild.id, "welcome", candidateId);
+        for (const duplicateId of duplicateIds) {
+            if (duplicateId === candidateId) continue;
+            const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);
+            await duplicate?.delete().catch(() => undefined);
+        }
         return { ok: true, action: "updated" };
     }
 
@@ -7415,6 +7587,7 @@ async function upsertWelcomePanelInChannel(guild: Guild, channelId: string): Pro
     if (!sent) {
         return { ok: false, error: "Failed to post welcome panel message. Check bot permissions for this channel." };
     }
+    setGuildPanelMessageId(guild.id, "welcome", sent.id);
     return { ok: true, action: "posted" };
 }
 
@@ -9155,32 +9328,18 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const channel = interaction.options.getChannel("channel") || interaction.channel;
         if (!channel || channel.type !== ChannelType.GuildText || !("send" in channel)) return "Giveaway channel must be a text channel.";
 
-        const giveaway: GiveawayEntry = {
-            id: giveawayStore.nextId++,
-            guildId: guild.id,
-            channelId: channel.id,
-            messageId: null,
+        const giveaway = await createAndPostGiveaway({
+            guild,
+            channel,
             hostId: interaction.user.id,
             prize,
             description,
+            durationMs,
             winnerCount,
             roleRequiredId: roleRequired ? roleRequired.id : null,
-            createdAt: Date.now(),
-            endAt: Date.now() + durationMs,
-            updatedAt: Date.now(),
-            status: "active",
-            entries: [],
-            winners: [],
-            endedAt: null
-        };
-        giveawayStore.giveaways.push(giveaway);
-        saveGiveawayStore();
-
-        const sent = await channel.send({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)], allowedMentions: { parse: [] } }).catch(() => null);
-        if (!sent) return "Failed to post giveaway message in the target channel.";
-        giveaway.messageId = sent.id;
-        giveaway.updatedAt = Date.now();
-        saveGiveawayStore();
+            rewardKind: "generic"
+        });
+        if (!giveaway) return "Failed to post giveaway message in the target channel.";
 
         appendAuditEvent("giveaway_created", {
             guildId: guild.id,
@@ -9194,6 +9353,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         });
         await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
             { name: "Prize", value: prize, inline: false },
+            { name: "Reward Type", value: "Generic", inline: true },
             { name: "Host", value: `<@${interaction.user.id}>`, inline: true },
             { name: "Channel", value: `<#${channel.id}>`, inline: true },
             { name: "Winners", value: `${winnerCount}`, inline: true },
@@ -9202,6 +9362,79 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         ]);
 
         return JSON.stringify({ embed: new EmbedBuilder().setColor(0xf59e0b).setTitle("🎉 Giveaway Created").setDescription(`Giveaway #${giveaway.id} is live in <#${channel.id}>.`).addFields({ name: "Prize", value: prize, inline: false }, { name: "Duration", value: durationRaw, inline: true }, { name: "Winners", value: `${winnerCount}`, inline: true }).toJSON() });
+    },
+    itemgiveaway: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const guild = interaction.guild;
+        if (!guild) return "This command can only be used in a server.";
+
+        const itemId = interaction.options.getString("item", true).trim().toLowerCase();
+        const item = ITEM_DEFS[itemId];
+        if (!item) return `Unknown raid item: ${itemId}`;
+        const quantity = Math.max(1, interaction.options.getInteger("quantity", true));
+        const durationRaw = interaction.options.getString("duration", true);
+        const durationMs = parseDurationMs(durationRaw);
+        if (!durationMs) return "Invalid duration. Use values like 30m, 6h, or 2d.";
+        const winnerCount = Math.max(1, Math.min(20, interaction.options.getInteger("winners") || 1));
+        const description = (interaction.options.getString("description") || "").slice(0, 1000);
+        const title = (interaction.options.getString("title") || `${item.name} Giveaway`).slice(0, 200);
+        const roleRequired = interaction.options.getRole("role_required");
+        const channel = interaction.options.getChannel("channel") || interaction.channel;
+        if (!channel || channel.type !== ChannelType.GuildText || !("send" in channel)) return "Giveaway channel must be a text channel.";
+
+        const giveaway = await createAndPostGiveaway({
+            guild,
+            channel,
+            hostId: interaction.user.id,
+            prize: title,
+            description,
+            durationMs,
+            winnerCount,
+            roleRequiredId: roleRequired ? roleRequired.id : null,
+            rewardKind: "item",
+            rewardItemId: itemId,
+            rewardQty: quantity
+        });
+        if (!giveaway) return "Failed to post raid item giveaway message in the target channel.";
+
+        appendAuditEvent("giveaway_item_created", {
+            guildId: guild.id,
+            giveawayId: giveaway.id,
+            hostId: interaction.user.id,
+            channelId: channel.id,
+            itemId,
+            quantity,
+            durationMs,
+            winnerCount,
+            roleRequiredId: roleRequired?.id || null
+        });
+        await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
+            { name: "Prize", value: title, inline: false },
+            { name: "Reward Type", value: "Raid Item", inline: true },
+            { name: "Raid Item", value: `${item.name} (${itemId}) x${quantity}`, inline: false },
+            { name: "Host", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Channel", value: `<#${channel.id}>`, inline: true },
+            { name: "Winners", value: `${winnerCount}`, inline: true }
+        ]);
+
+        return JSON.stringify({ embed: new EmbedBuilder().setColor(0xf59e0b).setTitle("🎁 Raid Item Giveaway Created").setDescription(`Giveaway #${giveaway.id} is live in <#${channel.id}>.`).addFields({ name: "Raid Item", value: `${item.name} x${quantity}`, inline: false }, { name: "Duration", value: durationRaw, inline: true }, { name: "Winners", value: `${winnerCount}`, inline: true }).toJSON() });
+    },
+    raidgiveawaypanel: async interaction => {
+        const guildError = requireGuild(interaction);
+        if (guildError) return guildError;
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
+            return "You need Manage Channels to post the raid item giveaway panel.";
+        }
+        if (!interaction.channel || !interaction.channel.isTextBased()) {
+            return "This command requires a text channel.";
+        }
+        if (!("send" in interaction.channel) || interaction.channel.type !== ChannelType.GuildText) {
+            return "This command requires a standard text channel.";
+        }
+        const payload = buildRaidItemGiveawayPanelPayload(interaction.guild!.name);
+        await interaction.channel.send({ embeds: [payload.embed as APIEmbed], components: payload.components as any[], allowedMentions: { parse: [] } }).catch(() => null);
+        return "✅ Raid item giveaway panel posted in this channel.";
     },
     giveawayedit: async interaction => {
         const adminError = requireAdministrator(interaction);
@@ -9253,7 +9486,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         if (!scoped.length) return "No giveaways found.";
         return [
             "🎉 Giveaways",
-            ...scoped.map(entry => `#${entry.id} [${entry.status}] ${entry.prize} | entries ${entry.entries.length} | winners ${entry.winnerCount} | end <t:${Math.floor(entry.endAt / 1000)}:R>`)
+            ...scoped.map(entry => `#${entry.id} [${entry.status}|${entry.rewardKind === "item" ? `item:${entry.rewardItemId || "unknown"}x${entry.rewardQty}` : "generic"}] ${entry.prize} | entries ${entry.entries.length} | winners ${entry.winnerCount} | end <t:${Math.floor(entry.endAt / 1000)}:R>`)
         ].join("\n");
     },
     ticketsearch: async interaction => {
@@ -10115,6 +10348,8 @@ client.on("interactionCreate", async interaction => {
             options = getUseItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
         } else if (interaction.commandName === "sell" && focused.name === "item") {
             options = getSellItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
+        } else if (interaction.commandName === "itemgiveaway" && focused.name === "item") {
+            options = getCatalogItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
         } else {
             return;
         }
@@ -10254,6 +10489,77 @@ client.on("interactionCreate", async interaction => {
             )],
             flags: MessageFlags.Ephemeral
         }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === GIVEAWAY_IDS.raidItemModal) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Raid item giveaways can only be created in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member as GuildMember | null;
+        if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: "Only administrators can create raid item giveaways.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const itemId = (interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidItemId) || "").trim().toLowerCase();
+        const item = ITEM_DEFS[itemId];
+        if (!item) {
+            await interaction.reply({ content: `Unknown raid item: ${itemId}`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const quantity = Math.max(1, Number.parseInt(interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidItemQty) || "1", 10) || 1);
+        const durationRaw = (interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidDuration) || "").trim();
+        const durationMs = parseDurationMs(durationRaw);
+        if (!durationMs) {
+            await interaction.reply({ content: "Invalid duration. Use values like 30m, 6h, or 2d.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const winnerCount = Math.max(1, Math.min(20, Number.parseInt(interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidWinners) || "1", 10) || 1));
+        const description = (interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidDescription) || "").slice(0, 400);
+        const channel = interaction.channel;
+        if (!channel || channel.type !== ChannelType.GuildText || !("send" in channel)) {
+            await interaction.reply({ content: "This panel must be used in a text channel.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const giveaway = await createAndPostGiveaway({
+            guild,
+            channel,
+            hostId: interaction.user.id,
+            prize: `${item.name} Giveaway`,
+            description,
+            durationMs,
+            winnerCount,
+            roleRequiredId: null,
+            rewardKind: "item",
+            rewardItemId: itemId,
+            rewardQty: quantity
+        });
+        if (!giveaway) {
+            await interaction.reply({ content: "Failed to post the raid item giveaway.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        appendAuditEvent("giveaway_item_created", {
+            guildId: guild.id,
+            giveawayId: giveaway.id,
+            hostId: interaction.user.id,
+            channelId: channel.id,
+            itemId,
+            quantity,
+            durationMs,
+            winnerCount,
+            source: "panel"
+        });
+        await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
+            { name: "Raid Item", value: `${item.name} (${itemId}) x${quantity}`, inline: false },
+            { name: "Host", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Channel", value: `<#${channel.id}>`, inline: true },
+            { name: "Winners", value: `${winnerCount}`, inline: true }
+        ]);
+        await interaction.reply({ content: `Raid item giveaway #${giveaway.id} is now live in <#${channel.id}>.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
 
@@ -10466,6 +10772,23 @@ client.on("interactionCreate", async interaction => {
         }
         await interaction.showModal(buildReportIntakeModal()).catch(async () => {
             await interaction.reply({ content: "Unable to open report intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === GIVEAWAY_IDS.raidPanelOpen) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Raid item giveaways can only be created in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member as GuildMember | null;
+        if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: "Only administrators can use this giveaway panel.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(buildRaidItemGiveawayModal()).catch(async () => {
+            await interaction.reply({ content: "Unable to open the raid item giveaway modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
         });
         return;
     }

@@ -398,6 +398,18 @@ export function buildSlashCommands(input: {
             .addStringOption(o => o.setName("description").setDescription("Optional giveaway description").setRequired(false))
             .addChannelOption(o => o.setName("channel").setDescription("Channel to post giveaway in").addChannelTypes(ChannelType.GuildText).setRequired(false))
             .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false)),
+        new SlashCommandBuilder().setName("itemgiveaway").setDescription("Admin: create a raid-item giveaway with automatic reward delivery")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addStringOption(o => o.setName("item").setDescription("Raid item id").setRequired(true).setAutocomplete(true))
+            .addIntegerOption(o => o.setName("quantity").setDescription("Quantity each winner receives").setRequired(true))
+            .addStringOption(o => o.setName("duration").setDescription("Duration like 30m, 6h, 2d").setRequired(true))
+            .addIntegerOption(o => o.setName("winners").setDescription("Number of winners").setRequired(false))
+            .addStringOption(o => o.setName("title").setDescription("Optional display title override").setRequired(false))
+            .addStringOption(o => o.setName("description").setDescription("Optional giveaway description").setRequired(false))
+            .addChannelOption(o => o.setName("channel").setDescription("Channel to post giveaway in").addChannelTypes(ChannelType.GuildText).setRequired(false))
+            .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false)),
+        new SlashCommandBuilder().setName("raidgiveawaypanel").setDescription("Post the admin raid-item giveaway panel in this channel")
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
         new SlashCommandBuilder().setName("giveawayedit").setDescription("Admin: extend or shorten an active giveaway")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true))
