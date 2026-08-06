@@ -178,6 +178,11 @@ const OPS_ALERT_COOLDOWN_MS = 60 * 1000;
 const COMMAND_IDEMPOTENCY_WINDOW_MS = Math.max(0, Number(process.env.COMMAND_IDEMPOTENCY_WINDOW_MS || 15000));
 const COMMAND_RATE_LIMIT_WINDOW_MS = 1500;
 const CASINO_ACTION_RATE_LIMIT_WINDOW_MS = 1200;
+const IN_MEMORY_STATE_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
+const OPS_ALERT_RETENTION_MS = Math.max(15 * 60 * 1000, OPS_ALERT_COOLDOWN_MS * 4);
+const TICKET_CREATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
+const TICKET_SLA_ALERT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const MOD_LOG_EVENT_RETENTION_MS = 2 * 60 * 1000;
 const opsAlertLastSent = new Map<string, number>();
 const recentCommandExecutions = new Map<string, number>();
 const inFlightTicketCreates = new Map<string, number>();
@@ -191,6 +196,9 @@ let hasInstanceLock = false;
 
 function shouldSendOpsAlert(key: string): boolean {
     const now = Date.now();
+    for (const [entryKey, ts] of opsAlertLastSent.entries()) {
+        if (now - ts > OPS_ALERT_RETENTION_MS) opsAlertLastSent.delete(entryKey);
+    }
     const last = opsAlertLastSent.get(key) || 0;
     if (now - last < OPS_ALERT_COOLDOWN_MS) return false;
     opsAlertLastSent.set(key, now);
@@ -316,14 +324,39 @@ function updateBotPresence(): void {
 }
 
 function tryAcquireTicketCreateLock(guildId: string, ownerId: string): boolean {
+    const now = Date.now();
+    for (const [entryKey, ts] of inFlightTicketCreates.entries()) {
+        if (now - ts > TICKET_CREATE_LOCK_MAX_AGE_MS) inFlightTicketCreates.delete(entryKey);
+    }
+
     const key = `${guildId}:${ownerId}`;
     if (inFlightTicketCreates.has(key)) return false;
-    inFlightTicketCreates.set(key, Date.now());
+    inFlightTicketCreates.set(key, now);
     return true;
 }
 
 function releaseTicketCreateLock(guildId: string, ownerId: string): void {
     inFlightTicketCreates.delete(`${guildId}:${ownerId}`);
+}
+
+function pruneInMemoryRuntimeState(now = Date.now()): void {
+    pruneRecentCommandExecutions(now);
+
+    for (const [entryKey, ts] of inFlightTicketCreates.entries()) {
+        if (now - ts > TICKET_CREATE_LOCK_MAX_AGE_MS) inFlightTicketCreates.delete(entryKey);
+    }
+
+    for (const [entryKey, ts] of ticketSlaAlertState.entries()) {
+        if (now - ts > TICKET_SLA_ALERT_RETENTION_MS) ticketSlaAlertState.delete(entryKey);
+    }
+
+    for (const [entryKey, ts] of recentModerationLogEvents.entries()) {
+        if (now - ts > MOD_LOG_EVENT_RETENTION_MS) recentModerationLogEvents.delete(entryKey);
+    }
+
+    for (const [entryKey, ts] of opsAlertLastSent.entries()) {
+        if (now - ts > OPS_ALERT_RETENTION_MS) opsAlertLastSent.delete(entryKey);
+    }
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1058,8 +1091,9 @@ function rememberModerationLog(action: "kick" | "ban", guildId: string, userId: 
 
 function shouldSkipRecentModerationLog(action: "kick" | "ban", guildId: string, userId: string, windowMs = 15_000): boolean {
     const now = Date.now();
+    const retentionWindow = Math.max(windowMs, MOD_LOG_EVENT_RETENTION_MS);
     for (const [key, ts] of recentModerationLogEvents.entries()) {
-        if (now - ts > windowMs) recentModerationLogEvents.delete(key);
+        if (now - ts > retentionWindow) recentModerationLogEvents.delete(key);
     }
 
     const key = `${action}:${guildId}:${userId}`;
@@ -2107,6 +2141,10 @@ function ticketSlaAlertKey(ticketId: number, level: "fr_warn" | "fr_breach" | "r
 }
 
 function shouldEmitTicketSlaAlert(ticketId: number, level: "fr_warn" | "fr_breach" | "res_warn" | "res_breach", now = Date.now()): boolean {
+    for (const [key, ts] of ticketSlaAlertState.entries()) {
+        if (now - ts > TICKET_SLA_ALERT_RETENTION_MS) ticketSlaAlertState.delete(key);
+    }
+
     const key = ticketSlaAlertKey(ticketId, level);
     const last = ticketSlaAlertState.get(key) || 0;
     // Avoid repeating the same alert type for a ticket too frequently.
@@ -9129,6 +9167,10 @@ if (COMMAND_IDEMPOTENCY_WINDOW_MS > 0) {
         pruneRecentCommandExecutions();
     }, Math.max(5_000, COMMAND_IDEMPOTENCY_WINDOW_MS)).unref();
 }
+
+setInterval(() => {
+    pruneInMemoryRuntimeState();
+}, IN_MEMORY_STATE_PRUNE_INTERVAL_MS).unref();
 
 setInterval(() => {
     void sendAutomatedHealthReport("interval_24h");

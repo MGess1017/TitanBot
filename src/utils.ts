@@ -97,10 +97,14 @@ const anomalyLogFile = path.resolve(__dirname, "../src/data/anomalies.jsonl");
 const TOKEN_SPIKE_THRESHOLD = Math.max(1, Number(process.env.TOKEN_SPIKE_THRESHOLD || 25000));
 const XP_SPIKE_THRESHOLD = Math.max(1, Number(process.env.XP_SPIKE_THRESHOLD || 5000));
 const ANOMALY_COOLDOWN_MS = Math.max(5000, Number(process.env.ANOMALY_COOLDOWN_MS || 60000));
+const ANOMALY_RETENTION_MS = Math.max(60 * 60 * 1000, ANOMALY_COOLDOWN_MS * 8);
 const anomalyLastLogged = new Map<string, number>();
 
 function shouldLogAnomaly(key: string): boolean {
     const now = Date.now();
+    for (const [entryKey, ts] of anomalyLastLogged.entries()) {
+        if (now - ts > ANOMALY_RETENTION_MS) anomalyLastLogged.delete(entryKey);
+    }
     const last = anomalyLastLogged.get(key) || 0;
     if (now - last < ANOMALY_COOLDOWN_MS) return false;
     anomalyLastLogged.set(key, now);
