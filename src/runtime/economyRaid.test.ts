@@ -6,7 +6,6 @@ import {
     getBankTokens,
     getTokens,
     points,
-    savePoints,
     transferWalletTokens,
     withdrawFromBank
 } from "../utils";
@@ -27,6 +26,9 @@ function restoreUserState(userId: string, snapshot: unknown): void {
 }
 
 function runEconomyAndRaidTests(): void {
+    const priorNoSaveFlag = process.env.RUNTIME_TEST_NO_POINTS_SAVE;
+    process.env.RUNTIME_TEST_NO_POINTS_SAVE = "1";
+
     const userA = "__test_runtime_user_a__";
     const userB = "__test_runtime_user_b__";
     const snapshotA = cloneUserState(userA);
@@ -81,7 +83,8 @@ function runEconomyAndRaidTests(): void {
     } finally {
         restoreUserState(userA, snapshotA);
         restoreUserState(userB, snapshotB);
-        savePoints();
+        if (typeof priorNoSaveFlag === "string") process.env.RUNTIME_TEST_NO_POINTS_SAVE = priorNoSaveFlag;
+        else delete process.env.RUNTIME_TEST_NO_POINTS_SAVE;
     }
 }
 

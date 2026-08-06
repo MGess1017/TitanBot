@@ -213,7 +213,13 @@ function readPointsFile(): PointsFileShape {
 const store = readPointsFile();
 export const points: Record<string, UserState> = store.users;
 
+function shouldSkipPointsPersistence(): boolean {
+    return process.env.RUNTIME_TEST_NO_POINTS_SAVE === "1";
+}
+
 export function savePoints(): void {
+    // Runtime tests can disable disk writes to avoid polluting live JSON stores.
+    if (shouldSkipPointsPersistence()) return;
     writePointsFileAtomic({ users: points });
 }
 
