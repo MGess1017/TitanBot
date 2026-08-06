@@ -312,6 +312,21 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
         new SlashCommandBuilder().setName("ticketanalytics").setDescription("Admin: ticket response/resolution medians and category insights")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName("reportqueue").setDescription("Staff: view active report cases only")
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+        new SlashCommandBuilder().setName("reportsearch").setDescription("Staff: search report cases by owner, status, and text")
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+            .addStringOption(o => o.setName("query").setDescription("Search text in report reason/notes").setRequired(false))
+            .addUserOption(o => o.setName("owner").setDescription("Filter by reporter").setRequired(false))
+            .addStringOption(o => o.setName("status").setDescription("Filter by lifecycle status").setRequired(false)
+                .addChoices(
+                    { name: "open", value: "open" },
+                    { name: "claimed", value: "claimed" },
+                    { name: "archived", value: "archived" },
+                    { name: "resolved", value: "resolved" }
+                ))
+            .addIntegerOption(o => o.setName("page").setDescription("Result page number").setRequired(false))
+            .addIntegerOption(o => o.setName("page_size").setDescription("Results per page (5-20)").setRequired(false)),
         new SlashCommandBuilder().setName("ticketsearch").setDescription("Staff: search tickets by owner, status, category, and text")
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
             .addStringOption(o => o.setName("query").setDescription("Search text in reason/category/internal notes").setRequired(false))

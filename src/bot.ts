@@ -162,6 +162,7 @@ const TICKET_TRANSCRIPT_DIR = path.resolve(__dirname, "../src/data/ticket-transc
 const DEFAULT_TICKET_HANDLER_ROLE_ID = "1506184638207361145";
 const DEFAULT_TICKET_DEFAULT_CATEGORY_ID = "1523411322430296228";
 const DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID = "1506119505720377434";
+const DEFAULT_REPORT_PANEL_CHANNEL_ID = DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1527571592320651285";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
@@ -169,6 +170,7 @@ const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
 const TICKET_DEFAULT_CATEGORY_ID = process.env.TICKET_DEFAULT_CATEGORY_ID || DEFAULT_TICKET_DEFAULT_CATEGORY_ID;
 const PERMANENT_TICKET_PANEL_CHANNEL_ID = process.env.PERMANENT_TICKET_PANEL_CHANNEL_ID || DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
+const REPORT_PANEL_CHANNEL_ID = process.env.REPORT_PANEL_CHANNEL_ID || DEFAULT_REPORT_PANEL_CHANNEL_ID;
 const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID || DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID;
 const WELCOME_PANEL_CHANNEL_ID = process.env.WELCOME_PANEL_CHANNEL_ID || DEFAULT_WELCOME_PANEL_CHANNEL_ID;
 const MOD_LOG_CHANNEL_ID = process.env.MOD_LOG_CHANNEL_ID || DEFAULT_MOD_LOG_CHANNEL_ID;
@@ -1824,6 +1826,21 @@ function ensureTicketConfig(guildId: string): TicketConfig {
 
 function findOpenTicketByOwner(guildId: string, ownerId: string): TicketEntry | null {
     return stateFindOpenTicketByOwner(ticketStore.tickets, guildId, ownerId);
+}
+
+type TicketCaseBucket = "support" | "report";
+
+function getTicketCaseBucket(categoryOrReason: string | null | undefined): TicketCaseBucket {
+    return classifyTicketCategory(categoryOrReason || "general") === "report" ? "report" : "support";
+}
+
+function findOpenTicketByOwnerInBucket(guildId: string, ownerId: string, bucket: TicketCaseBucket): TicketEntry | null {
+    return ticketStore.tickets.find(ticket =>
+        ticket.guildId === guildId
+        && ticket.ownerId === ownerId
+        && (normalizeTicketStatus(ticket.status) === "open" || normalizeTicketStatus(ticket.status) === "claimed")
+        && getTicketCaseBucket(ticket.category || ticket.reason) === bucket
+    ) || null;
 }
 
 function findOpenTicketByChannel(channelId: string): TicketEntry | null {
@@ -6834,7 +6851,7 @@ function buildTicketPanelPayload(guildName: string) {
             },
             {
                 name: "⚖️ Rules",
-                value: "One open ticket per user. Spam or abuse may trigger moderation actions."
+                value: "One active support ticket and one active report case per user. Spam or abuse may trigger moderation actions."
             }
         ), "FN Support Front Desk", `${guildName} support panel`);
 
@@ -7055,6 +7072,25 @@ async function ensurePermanentTicketPanelForGuild(guild: Guild): Promise<void> {
             error: result.error
         });
         console.warn(`Permanent ticket panel upsert skipped for guild ${guild.id}: ${result.error}`);
+    }
+}
+
+async function ensurePermanentReportPanelForGuild(guild: Guild): Promise<void> {
+    if (!REPORT_PANEL_CHANNEL_ID) return;
+    const result = await upsertReportPanelInChannel(guild, REPORT_PANEL_CHANNEL_ID);
+    if (result.ok) {
+        appendAuditEvent("report_panel_permanent_upsert", {
+            guildId: guild.id,
+            channelId: REPORT_PANEL_CHANNEL_ID,
+            action: result.action
+        });
+    } else {
+        appendAuditEvent("report_panel_permanent_upsert_failed", {
+            guildId: guild.id,
+            channelId: REPORT_PANEL_CHANNEL_ID,
+            error: result.error
+        });
+        console.warn(`Permanent report panel upsert skipped for guild ${guild.id}: ${result.error}`);
     }
 }
 
@@ -7341,6 +7377,21 @@ async function findOwnerActiveTicketChannels(guild: Guild, owner: GuildMember): 
     return matches;
 }
 
+async function findOwnerActiveTicketChannelsInBucket(guild: Guild, owner: GuildMember, bucket: TicketCaseBucket): Promise<string[]> {
+    const activeChannelIds = await findOwnerActiveTicketChannels(guild, owner);
+    const matches: string[] = [];
+
+    for (const channelId of activeChannelIds) {
+        const tracked = await ensureTrackedTicketByChannelId(guild, channelId, owner.id).catch(() => null);
+        if (!tracked) continue;
+        if (getTicketCaseBucket(tracked.category || tracked.reason) === bucket) {
+            matches.push(channelId);
+        }
+    }
+
+    return matches.sort((a, b) => a.localeCompare(b));
+}
+
 async function removeTicketStoreEntryByChannelId(channelId: string): Promise<void> {
     const idx = ticketStore.tickets.findIndex(t => t.channelId === channelId);
     if (idx >= 0) {
@@ -7349,8 +7400,8 @@ async function removeTicketStoreEntryByChannelId(channelId: string): Promise<voi
     }
 }
 
-async function reconcileOwnerTicketDuplicates(guild: Guild, owner: GuildMember, canonicalChannelId: string): Promise<void> {
-    const active = await findOwnerActiveTicketChannels(guild, owner);
+async function reconcileOwnerTicketDuplicates(guild: Guild, owner: GuildMember, canonicalChannelId: string, bucket: TicketCaseBucket): Promise<void> {
+    const active = await findOwnerActiveTicketChannelsInBucket(guild, owner, bucket);
     const duplicates = active.filter(channelId => channelId !== canonicalChannelId);
     if (!duplicates.length) return;
 
@@ -7375,6 +7426,7 @@ async function reconcileOwnerTicketDuplicates(guild: Guild, owner: GuildMember, 
 
 async function createTicketChannel(guild: Guild, ownerId: string, reason: string, priority: TicketPriority = "normal", bypassDeflection = false): Promise<{ error?: string; channelId?: string; ticketId?: number }> {
     recordTicketCreateAttempt();
+    const requestedBucket = getTicketCaseBucket(reason);
     if (!tryAcquireTicketCreateLock(guild.id, ownerId)) {
         recordTicketCreateFailure("in_flight_lock");
         return { error: "Ticket creation is already in progress for your account. Please wait a moment and try again." };
@@ -7394,7 +7446,7 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
 
     // Self-heal stale owner records caused by manual/deleted/inaccessible channels so /ticket works immediately.
     // Iterate until we either find a valid active ticket or no owner-open tickets remain.
-    let existing = findOpenTicketByOwner(guild.id, ownerId);
+    let existing = findOpenTicketByOwnerInBucket(guild.id, ownerId, requestedBucket);
     let prunedAny = false;
     while (existing) {
         const stale = existing;
@@ -7412,7 +7464,7 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
 
         const idx = ticketStore.tickets.findIndex(t => t.id === stale.id);
         if (idx < 0) {
-            existing = findOpenTicketByOwner(guild.id, ownerId);
+            existing = findOpenTicketByOwnerInBucket(guild.id, ownerId, requestedBucket);
             continue;
         }
 
@@ -7426,14 +7478,16 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
             reason: "Missing/inaccessible channel during create"
         });
 
-        existing = findOpenTicketByOwner(guild.id, ownerId);
+        existing = findOpenTicketByOwnerInBucket(guild.id, ownerId, requestedBucket);
     }
     if (prunedAny) {
         saveTicketStore();
     }
     if (existing) {
         recordTicketCreateFailure("existing_open_ticket_record");
-        return { error: `You already have an open ticket: <#${existing.channelId}>` };
+        return { error: requestedBucket === "report"
+            ? `You already have an open report case: <#${existing.channelId}>`
+            : `You already have an open support ticket: <#${existing.channelId}>` };
     }
 
     const owner = await guild.members.fetch(ownerId).catch(() => null);
@@ -7442,12 +7496,14 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
         return { error: "Unable to resolve your member record." };
     }
 
-    const ownerActiveChannels = await findOwnerActiveTicketChannels(guild, owner);
+    const ownerActiveChannels = await findOwnerActiveTicketChannelsInBucket(guild, owner, requestedBucket);
     if (ownerActiveChannels.length > 0) {
         const canonical = ownerActiveChannels[0];
         await ensureTrackedTicketByChannelId(guild, canonical, owner.id);
         recordTicketCreateFailure("existing_open_ticket_channel");
-        return { error: `You already have an open ticket: <#${canonical}>` };
+        return { error: requestedBucket === "report"
+            ? `You already have an open report case: <#${canonical}>`
+            : `You already have an open support ticket: <#${canonical}>` };
     }
 
     const cfg = ensureTicketConfig(guild.id);
@@ -7479,7 +7535,7 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
     }
 
     // Cross-process safety: if multiple instances raced and created channels, keep only one owner-active channel.
-    const ownerChannelsAfterCreate = await findOwnerActiveTicketChannels(guild, owner);
+    const ownerChannelsAfterCreate = await findOwnerActiveTicketChannelsInBucket(guild, owner, requestedBucket);
     if (ownerChannelsAfterCreate.length > 1) {
         const canonical = ownerChannelsAfterCreate[0];
         if (canonical !== created.id) {
@@ -7487,7 +7543,9 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
             await removeTicketStoreEntryByChannelId(created.id);
             await ensureTrackedTicketByChannelId(guild, canonical, owner.id);
             recordTicketCreateFailure("dedupe_race_duplicate_channel");
-            return { error: `You already have an open ticket: <#${canonical}>` };
+            return { error: requestedBucket === "report"
+                ? `You already have an open report case: <#${canonical}>`
+                : `You already have an open support ticket: <#${canonical}>` };
         }
     }
 
@@ -7533,7 +7591,7 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
 
     await autoRouteTicket(guild, ticket);
 
-    await reconcileOwnerTicketDuplicates(guild, owner, created.id);
+    await reconcileOwnerTicketDuplicates(guild, owner, created.id, requestedBucket);
 
     return { channelId: created.id, ticketId: ticket.id };
     } finally {
@@ -8656,6 +8714,119 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     ticketanalytics: async interaction => {
         return await ticketCommandHandlers.ticketanalytics(interaction);
     },
+    reportqueue: async interaction => {
+        const guildError = requireGuild(interaction);
+        if (guildError) return guildError;
+
+        const member = interaction.member as GuildMember | null;
+        if (!member || !canManageTicketActions(member)) {
+            return "Only admins or the handler role can view the report queue.";
+        }
+
+        await pruneDeletedTicketRecords(interaction.guild!);
+        await pruneInaccessibleOwnerTicketRecords(interaction.guild!);
+
+        const visible = ticketStore.tickets
+            .filter(ticket => ticket.guildId === interaction.guildId)
+            .filter(ticket => getTicketCaseBucket(ticket.category || ticket.reason) === "report")
+            .filter(ticket => normalizeTicketStatus(ticket.status) !== "resolved")
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .slice(0, 20);
+
+        if (!visible.length) return "No active report cases right now.";
+
+        const lines = visible.map(ticket => {
+            const sla = getTicketSlaState(ticket);
+            const slaText = `${sla.firstResponseOverdue ? "FR-BREACH" : "FR-OK"}/${sla.resolveOverdue ? "RES-BREACH" : "RES-OK"}`;
+            return `#${ticket.id} [${ticket.status}|${ticket.workflowStatus}|${ticket.priority}] <#${ticket.channelId}> | reporter <@${ticket.ownerId}>${ticket.claimedById ? ` | Claimed <@${ticket.claimedById}>` : ""}${ticket.assignedToId ? ` | Assigned <@${ticket.assignedToId}>` : ""} | SLA ${slaText} | updated <t:${Math.floor(ticket.updatedAt / 1000)}:R>`;
+        });
+
+        appendAuditEvent("report_queue_view", {
+            guildId: interaction.guildId,
+            actorId: interaction.user.id,
+            total: visible.length
+        });
+
+        return [
+            "🚨 Report Queue",
+            `Showing ${visible.length} active report case(s)`,
+            "",
+            ...lines
+        ].join("\n");
+    },
+    reportsearch: async interaction => {
+        const guildError = requireGuild(interaction);
+        if (guildError) return guildError;
+
+        const member = interaction.member as GuildMember | null;
+        if (!member || !canManageTicketActions(member)) {
+            return "Only admins or the handler role can search report history.";
+        }
+
+        const guild = interaction.guild!;
+        const owner = interaction.options.getUser("owner");
+        const status = interaction.options.getString("status");
+        const query = (interaction.options.getString("query") || "").trim().toLowerCase();
+        const page = Math.max(1, interaction.options.getInteger("page") || 1);
+        const pageSize = Math.max(5, Math.min(20, interaction.options.getInteger("page_size") || 10));
+
+        let scoped = ticketStore.tickets
+            .filter(ticket => ticket.guildId === guild.id)
+            .filter(ticket => getTicketCaseBucket(ticket.category || ticket.reason) === "report");
+
+        if (owner) {
+            scoped = scoped.filter(ticket => ticket.ownerId === owner.id);
+        }
+        if (status) {
+            scoped = scoped.filter(ticket => normalizeTicketStatus(ticket.status) === status);
+        }
+        if (query) {
+            scoped = scoped.filter(ticket => getTicketSearchIndex(ticket).includes(query));
+        }
+
+        scoped = scoped.sort((a, b) => b.updatedAt - a.updatedAt);
+        const total = scoped.length;
+        if (!total) {
+            return "No report cases matched your filters.";
+        }
+
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const safePage = Math.min(page, totalPages);
+        const start = (safePage - 1) * pageSize;
+        const visible = scoped.slice(start, start + pageSize);
+
+        const lines = visible.map(ticket => {
+            const noteCount = ticket.internalNotes?.length || 0;
+            return `#${ticket.id} [${ticket.status}|${ticket.workflowStatus}|${ticket.priority}] <#${ticket.channelId}> | reporter <@${ticket.ownerId}> | notes ${noteCount} | updated <t:${Math.floor(ticket.updatedAt / 1000)}:R>`;
+        });
+
+        appendAuditEvent("report_search", {
+            guildId: guild.id,
+            actorId: interaction.user.id,
+            filters: {
+                ownerId: owner?.id || null,
+                status: status || null,
+                query: query || null,
+                page: safePage,
+                pageSize
+            },
+            total
+        });
+
+        const filterSummary = [
+            owner ? `owner=<@${owner.id}>` : null,
+            status ? `status=${status}` : null,
+            query ? `query=${query}` : null
+        ].filter(Boolean).join(", ") || "none";
+
+        return [
+            "🚨 Report Search Results",
+            `Filters: ${filterSummary}`,
+            `Page ${safePage}/${totalPages} | Showing ${visible.length}/${total}`,
+            "",
+            ...lines
+        ].join("\n");
+    },
     ticketsearch: async interaction => {
         const guildError = requireGuild(interaction);
         if (guildError) return guildError;
@@ -9352,6 +9523,7 @@ client.once("clientReady", async () => {
             console.log(`Registered slash commands for guild ${guild.id}`);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await ensurePermanentTicketPanelForGuild(guild);
+                await ensurePermanentReportPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
             }
@@ -9369,6 +9541,7 @@ client.once("clientReady", async () => {
             await guild.commands.set(slashCommands).catch(() => undefined);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await ensurePermanentTicketPanelForGuild(guild);
+                await ensurePermanentReportPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
             }
