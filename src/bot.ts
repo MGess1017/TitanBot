@@ -9560,6 +9560,9 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             ...scoped.map(entry => `#${entry.id} [${entry.status}|${entry.rewardKind === "item" ? `item:${entry.rewardItemId || "unknown"}x${entry.rewardQty}` : "generic"}] ${entry.prize} | entries ${entry.entries.length} | winners ${entry.winnerCount} | end <t:${Math.floor(entry.endAt / 1000)}:R>`)
         ].join("\n");
     },
+    giveaways: async interaction => {
+        return await commandHandlers.giveawaylist(interaction);
+    },
     ticketsearch: async interaction => {
         const guildError = requireGuild(interaction);
         if (guildError) return guildError;
@@ -10239,6 +10242,10 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
 
 client.once("clientReady", async () => {
     console.log(`Logged in as ${client.user?.tag ?? "unknown-user"}`);
+    console.log(`[startup] Preparing to register ${slashCommands.length} guild slash commands.`);
+    if (slashCommands.length > 100) {
+        console.error(`[startup] Slash command count ${slashCommands.length} exceeds Discord guild limit (100). Some commands will not register.`);
+    }
     updateBotPresence();
     console.log(`[startup] ${buildStartupSummary(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {

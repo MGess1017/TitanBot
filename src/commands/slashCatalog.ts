@@ -16,12 +16,6 @@ export function buildSlashCommands(input: {
             .setName("help")
             .setDescription("Show available bot commands."),
         new SlashCommandBuilder()
-            .setName("quickstart")
-            .setDescription("Guided first-run command flow for raids and economy."),
-        new SlashCommandBuilder()
-            .setName("testupdate")
-            .setDescription("Test command that replies with Updated."),
-        new SlashCommandBuilder()
             .setName("xproles")
             .setDescription("View XP rank roles in a randomized color embed."),
         new SlashCommandBuilder()
@@ -32,15 +26,8 @@ export function buildSlashCommands(input: {
             .setName("status")
             .setDescription("Show bot runtime status."),
         new SlashCommandBuilder()
-            .setName("findbots")
-            .setDescription("List bot accounts in this server and highlight this bot."),
-        new SlashCommandBuilder()
             .setName("balance")
             .setDescription("Show your FN Token$ balance."),
-        new SlashCommandBuilder()
-            .setName("token")
-            .setDescription("Show FN Token$ balance")
-            .addUserOption(o => o.setName("user").setDescription("Optional user").setRequired(false)),
         new SlashCommandBuilder()
             .setName("bank")
             .setDescription("Show wallet and bank balances")
@@ -212,9 +199,6 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addUserOption(o => o.setName("user").setDescription("User").setRequired(true))
             .addIntegerOption(o => o.setName("amount").setDescription("Amount").setRequired(true)),
-        new SlashCommandBuilder().setName("pointsuser").setDescription("Check user Access Points")
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-            .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
         new SlashCommandBuilder().setName("timeout").setDescription("Timeout user")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
@@ -273,10 +257,6 @@ export function buildSlashCommands(input: {
             .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional ticket channel (use when running outside ticket)").addChannelTypes(ChannelType.GuildText).setRequired(false))
             .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional ticket channel ID when channel picker does not show it").setRequired(false)),
         new SlashCommandBuilder().setName("ticketassign").setDescription("Assign a tracked ticket to a handler/admin")
-            .addUserOption(o => o.setName("user").setDescription("Assignee").setRequired(true))
-            .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional ticket channel (use when running outside ticket)").addChannelTypes(ChannelType.GuildText).setRequired(false))
-            .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional ticket channel ID when channel picker does not show it").setRequired(false)),
-        new SlashCommandBuilder().setName("ticketassgin").setDescription("Alias for ticketassign (legacy typo support)")
             .addUserOption(o => o.setName("user").setDescription("Assignee").setRequired(true))
             .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional ticket channel (use when running outside ticket)").addChannelTypes(ChannelType.GuildText).setRequired(false))
             .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional ticket channel ID when channel picker does not show it").setRequired(false)),
@@ -427,6 +407,8 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true)),
         new SlashCommandBuilder().setName("giveawaylist").setDescription("Admin: list recent giveaways")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName("giveaways").setDescription("Admin: alias for giveaway list")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("setmodlog").setDescription("Set the moderation log channel")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
