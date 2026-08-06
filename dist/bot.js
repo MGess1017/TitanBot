@@ -4710,31 +4710,12 @@ function buildCasinoSessionLine(userId) {
         `Total Net: ${formatNetAmount(stats.net)}`
     ].join(" | ");
 }
-function getCasinoThemeProfile(gameKey) {
-    if (gameKey === "dice")
-        return { title: "Target Dice", emoji: "🎯", badge: "Marksman Badge", threat: "Low" };
-    if (gameKey === "roulette")
-        return { title: "Sector Roulette", emoji: "🧭", badge: "Navigator Badge", threat: "Medium" };
-    if (gameKey === "blackjack")
-        return { title: "Blackjack Front", emoji: "🃏", badge: "Field Commander Badge", threat: "Medium" };
-    if (gameKey === "crash")
-        return { title: "Crash Extraction", emoji: "📈", badge: "Risk Command Badge", threat: "High" };
-    if (gameKey === "slots")
-        return { title: "Supply Slots", emoji: "🎰", badge: "Supply Badge", threat: "Medium" };
-    if (gameKey === "coinflip")
-        return { title: "Coin Toss Drill", emoji: "🪙", badge: "Rapid Call Badge", threat: "Low" };
-    if (gameKey === "baccarat")
-        return { title: "Baccarat Theater", emoji: "🂡", badge: "Operations Badge", threat: "Medium" };
-    if (gameKey === "hilo")
-        return { title: "High-Low Recon", emoji: "🛰️", badge: "Recon Badge", threat: "Medium" };
-    return { title: "Keno Grid", emoji: "🎟️", badge: "Grid Analyst Badge", threat: "High" };
-}
 function getCasinoOutcomePayload(outcome) {
     if (outcome === "win")
-        return { color: 0x16a34a, label: "VICTORY", banner: "🟢 Victory Banner" };
+        return { color: 0x00ff00, label: "WIN" };
     if (outcome === "push")
-        return { color: 0xeab308, label: "PUSH", banner: "🟡 Ceasefire Banner" };
-    return { color: 0xdc2626, label: "LOSS", banner: "🔴 Defeat Banner" };
+        return { color: 0xffff00, label: "PUSH" };
+    return { color: 0xff0000, label: "LOSS" };
 }
 function getNextCasinoGame(gameKey) {
     const idx = CASINO_GAME_ORDER.indexOf(gameKey);
@@ -4796,19 +4777,19 @@ function buildCasinoActionComponents(meta) {
     const nextGame = getNextCasinoGame(meta.gameKey);
     const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
         .setCustomId(buildCasinoActionCustomIdForUser("replay", meta.gameKey, meta.bet, meta.userId, meta.arg))
-        .setLabel("Re-Deploy")
+        .setLabel("Replay")
         .setEmoji("🔁")
         .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
         .setCustomId(buildCasinoActionCustomIdForUser("double", meta.gameKey, meta.bet, meta.userId, meta.arg))
-        .setLabel("Full Assault")
+        .setLabel("Double Bet")
         .setEmoji("⚔️")
         .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
         .setCustomId(buildCasinoActionCustomIdForUser("half", meta.gameKey, meta.bet, meta.userId, meta.arg))
-        .setLabel("Tactical Retreat")
+        .setLabel("Half Bet")
         .setEmoji("🛡️")
         .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
         .setCustomId(buildCasinoActionCustomIdForUser("switch", meta.gameKey, meta.bet, meta.userId, meta.arg))
-        .setLabel(`Switch Front -> ${nextGame}`)
+        .setLabel(`Switch Game -> ${nextGame}`)
         .setEmoji("🧭")
         .setStyle(discord_js_1.ButtonStyle.Secondary));
     return [row.toJSON()];
@@ -4816,7 +4797,6 @@ function buildCasinoActionComponents(meta) {
 function formatCasinoResult(options) {
     const net = options.payout - options.bet;
     const outcomePayload = getCasinoOutcomePayload(options.outcome);
-    const profile = getCasinoThemeProfile(options.gameKey);
     const riskBand = getCasinoRiskBand(options.bet, options.walletBefore);
     const oddsSnapshot = getCasinoOddsSnapshot(options.gameKey);
     const detailLines = (options.details || []).map(detail => `• ${detail.label}: ${detail.value}`);
@@ -4827,34 +4807,24 @@ function formatCasinoResult(options) {
             : ["Bank partial gains to protect long-run bankroll consistency."];
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(outcomePayload.color)
-        .setTitle(`${profile.emoji} ${profile.title} • ${outcomePayload.label}`)
+        .setTitle(`${options.gameIcon} ${options.gameName} • ${outcomePayload.label}`)
         .setDescription([
-        `**${outcomePayload.banner}**`,
-        "War-room casino telemetry: mission-grade round results, bankroll movement, and tactical performance context.",
-        "",
-        "`Badges:` 🪖 Operator | 🎖️ Veteran | ⚔️ Assault | 🛰️ Recon"
+        "Casino round summary with direct payout and bankroll telemetry.",
+        "Outcome colors: WIN=green, LOSS=red, PUSH=yellow."
     ].join("\n"))
         .addFields({
-        name: "Mission Card",
-        value: [
-            `Operation: ${profile.title}`,
-            `Badge: ${profile.badge}`,
-            `Threat Level: ${profile.threat}`,
-            `Risk Band: ${riskBand}`
-        ].join("\n"),
-        inline: true
-    }, {
         name: "Round Ledger",
         value: [
             `Bet: ${formatTokenAmount(options.bet)}`,
             `Payout: ${formatTokenAmount(options.payout)}`,
             `Net: ${formatNetAmount(net)}`,
             `Wallet: ${formatTokenAmount(options.walletBefore)} -> ${formatTokenAmount(options.walletAfter)}`,
+            `Risk Band: ${riskBand}`,
             `Lucky Multiplier: ${options.luckyLabel || "Standard 1.0x"}`
         ].join("\n"),
         inline: true
     }, {
-        name: "Tactical Intel",
+        name: "Performance Intel",
         value: [
             oddsSnapshot,
             buildCasinoStatLine(options.userId, options.gameKey),
@@ -4873,7 +4843,7 @@ function formatCasinoResult(options) {
         }
     }
     if (notes.length) {
-        embed.addFields({ name: "Command Notes", value: notes.map(note => `• ${note}`).join("\n"), inline: false });
+        embed.addFields({ name: "Round Notes", value: notes.map(note => `• ${note}`).join("\n"), inline: false });
     }
     for (const section of options.sections || []) {
         embed.addFields({ name: section.title, value: section.value, inline: false });
