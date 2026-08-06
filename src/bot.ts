@@ -3533,11 +3533,11 @@ function helpPageShop() {
 function helpPageGames() {
     return new EmbedBuilder()
         .setColor(0x00ffea)
-        .setTitle("🎯 Training Grounds")
-        .setDescription("Casino games using FN Token$, ultra-rare coins found only in raids (except owner-issued grants).")
+        .setTitle("🪖 War Games Command")
+        .setDescription("High-risk tactical casino simulations powered by FN Token$ from raids and live operations rewards.")
         .addFields(
-            { name: "Command Summary", value: "• `/dice` — predict number/high-low/odd-even\n\n• `/roulette` — color, parity, or number bets\n\n• `/blackjack` — safe/aggressive strategy auto-play\n\n• `/crash` — target multiplier risk game\n\n• `/slots` — 8-row machine up to 8 paylines\n\n• `/coinflip` — heads/tails\n\n• `/baccarat` — player/banker/tie\n\n• `/hilo` — higher or lower call\n\n• `/keno` — pick 2-10 numbers out of 40" },
-            { name: "Fairness Model", value: "• All games deduct stake first.\n\n• Lucky multipliers and payouts are tuned for sustainable economy balance." }
+            { name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/slots` — 8-lane reward machine\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" },
+            { name: "Rules of Engagement", value: "• Stake is committed before each round.\n\n• Result boards use mission colors: WIN=green, LOSS=red, PUSH=yellow.\n\n• Action buttons allow replay, bet scaling, and mode rotation." }
         );
 }
 
@@ -5576,6 +5576,13 @@ function rollLuckyMultiplier(): { multiplier: number; label: string } {
 
 type CasinoOutcome = "win" | "loss" | "push";
 
+type CasinoThemeProfile = {
+    title: string;
+    emoji: string;
+    badge: string;
+    threat: string;
+};
+
 function formatTokenAmount(value: number): string {
     return `${value} FN Token$`;
 }
@@ -5624,6 +5631,24 @@ function buildCasinoSessionLine(userId: string): string {
         `Total Wagered: ${formatTokenAmount(stats.wagered)}`,
         `Total Net: ${formatNetAmount(stats.net)}`
     ].join(" | ");
+}
+
+function getCasinoThemeProfile(gameKey: Exclude<GameStatKey, "raid">): CasinoThemeProfile {
+    if (gameKey === "dice") return { title: "Target Dice", emoji: "🎯", badge: "Marksman Badge", threat: "Low" };
+    if (gameKey === "roulette") return { title: "Sector Roulette", emoji: "🧭", badge: "Navigator Badge", threat: "Medium" };
+    if (gameKey === "blackjack") return { title: "Blackjack Front", emoji: "🃏", badge: "Field Commander Badge", threat: "Medium" };
+    if (gameKey === "crash") return { title: "Crash Extraction", emoji: "📈", badge: "Risk Command Badge", threat: "High" };
+    if (gameKey === "slots") return { title: "Supply Slots", emoji: "🎰", badge: "Supply Badge", threat: "Medium" };
+    if (gameKey === "coinflip") return { title: "Coin Toss Drill", emoji: "🪙", badge: "Rapid Call Badge", threat: "Low" };
+    if (gameKey === "baccarat") return { title: "Baccarat Theater", emoji: "🂡", badge: "Operations Badge", threat: "Medium" };
+    if (gameKey === "hilo") return { title: "High-Low Recon", emoji: "🛰️", badge: "Recon Badge", threat: "Medium" };
+    return { title: "Keno Grid", emoji: "🎟️", badge: "Grid Analyst Badge", threat: "High" };
+}
+
+function getCasinoOutcomePayload(outcome: CasinoOutcome): { color: number; label: string; banner: string } {
+    if (outcome === "win") return { color: 0x16a34a, label: "VICTORY", banner: "🟢 Victory Banner" };
+    if (outcome === "push") return { color: 0xeab308, label: "PUSH", banner: "🟡 Ceasefire Banner" };
+    return { color: 0xdc2626, label: "LOSS", banner: "🔴 Defeat Banner" };
 }
 
 function getNextCasinoGame(gameKey: CasinoGameKey): CasinoGameKey {
@@ -5684,23 +5709,23 @@ function buildCasinoActionComponents(meta: { userId: string; gameKey: CasinoGame
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
             .setCustomId(buildCasinoActionCustomIdForUser("replay", meta.gameKey, meta.bet, meta.userId, meta.arg))
-            .setLabel("Replay")
+            .setLabel("Re-Deploy")
             .setEmoji("🔁")
             .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
             .setCustomId(buildCasinoActionCustomIdForUser("double", meta.gameKey, meta.bet, meta.userId, meta.arg))
-            .setLabel("Double Bet")
-            .setEmoji("📈")
+            .setLabel("Full Assault")
+            .setEmoji("⚔️")
             .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
             .setCustomId(buildCasinoActionCustomIdForUser("half", meta.gameKey, meta.bet, meta.userId, meta.arg))
-            .setLabel("Half Bet")
-            .setEmoji("📉")
+            .setLabel("Tactical Retreat")
+            .setEmoji("🛡️")
             .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
             .setCustomId(buildCasinoActionCustomIdForUser("switch", meta.gameKey, meta.bet, meta.userId, meta.arg))
-            .setLabel(`Switch -> ${nextGame}`)
-            .setEmoji("🎮")
+            .setLabel(`Switch Front -> ${nextGame}`)
+            .setEmoji("🧭")
             .setStyle(ButtonStyle.Secondary)
     );
     return [row.toJSON()];
@@ -5723,8 +5748,8 @@ function formatCasinoResult(options: {
     actionMeta?: { bet: number; arg: string };
 }): string {
     const net = options.payout - options.bet;
-    const outcomeLabel = options.outcome === "win" ? "WIN" : options.outcome === "push" ? "PUSH" : "LOSS";
-    const color = options.outcome === "win" ? 0x16a34a : options.outcome === "push" ? 0xeab308 : 0xdc2626;
+    const outcomePayload = getCasinoOutcomePayload(options.outcome);
+    const profile = getCasinoThemeProfile(options.gameKey);
     const riskBand = getCasinoRiskBand(options.bet, options.walletBefore);
     const oddsSnapshot = getCasinoOddsSnapshot(options.gameKey);
     const detailLines = (options.details || []).map(detail => `• ${detail.label}: ${detail.value}`);
@@ -5735,10 +5760,25 @@ function formatCasinoResult(options: {
             : ["Bank partial gains to protect long-run bankroll consistency."];
 
     const embed = new EmbedBuilder()
-        .setColor(color)
-        .setTitle(`${options.gameIcon} ${options.gameName} • ${outcomeLabel}`)
-        .setDescription("Casino operations panel with round telemetry, risk profile, and long-run performance context.")
+        .setColor(outcomePayload.color)
+        .setTitle(`${profile.emoji} ${profile.title} • ${outcomePayload.label}`)
+        .setDescription([
+            `**${outcomePayload.banner}**`,
+            "War-room casino telemetry: mission-grade round results, bankroll movement, and tactical performance context.",
+            "",
+            "`Badges:` 🪖 Operator | 🎖️ Veteran | ⚔️ Assault | 🛰️ Recon"
+        ].join("\n"))
         .addFields(
+            {
+                name: "Mission Card",
+                value: [
+                    `Operation: ${profile.title}`,
+                    `Badge: ${profile.badge}`,
+                    `Threat Level: ${profile.threat}`,
+                    `Risk Band: ${riskBand}`
+                ].join("\n"),
+                inline: true
+            },
             {
                 name: "Round Ledger",
                 value: [
@@ -5746,13 +5786,12 @@ function formatCasinoResult(options: {
                     `Payout: ${formatTokenAmount(options.payout)}`,
                     `Net: ${formatNetAmount(net)}`,
                     `Wallet: ${formatTokenAmount(options.walletBefore)} -> ${formatTokenAmount(options.walletAfter)}`,
-                    `Risk Band: ${riskBand}`,
                     `Lucky Multiplier: ${options.luckyLabel || "Standard 1.0x"}`
                 ].join("\n"),
-                inline: false
+                inline: true
             },
             {
-                name: "Game Intel",
+                name: "Tactical Intel",
                 value: [
                     oddsSnapshot,
                     buildCasinoStatLine(options.userId, options.gameKey),
@@ -5774,7 +5813,7 @@ function formatCasinoResult(options: {
     }
 
     if (notes.length) {
-        embed.addFields({ name: "Strategy Notes", value: notes.map(note => `• ${note}`).join("\n"), inline: false });
+        embed.addFields({ name: "Command Notes", value: notes.map(note => `• ${note}`).join("\n"), inline: false });
     }
 
     for (const section of options.sections || []) {
