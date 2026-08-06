@@ -3135,7 +3135,9 @@ function embedFromPayload(commandName, raw, user) {
         embed.data.description || "",
         ...(embed.data.fields || []).map(field => `${field.name || ""}\n${field.value || ""}`)
     ].join("\n");
-    const outcomeColor = resolveOutcomeColor(commandName, payloadText);
+    const hasExplicitPayloadColor = typeof embed.data.color === "number";
+    const shouldPreserveGamePayloadColor = GAME_COMMAND_SET.has(cmd) && hasExplicitPayloadColor;
+    const outcomeColor = shouldPreserveGamePayloadColor ? null : resolveOutcomeColor(commandName, payloadText);
     if (outcomeColor !== null) {
         embed.setColor(outcomeColor);
     }

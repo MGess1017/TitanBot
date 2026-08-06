@@ -3821,7 +3821,10 @@ function embedFromPayload(commandName: string, raw: APIEmbed, user: User): APIEm
         ...(embed.data.fields || []).map(field => `${field.name || ""}\n${field.value || ""}`)
     ].join("\n");
 
-    const outcomeColor = resolveOutcomeColor(commandName, payloadText);
+    const hasExplicitPayloadColor = typeof embed.data.color === "number";
+    const shouldPreserveGamePayloadColor = GAME_COMMAND_SET.has(cmd) && hasExplicitPayloadColor;
+
+    const outcomeColor = shouldPreserveGamePayloadColor ? null : resolveOutcomeColor(commandName, payloadText);
     if (outcomeColor !== null) {
         embed.setColor(outcomeColor);
     } else if (!embed.data.color) {
