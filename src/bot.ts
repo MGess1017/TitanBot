@@ -151,6 +151,7 @@ const MIN_BET = 1;
 const MIN_RAID_BET = 10;
 const MOD_DATA_FILE = path.resolve(__dirname, "../src/data/moderation.json");
 const TRADE_DATA_FILE = path.resolve(__dirname, "../src/data/trades.json");
+const GIVEAWAY_DATA_FILE = path.resolve(__dirname, "../src/data/giveaways.json");
 const XP_ROLE_DATA_FILE = path.resolve(__dirname, "../src/data/xp-roles.json");
 const POINTS_DATA_FILE = path.resolve(__dirname, "../src/data/points.json");
 const POINTS_BACKUP_FILE = `${POINTS_DATA_FILE}.bak`;
@@ -627,6 +628,32 @@ type TradeOffer = {
 type TradeStore = {
     nextId: number;
     offers: TradeOffer[];
+};
+
+type GiveawayStatus = "active" | "ended" | "cancelled";
+
+type GiveawayEntry = {
+    id: number;
+    guildId: string;
+    channelId: string;
+    messageId: string | null;
+    hostId: string;
+    prize: string;
+    description: string;
+    winnerCount: number;
+    roleRequiredId: string | null;
+    createdAt: number;
+    endAt: number;
+    updatedAt: number;
+    status: GiveawayStatus;
+    entries: string[];
+    winners: string[];
+    endedAt: number | null;
+};
+
+type GiveawayStore = {
+    nextId: number;
+    giveaways: GiveawayEntry[];
 };
 
 type BalanceSlice = {
@@ -1432,6 +1459,7 @@ function checkpointState(reason: string): void {
     try {
         savePoints();
         saveTradeStore();
+        saveGiveawayStore();
         saveModerationStore();
         saveTicketStore();
         saveBalanceTelemetry();
@@ -1511,6 +1539,178 @@ const tradeStore = readTradeStore();
 function saveTradeStore(): void {
     pruneTradeOffers();
     writeJsonAtomic(TRADE_DATA_FILE, tradeStore);
+}
+
+function normalizeGiveawayStore(raw: unknown): GiveawayStore | null {
+    const candidate = raw as Partial<GiveawayStore>;
+    if (!candidate || !Array.isArray(candidate.giveaways) || typeof candidate.nextId !== "number") return null;
+
+    const giveaways: GiveawayEntry[] = candidate.giveaways
+        .filter(row => Boolean(row && typeof row === "object"))
+        .map(row => {
+            const entry = row as Partial<GiveawayEntry>;
+            const status: GiveawayStatus = entry.status === "ended" || entry.status === "cancelled" ? entry.status : "active";
+            return {
+            id: Math.max(1, Math.floor(Number(row.id) || 0)),
+            guildId: String(entry.guildId || ""),
+            channelId: String(entry.channelId || ""),
+            messageId: entry.messageId ? String(entry.messageId) : null,
+            hostId: String(entry.hostId || ""),
+            prize: String(entry.prize || "Giveaway"),
+            description: String(entry.description || ""),
+            winnerCount: Math.max(1, Math.floor(Number(entry.winnerCount) || 1)),
+            roleRequiredId: entry.roleRequiredId ? String(entry.roleRequiredId) : null,
+            createdAt: Math.max(0, Math.floor(Number(entry.createdAt) || Date.now())),
+            endAt: Math.max(0, Math.floor(Number(entry.endAt) || Date.now())),
+            updatedAt: Math.max(0, Math.floor(Number(entry.updatedAt) || Date.now())),
+            status,
+            entries: Array.from(new Set(Array.isArray(entry.entries) ? entry.entries.map(value => String(value)) : [])),
+            winners: Array.from(new Set(Array.isArray(entry.winners) ? entry.winners.map(value => String(value)) : [])),
+            endedAt: typeof entry.endedAt === "number" ? entry.endedAt : null
+            };
+        })
+        .filter(entry => entry.id > 0 && entry.guildId && entry.channelId && entry.hostId);
+
+    return { nextId: Math.max(1, Math.floor(candidate.nextId)), giveaways };
+}
+
+const giveawayStore = readJsonWithBackup<GiveawayStore>(
+    GIVEAWAY_DATA_FILE,
+    normalizeGiveawayStore,
+    { nextId: 1, giveaways: [] }
+);
+
+function saveGiveawayStore(): void {
+    writeJsonAtomic(GIVEAWAY_DATA_FILE, giveawayStore);
+}
+
+function getGiveawayById(id: number): GiveawayEntry | null {
+    return giveawayStore.giveaways.find(entry => entry.id === id) || null;
+}
+
+function formatGiveawayDuration(ms: number): string {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m ${seconds % 60}s`;
+}
+
+function shuffleUserIds(ids: string[]): string[] {
+    const values = [...ids];
+    for (let i = values.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [values[i], values[j]] = [values[j], values[i]];
+    }
+    return values;
+}
+
+function pickGiveawayWinners(giveaway: GiveawayEntry): string[] {
+    return shuffleUserIds(giveaway.entries).slice(0, Math.max(1, giveaway.winnerCount));
+}
+
+function buildGiveawayEmbed(giveaway: GiveawayEntry, now = Date.now()): EmbedBuilder {
+    const remainingMs = Math.max(0, giveaway.endAt - now);
+    const winnersText = giveaway.winners.length ? giveaway.winners.map(id => `<@${id}>`).join(", ") : "Pending draw";
+    return new EmbedBuilder()
+        .setColor(giveaway.status === "active" ? 0xf59e0b : 0x22c55e)
+        .setTitle(`🎉 ${giveaway.prize}`)
+        .setDescription(giveaway.description || "Press the button below to enter before the timer ends.")
+        .addFields(
+            { name: "Giveaway ID", value: `#${giveaway.id}`, inline: true },
+            { name: "Hosted By", value: `<@${giveaway.hostId}>`, inline: true },
+            { name: "Status", value: giveaway.status.toUpperCase(), inline: true },
+            { name: "Winners", value: `${giveaway.winnerCount}`, inline: true },
+            { name: "Entries", value: `${giveaway.entries.length}`, inline: true },
+            { name: "Role Requirement", value: giveaway.roleRequiredId ? `<@&${giveaway.roleRequiredId}>` : "None", inline: true },
+            { name: giveaway.status === "active" ? "Ends" : "Ended", value: giveaway.status === "active" ? `<t:${Math.floor(giveaway.endAt / 1000)}:R>\n${formatGiveawayDuration(remainingMs)} remaining` : (giveaway.endedAt ? `<t:${Math.floor(giveaway.endedAt / 1000)}:R>` : "Ended"), inline: false },
+            { name: "Current Winners", value: winnersText, inline: false }
+        )
+        .setFooter({ text: giveaway.status === "active" ? "Press Enter Giveaway below to participate." : "Giveaway closed." })
+        .setTimestamp(new Date(giveaway.endAt));
+}
+
+function buildGiveawayActionRow(giveaway: GiveawayEntry): ActionRowBuilder<ButtonBuilder> {
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`${GIVEAWAY_IDS.enterPrefix}:${giveaway.id}`)
+            .setLabel(giveaway.status === "active" ? "Enter Giveaway" : "Giveaway Closed")
+            .setEmoji("🎉")
+            .setStyle(giveaway.status === "active" ? ButtonStyle.Success : ButtonStyle.Secondary)
+            .setDisabled(giveaway.status !== "active")
+    );
+}
+
+async function sendGiveawayLog(guildId: string, title: string, fields: Array<{ name: string; value: string; inline?: boolean }>): Promise<void> {
+    const state = ensureGuildModeration(guildId);
+    const targetChannelId = state.modLogChannelId || MOD_LOG_CHANNEL_ID || ACTIVITY_CHANNEL_ID || HEALTH_REPORT_CHANNEL_ID;
+    if (!targetChannelId) return;
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) return;
+    const channel = guild.channels.cache.get(targetChannelId) || await guild.channels.fetch(targetChannelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
+
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle(`🎉 ${title}`)
+        .addFields(fields), "FN Giveaway Desk", "Giveaway live feed");
+    await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => undefined);
+}
+
+async function syncGiveawayMessage(giveaway: GiveawayEntry): Promise<void> {
+    if (!giveaway.messageId) return;
+    const guild = client.guilds.cache.get(giveaway.guildId) || await client.guilds.fetch(giveaway.guildId).catch(() => null);
+    if (!guild) return;
+    const channel = guild.channels.cache.get(giveaway.channelId) || await guild.channels.fetch(giveaway.channelId).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) return;
+    const message = await channel.messages.fetch(giveaway.messageId).catch(() => null);
+    if (!message) return;
+    await message.edit({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)] }).catch(() => undefined);
+}
+
+async function finalizeGiveaway(giveaway: GiveawayEntry, reason: "timer" | "manual" | "reroll" = "timer"): Promise<void> {
+    if (giveaway.status !== "active" && reason !== "reroll") return;
+    if (reason !== "reroll") {
+        giveaway.status = "ended";
+        giveaway.endedAt = Date.now();
+    }
+    giveaway.winners = giveaway.entries.length ? pickGiveawayWinners(giveaway) : [];
+    giveaway.updatedAt = Date.now();
+    saveGiveawayStore();
+    await syncGiveawayMessage(giveaway);
+
+    const guild = client.guilds.cache.get(giveaway.guildId) || await client.guilds.fetch(giveaway.guildId).catch(() => null);
+    const channel = guild ? (guild.channels.cache.get(giveaway.channelId) || await guild.channels.fetch(giveaway.channelId).catch(() => null)) : null;
+    if (channel && channel.isTextBased()) {
+        const content = giveaway.winners.length
+            ? `🎉 Giveaway #${giveaway.id} ended! Winner${giveaway.winners.length === 1 ? "" : "s"}: ${giveaway.winners.map(id => `<@${id}>`).join(", ")} | Prize: **${giveaway.prize}**`
+            : `Giveaway #${giveaway.id} ended with no valid entrants for **${giveaway.prize}**.`;
+        await channel.send({ content, allowedMentions: { users: giveaway.winners, parse: [] } }).catch(() => undefined);
+    }
+
+    appendAuditEvent(reason === "reroll" ? "giveaway_reroll" : "giveaway_end", {
+        guildId: giveaway.guildId,
+        giveawayId: giveaway.id,
+        channelId: giveaway.channelId,
+        winnerIds: giveaway.winners,
+        prize: giveaway.prize,
+        reason
+    });
+
+    await sendGiveawayLog(giveaway.guildId, reason === "reroll" ? `Giveaway #${giveaway.id} Rerolled` : `Giveaway #${giveaway.id} Ended`, [
+        { name: "Prize", value: giveaway.prize, inline: false },
+        { name: "Winners", value: giveaway.winners.length ? giveaway.winners.map(id => `<@${id}>`).join(", ") : "No valid entrants", inline: false },
+        { name: "Entries", value: `${giveaway.entries.length}`, inline: true }
+    ]);
+}
+
+async function processDueGiveaways(now = Date.now()): Promise<void> {
+    const due = giveawayStore.giveaways.filter(giveaway => giveaway.status === "active" && giveaway.endAt <= now);
+    for (const giveaway of due) {
+        await finalizeGiveaway(giveaway, "timer");
+    }
 }
 
 function createTradeOffer(input: Omit<TradeOffer, "id" | "status" | "createdAt" | "updatedAt">): TradeOffer {
@@ -2716,6 +2916,10 @@ const REPORT_IDS = {
     details: "report_details",
     location: "report_location",
     evidence: "report_evidence"
+} as const;
+
+const GIVEAWAY_IDS = {
+    enterPrefix: "giveaway_enter"
 } as const;
 
 const SELL_UI_IDS = {
@@ -8754,6 +8958,97 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             ...lines
         ].join("\n");
     },
+    reportresolve: async interaction => {
+        const guildError = requireGuild(interaction);
+        if (guildError) return guildError;
+        const member = interaction.member as GuildMember | null;
+        if (!member || !canManageTicketActions(member)) {
+            return "Only admins or the handler role can resolve report cases.";
+        }
+
+        const target = resolveTicketTargetChannelId(interaction);
+        if (target.error || !target.channelId) return target.error || "Unable to resolve the target report channel.";
+
+        const tracked = await ensureTrackedTicketByChannelId(interaction.guild!, target.channelId, interaction.user.id);
+        if (!tracked) return "This channel is not a tracked report and could not be imported.";
+        if (getTicketCaseBucket(tracked.category || tracked.reason) !== "report") return "This command only applies to report cases.";
+        const ticket = findArchivedTicketByChannel(target.channelId);
+        if (!ticket) return "This report must be archived before final resolution.";
+
+        const action = interaction.options.getString("action", true);
+        const reason = (interaction.options.getString("reason") || "Report review complete").slice(0, 220);
+        const composedReason = `[report-action:${action}] ${reason}`;
+        const msg = await resolveTicketChannel(interaction.guild!, target.channelId, interaction.user.id, composedReason);
+        const resolved = findTicketByChannel(target.channelId);
+        appendAuditEvent("report_resolve", {
+            guildId: interaction.guildId,
+            ticketId: ticket.id,
+            action,
+            resolverId: interaction.user.id,
+            reason
+        });
+        if (!resolved) return msg;
+        return buildTicketCommandEmbedPayload(
+            "🚨 Report Resolved",
+            "Report case was resolved with a final moderation disposition.",
+            resolved,
+            [
+                { name: "Disposition", value: action, inline: true },
+                { name: "Resolved By", value: `<@${interaction.user.id}>`, inline: true },
+                { name: "Resolution Note", value: reason, inline: false }
+            ]
+        );
+    },
+    reportanalytics: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const guild = interaction.guild;
+        if (!guild) return "This command can only be used in a server.";
+
+        const scoped = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id && getTicketCaseBucket(ticket.category || ticket.reason) === "report");
+        const open = scoped.filter(ticket => ticket.status === "open").length;
+        const claimed = scoped.filter(ticket => ticket.status === "claimed").length;
+        const archived = scoped.filter(ticket => ticket.status === "archived").length;
+        const resolved = scoped.filter(ticket => ticket.status === "resolved").length;
+        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const createdLast7d = scoped.filter(ticket => ticket.createdAt >= sevenDaysAgo).length;
+        const resolvedLast7d = scoped.filter(ticket => ticket.status === "resolved" && (ticket.resolvedAt || 0) >= sevenDaysAgo).length;
+        const avgNotes = scoped.length ? (scoped.reduce((sum, ticket) => sum + (ticket.internalNotes?.length || 0), 0) / scoped.length).toFixed(1) : "0.0";
+        const highPriority = scoped.filter(ticket => ticket.priority === "high").length;
+        const activeRisk = scoped.filter(ticket => {
+            const sla = getTicketSlaState(ticket);
+            return sla.firstResponseOverdue || sla.resolveOverdue;
+        }).length;
+
+        appendAuditEvent("report_analytics", {
+            guildId: guild.id,
+            userId: interaction.user.id,
+            total: scoped.length,
+            open,
+            claimed,
+            archived,
+            resolved,
+            createdLast7d,
+            resolvedLast7d,
+            highPriority,
+            activeRisk
+        });
+
+        return JSON.stringify({
+            embed: new EmbedBuilder()
+                .setColor(0xb91c1c)
+                .setTitle("🚨 Report Analytics")
+                .setDescription("Moderation report-case throughput, workload, and risk snapshot.")
+                .addFields(
+                    { name: "Case Totals", value: [`Total: ${scoped.length}`, `Open: ${open}`, `Claimed: ${claimed}`, `Archived: ${archived}`, `Resolved: ${resolved}`].join("\n"), inline: false },
+                    { name: "7-Day Flow", value: [`Created: ${createdLast7d}`, `Resolved: ${resolvedLast7d}`].join("\n"), inline: true },
+                    { name: "Severity", value: [`High Priority: ${highPriority}`, `Active SLA Risk: ${activeRisk}`].join("\n"), inline: true },
+                    { name: "Investigation Notes", value: `Average internal notes per case: ${avgNotes}`, inline: false }
+                )
+                .setTimestamp(new Date())
+                .toJSON()
+        });
+    },
     reportsearch: async interaction => {
         const guildError = requireGuild(interaction);
         if (guildError) return guildError;
@@ -8825,6 +9120,123 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             `Page ${safePage}/${totalPages} | Showing ${visible.length}/${total}`,
             "",
             ...lines
+        ].join("\n");
+    },
+    giveaway: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const guild = interaction.guild;
+        if (!guild) return "This command can only be used in a server.";
+
+        const prize = interaction.options.getString("prize", true).slice(0, 200);
+        const durationRaw = interaction.options.getString("duration", true);
+        const durationMs = parseDurationMs(durationRaw);
+        if (!durationMs) return "Invalid duration. Use values like 30m, 6h, or 2d.";
+        const winnerCount = Math.max(1, Math.min(20, interaction.options.getInteger("winners") || 1));
+        const description = (interaction.options.getString("description") || "").slice(0, 1000);
+        const roleRequired = interaction.options.getRole("role_required");
+        const channel = interaction.options.getChannel("channel") || interaction.channel;
+        if (!channel || channel.type !== ChannelType.GuildText || !("send" in channel)) return "Giveaway channel must be a text channel.";
+
+        const giveaway: GiveawayEntry = {
+            id: giveawayStore.nextId++,
+            guildId: guild.id,
+            channelId: channel.id,
+            messageId: null,
+            hostId: interaction.user.id,
+            prize,
+            description,
+            winnerCount,
+            roleRequiredId: roleRequired ? roleRequired.id : null,
+            createdAt: Date.now(),
+            endAt: Date.now() + durationMs,
+            updatedAt: Date.now(),
+            status: "active",
+            entries: [],
+            winners: [],
+            endedAt: null
+        };
+        giveawayStore.giveaways.push(giveaway);
+        saveGiveawayStore();
+
+        const sent = await channel.send({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)], allowedMentions: { parse: [] } }).catch(() => null);
+        if (!sent) return "Failed to post giveaway message in the target channel.";
+        giveaway.messageId = sent.id;
+        giveaway.updatedAt = Date.now();
+        saveGiveawayStore();
+
+        appendAuditEvent("giveaway_created", {
+            guildId: guild.id,
+            giveawayId: giveaway.id,
+            hostId: interaction.user.id,
+            channelId: channel.id,
+            prize,
+            durationMs,
+            winnerCount,
+            roleRequiredId: roleRequired?.id || null
+        });
+        await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
+            { name: "Prize", value: prize, inline: false },
+            { name: "Host", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Channel", value: `<#${channel.id}>`, inline: true },
+            { name: "Winners", value: `${winnerCount}`, inline: true },
+            { name: "Duration", value: durationRaw, inline: true },
+            { name: "Role Requirement", value: roleRequired ? `<@&${roleRequired.id}>` : "None", inline: true }
+        ]);
+
+        return JSON.stringify({ embed: new EmbedBuilder().setColor(0xf59e0b).setTitle("🎉 Giveaway Created").setDescription(`Giveaway #${giveaway.id} is live in <#${channel.id}>.`).addFields({ name: "Prize", value: prize, inline: false }, { name: "Duration", value: durationRaw, inline: true }, { name: "Winners", value: `${winnerCount}`, inline: true }).toJSON() });
+    },
+    giveawayedit: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const giveaway = getGiveawayById(interaction.options.getInteger("id", true));
+        if (!giveaway) return "Giveaway not found.";
+        if (giveaway.status !== "active") return "Only active giveaways can be edited.";
+        const raw = interaction.options.getString("duration", true).trim().toLowerCase();
+        const isNegative = raw.startsWith("-");
+        const durationMs = parseDurationMs(isNegative ? raw.slice(1) : raw);
+        if (!durationMs) return "Invalid duration adjustment. Use values like 30m, 6h, 2d, or -15m.";
+        giveaway.endAt += isNegative ? -durationMs : durationMs;
+        giveaway.endAt = Math.max(Date.now() + 10_000, giveaway.endAt);
+        giveaway.updatedAt = Date.now();
+        saveGiveawayStore();
+        await syncGiveawayMessage(giveaway);
+        appendAuditEvent("giveaway_edit", { guildId: giveaway.guildId, giveawayId: giveaway.id, actorId: interaction.user.id, adjustment: raw, endAt: giveaway.endAt });
+        await sendGiveawayLog(giveaway.guildId, `Giveaway #${giveaway.id} Updated`, [
+            { name: "Adjustment", value: raw, inline: true },
+            { name: "New End", value: `<t:${Math.floor(giveaway.endAt / 1000)}:F>`, inline: true }
+        ]);
+        return `Giveaway #${giveaway.id} now ends <t:${Math.floor(giveaway.endAt / 1000)}:R>.`;
+    },
+    giveawayend: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const giveaway = getGiveawayById(interaction.options.getInteger("id", true));
+        if (!giveaway) return "Giveaway not found.";
+        if (giveaway.status !== "active") return "Giveaway is already closed.";
+        await finalizeGiveaway(giveaway, "manual");
+        return `Giveaway #${giveaway.id} ended.`;
+    },
+    giveawayreroll: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const giveaway = getGiveawayById(interaction.options.getInteger("id", true));
+        if (!giveaway) return "Giveaway not found.";
+        if (!giveaway.entries.length) return "This giveaway has no entrants to reroll.";
+        await finalizeGiveaway(giveaway, "reroll");
+        return `Giveaway #${giveaway.id} rerolled.`;
+    },
+    giveawaylist: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const scoped = giveawayStore.giveaways
+            .filter(entry => !interaction.guildId || entry.guildId === interaction.guildId)
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 15);
+        if (!scoped.length) return "No giveaways found.";
+        return [
+            "🎉 Giveaways",
+            ...scoped.map(entry => `#${entry.id} [${entry.status}] ${entry.prize} | entries ${entry.entries.length} | winners ${entry.winnerCount} | end <t:${Math.floor(entry.endAt / 1000)}:R>`)
         ].join("\n");
     },
     ticketsearch: async interaction => {
@@ -9626,6 +10038,10 @@ setInterval(() => {
     void sendAutomatedBalanceReport("interval_7d");
 }, WEEKLY_BALANCE_REPORT_MS).unref();
 
+setInterval(() => {
+    void processDueGiveaways();
+}, 15_000).unref();
+
 setTimeout(() => {
     void sendAutomatedHealthReport("startup_warmup");
 }, 90_000).unref();
@@ -10034,6 +10450,50 @@ client.on("interactionCreate", async interaction => {
         await interaction.showModal(buildReportIntakeModal()).catch(async () => {
             await interaction.reply({ content: "Unable to open report intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
         });
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(`${GIVEAWAY_IDS.enterPrefix}:`)) {
+        const giveawayId = Number.parseInt(interaction.customId.split(":")[1] || "0", 10);
+        const giveaway = getGiveawayById(giveawayId);
+        if (!giveaway) {
+            await interaction.reply({ content: "This giveaway no longer exists.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (giveaway.status !== "active" || giveaway.endAt <= Date.now()) {
+            if (giveaway.status === "active" && giveaway.endAt <= Date.now()) {
+                await finalizeGiveaway(giveaway, "timer");
+            }
+            await interaction.reply({ content: "This giveaway is already closed.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (!interaction.guild) {
+            await interaction.reply({ content: "Giveaways can only be entered in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (giveaway.roleRequiredId) {
+            const member = interaction.member as GuildMember | null ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+            if (!member?.roles.cache.has(giveaway.roleRequiredId)) {
+                await interaction.reply({ content: `You need <@&${giveaway.roleRequiredId}> to enter this giveaway.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+                return;
+            }
+        }
+        if (giveaway.entries.includes(interaction.user.id)) {
+            await interaction.reply({ content: `You are already entered in giveaway #${giveaway.id}.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        giveaway.entries.push(interaction.user.id);
+        giveaway.updatedAt = Date.now();
+        saveGiveawayStore();
+        await syncGiveawayMessage(giveaway);
+        appendAuditEvent("giveaway_enter", {
+            guildId: giveaway.guildId,
+            giveawayId: giveaway.id,
+            userId: interaction.user.id,
+            entryCount: giveaway.entries.length
+        });
+        await interaction.reply({ content: `You entered giveaway #${giveaway.id} for **${giveaway.prize}**.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
 

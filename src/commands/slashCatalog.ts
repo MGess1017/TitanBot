@@ -314,6 +314,22 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("reportqueue").setDescription("Staff: view active report cases only")
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+        new SlashCommandBuilder().setName("reportresolve").setDescription("Staff: resolve an archived report with moderation disposition")
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+            .addStringOption(o => o.setName("action").setDescription("Disposition taken").setRequired(true)
+                .addChoices(
+                    { name: "warned", value: "warned" },
+                    { name: "muted", value: "muted" },
+                    { name: "kicked", value: "kicked" },
+                    { name: "banned", value: "banned" },
+                    { name: "no_action", value: "no_action" },
+                    { name: "insufficient_evidence", value: "insufficient_evidence" }
+                ))
+            .addStringOption(o => o.setName("reason").setDescription("Resolution summary").setRequired(false))
+            .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional report channel").addChannelTypes(ChannelType.GuildText).setRequired(false))
+            .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional report channel ID").setRequired(false)),
+        new SlashCommandBuilder().setName("reportanalytics").setDescription("Admin: analytics for report cases only")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("reportsearch").setDescription("Staff: search report cases by owner, status, and text")
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
             .addStringOption(o => o.setName("query").setDescription("Search text in report reason/notes").setRequired(false))
@@ -374,6 +390,26 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addIntegerOption(o => o.setName("days").setDescription("Retention days for resolved tickets").setRequired(false))
             .addBooleanOption(o => o.setName("purge_now").setDescription("Run purge immediately").setRequired(false)),
+        new SlashCommandBuilder().setName("giveaway").setDescription("Admin: create a button-entry giveaway")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addStringOption(o => o.setName("prize").setDescription("Prize title").setRequired(true))
+            .addStringOption(o => o.setName("duration").setDescription("Duration like 30m, 6h, 2d").setRequired(true))
+            .addIntegerOption(o => o.setName("winners").setDescription("Number of winners").setRequired(false))
+            .addStringOption(o => o.setName("description").setDescription("Optional giveaway description").setRequired(false))
+            .addChannelOption(o => o.setName("channel").setDescription("Channel to post giveaway in").addChannelTypes(ChannelType.GuildText).setRequired(false))
+            .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false)),
+        new SlashCommandBuilder().setName("giveawayedit").setDescription("Admin: extend or shorten an active giveaway")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true))
+            .addStringOption(o => o.setName("duration").setDescription("Adjustment like 30m, 6h, 2d, -15m").setRequired(true)),
+        new SlashCommandBuilder().setName("giveawayend").setDescription("Admin: end an active giveaway immediately")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true)),
+        new SlashCommandBuilder().setName("giveawayreroll").setDescription("Admin: reroll winners for a finished giveaway")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true)),
+        new SlashCommandBuilder().setName("giveawaylist").setDescription("Admin: list recent giveaways")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("setmodlog").setDescription("Set the moderation log channel")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addChannelOption(o => o.setName("channel").setDescription("Log channel").addChannelTypes(ChannelType.GuildText).setRequired(true)),
