@@ -201,3 +201,27 @@ export function buildTicketIntakeReason(input: {
 
     return pieces.join(" | ");
 }
+
+export function buildReportIntakeReason(input: {
+    reportedUser: string;
+    summary: string;
+    details: string;
+    location?: string;
+    evidence?: string;
+    severity?: string;
+}): string {
+    const reportedUser = String(input.reportedUser || "Unknown target").slice(0, 80);
+    const summary = String(input.summary || "User report").slice(0, 120);
+    const details = String(input.details || "").slice(0, 700);
+    const pieces = [
+        "[report]",
+        `Target: ${reportedUser}`,
+        summary,
+        details ? `Details: ${details}` : null,
+        input.location ? `Location: ${String(input.location).slice(0, 120)}` : null,
+        input.evidence ? `Evidence: ${String(input.evidence).slice(0, 240)}` : null,
+        input.severity ? `Severity: ${String(input.severity).slice(0, 40)}` : null
+    ].filter(Boolean);
+
+    return pieces.join(" | ");
+}

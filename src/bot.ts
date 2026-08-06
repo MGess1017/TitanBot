@@ -62,6 +62,7 @@ import {
     xpBar
 } from "./utils";
 import {
+    buildReportIntakeReason,
     buildTicketIntakeReason,
     canReopenTicket,
     classifyTicketCategory,
@@ -1987,6 +1988,59 @@ function buildTicketIntakeModal(): ModalBuilder {
         );
 }
 
+function buildReportIntakeModal(): ModalBuilder {
+    const targetInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.target)
+        .setLabel("Reported User / ID")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(80)
+        .setPlaceholder("Username, display name, or Discord ID");
+
+    const summaryInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.summary)
+        .setLabel("Report Summary")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(120)
+        .setPlaceholder("Cheating, harassment, scam attempt, abuse, etc.");
+
+    const detailsInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.details)
+        .setLabel("Incident Details")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(900)
+        .setPlaceholder("What happened, when it happened, and why action is needed.");
+
+    const locationInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.location)
+        .setLabel("Location / Message Link")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setMaxLength(120)
+        .setPlaceholder("Channel, thread, message link, or match reference");
+
+    const evidenceInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.evidence)
+        .setLabel("Evidence Links")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(400)
+        .setPlaceholder("Screenshots, clips, logs, external proof, witness links");
+
+    return new ModalBuilder()
+        .setCustomId(REPORT_IDS.intakeModal)
+        .setTitle("User Report Intake")
+        .addComponents(
+            new ActionRowBuilder<TextInputBuilder>().addComponents(targetInput),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(summaryInput),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(detailsInput),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(locationInput),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(evidenceInput)
+        );
+}
+
 function buildTicketCsatButtons(ticketId: number): ActionRowBuilder<ButtonBuilder> {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:1`).setLabel("1").setStyle(ButtonStyle.Secondary),
@@ -2635,6 +2689,16 @@ const TICKET_IDS = {
     intakePlatform: "ticket_intake_platform",
     intakeEvidence: "ticket_intake_evidence",
     csatPrefix: "ticket_csat"
+} as const;
+
+const REPORT_IDS = {
+    open: "report_open",
+    intakeModal: "report_intake_modal",
+    target: "report_target",
+    summary: "report_summary",
+    details: "report_details",
+    location: "report_location",
+    evidence: "report_evidence"
 } as const;
 
 const SELL_UI_IDS = {
@@ -6789,11 +6853,81 @@ function buildTicketPanelPayload(guildName: string) {
     };
 }
 
+function buildReportPanelPayload(guildName: string) {
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0xb91c1c)
+        .setTitle("🚨 FN Report Desk")
+        .setDescription([
+            `Report harmful behavior inside **${guildName}** through a private tracked case.`,
+            "",
+            "Use this for harassment, cheating, scams, impersonation, abuse, or threats that need staff review.",
+            "",
+            "Good reports include a target, context, evidence, and a precise summary."
+        ].join("\n"))
+        .addFields(
+            {
+                name: "🧭 Desk Purpose",
+                value: [
+                    "Private report lane for user safety, behavior issues, and moderation review.",
+                    "",
+                    "Every submission is logged and moved through the same tracked ops workflow as support tickets."
+                ].join("\n")
+            },
+            {
+                name: "📝 What To Include",
+                value: [
+                    "Reported user name or ID",
+                    "What happened and when",
+                    "Channel or message reference",
+                    "Evidence links or screenshots"
+                ].join("\n")
+            },
+            {
+                name: "⚡ Review Priority",
+                value: [
+                    "Reports open as high-priority tracked cases.",
+                    "",
+                    "Staff can claim, assign, escalate, archive, and resolve them from the live panel."
+                ].join("\n")
+            },
+            {
+                name: "🔐 Privacy",
+                value: [
+                    "Only the reporter, admins, and the handler role can view the report channel.",
+                    "",
+                    "Audit logs and report metadata are preserved for accountability."
+                ].join("\n")
+            }
+        ), "FN Report Intake Desk", `${guildName} report panel`);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(REPORT_IDS.open)
+            .setLabel("Submit User Report")
+            .setEmoji("🚨")
+            .setStyle(ButtonStyle.Danger)
+    );
+
+    return {
+        embed: embed.toJSON(),
+        components: [row.toJSON()],
+        isReportPanel: true
+    };
+}
+
 function messageHasTicketOpenButton(message: MessageWithComponents | null | undefined): boolean {
     const rows = Array.isArray(message?.components) ? message.components : [];
     return rows.some((row: ComponentRowLike) => {
         const components = Array.isArray(row?.components) ? row.components : [];
         return components.some((component: ComponentLike) => component?.customId === TICKET_IDS.open);
+    });
+}
+
+function messageHasReportOpenButton(message: MessageWithComponents | null | undefined): boolean {
+    const rows = Array.isArray(message?.components) ? message.components : [];
+    return rows.some((row: ComponentRowLike) => {
+        const components = Array.isArray(row?.components) ? row.components : [];
+        return components.some((component: ComponentLike) => component?.customId === REPORT_IDS.open);
     });
 }
 
@@ -6847,6 +6981,60 @@ async function upsertTicketPanelInChannel(guild: Guild, channelId: string): Prom
     const sent = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
     if (!sent) {
         return { ok: false, error: "Failed to post ticket panel message. Check bot permissions for this channel." };
+    }
+    return { ok: true, action: "posted" };
+}
+
+async function upsertReportPanelInChannel(guild: Guild, channelId: string): Promise<{ ok: true; action: "posted" | "updated" } | { ok: false; error: string }> {
+    const channel = (guild.channels.cache.get(channelId)
+        || await guild.channels.fetch(channelId).catch(() => null));
+    if (!channel || channel.type !== ChannelType.GuildText) {
+        return { ok: false, error: "Configured report panel channel is missing or not a text channel." };
+    }
+
+    const panel = buildReportPanelPayload(guild.name);
+    const embed = panel.embed as APIEmbed;
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(REPORT_IDS.open)
+            .setLabel("Submit User Report")
+            .setEmoji("🚨")
+            .setStyle(ButtonStyle.Danger)
+    );
+
+    let candidateId: string | null = null;
+    let beforeId: string | undefined;
+    const expectedTitle = "🚨 FN Report Desk";
+    for (let i = 0; i < 5; i++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+        if (!batch || !batch.size) break;
+
+        const candidate = batch.find(message =>
+            message.author.id === (client.user?.id || "")
+            && (messageHasReportOpenButton(message as MessageWithComponents) || message.embeds[0]?.title === expectedTitle)
+        );
+        if (candidate) {
+            candidateId = candidate.id;
+            break;
+        }
+
+        const last = batch.last();
+        beforeId = last?.id;
+        if (!beforeId) break;
+    }
+
+    if (candidateId) {
+        const candidate = await channel.messages.fetch(candidateId).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+        if (!edited) {
+            return { ok: false, error: "Failed to refresh report panel message. Check bot permissions for this channel." };
+        }
+        return { ok: true, action: "updated" };
+    }
+
+    const sent = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+    if (!sent) {
+        return { ok: false, error: "Failed to post report panel message. Check bot permissions for this channel." };
     }
     return { ok: true, action: "posted" };
 }
@@ -8390,6 +8578,30 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     ticket: async interaction => {
         return await ticketCommandHandlers.ticket(interaction);
     },
+    reportintake: async () => {
+        return "Report intake modal is ready. Run /reportintake again if you did not receive the popup.";
+    },
+    reportpanel: async interaction => {
+        const guildError = requireGuild(interaction);
+        if (guildError) return guildError;
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
+            return "You need Manage Channels to post the report panel.";
+        }
+        if (!interaction.channel || !interaction.channel.isTextBased()) {
+            return "This command requires a text channel.";
+        }
+
+        const result = await upsertReportPanelInChannel(interaction.guild!, interaction.channel.id);
+        if (!result.ok) return result.error || "Unable to upsert report panel.";
+
+        appendAuditEvent("report_panel_upsert", {
+            guildId: interaction.guildId,
+            channelId: interaction.channel.id,
+            action: result.action,
+            actorId: interaction.user.id
+        });
+        return result.action === "updated" ? "✅ Report panel refreshed in this channel." : "✅ Report panel posted in this channel.";
+    },
     ticketintake: async () => {
         return "Ticket intake modal is ready. Run /ticketintake again if you did not receive the popup.";
     },
@@ -9317,6 +9529,18 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
+    if (interaction.isChatInputCommand() && interaction.commandName === "reportintake") {
+        const guildError = requireGuild(interaction);
+        if (guildError) {
+            await interaction.reply({ content: guildError, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(buildReportIntakeModal()).catch(async () => {
+            await interaction.reply({ content: "Unable to open report intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+
     if (interaction.isModalSubmit() && interaction.customId === TICKET_IDS.intakeModal) {
         const guild = interaction.guild;
         if (!guild) {
@@ -9348,6 +9572,78 @@ client.on("interactionCreate", async interaction => {
                     { name: "Category", value: classifyTicketCategory(category), inline: true },
                     { name: "Summary", value: summary.slice(0, 120), inline: false },
                     { name: "KB References", value: getKbSuggestions(reason).map(item => `• ${item}`).join("\n"), inline: false }
+                ]
+            )],
+            flags: MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === REPORT_IDS.intakeModal) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Report intake can only be used in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const reportedUser = interaction.fields.getTextInputValue(REPORT_IDS.target) || "Unknown target";
+        const summary = interaction.fields.getTextInputValue(REPORT_IDS.summary) || "User report";
+        const details = interaction.fields.getTextInputValue(REPORT_IDS.details) || "";
+        const location = interaction.fields.getTextInputValue(REPORT_IDS.location) || "";
+        const evidence = interaction.fields.getTextInputValue(REPORT_IDS.evidence) || "";
+        const reason = buildReportIntakeReason({ reportedUser, summary, details, location, evidence, severity: "high" });
+
+        const created = await createTicketChannel(guild, interaction.user.id, reason, "high", false);
+        if (created.error) {
+            await interaction.reply({ content: created.error, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const ticket = created.channelId ? findTicketByChannel(created.channelId) : null;
+        if (ticket) {
+            addTicketInternalNote(ticket, {
+                byId: interaction.user.id,
+                at: Date.now(),
+                note: [
+                    `REPORT TARGET: ${reportedUser}`,
+                    `SUMMARY: ${summary}`,
+                    location ? `LOCATION: ${location}` : null,
+                    evidence ? `EVIDENCE: ${evidence}` : null
+                ].filter(Boolean).join(" | ")
+            });
+        }
+
+        await sendTicketLog(guild.id, `Report Intake #${ticket?.id || "pending"} Submitted`, [
+            { name: "Reporter", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Reported User", value: reportedUser.slice(0, 200), inline: true },
+            { name: "Priority", value: "HIGH", inline: true },
+            { name: "Summary", value: summary.slice(0, 300), inline: false },
+            { name: "Location", value: location || "Not provided", inline: false },
+            { name: "Evidence", value: evidence || "Not provided", inline: false },
+            { name: "Ticket Channel", value: created.channelId ? `<#${created.channelId}>` : "Pending", inline: false }
+        ]);
+
+        appendAuditEvent("report_intake_submitted", {
+            guildId: guild.id,
+            reporterId: interaction.user.id,
+            reportedUser,
+            summary,
+            location,
+            evidenceProvided: Boolean(evidence),
+            ticketId: ticket?.id || null,
+            channelId: created.channelId || null
+        });
+
+        await interaction.reply({
+            embeds: [buildTicketCommandEmbed(
+                "🚨 Report Submitted",
+                "Your user report was submitted as a tracked high-priority case.",
+                ticket || undefined,
+                [
+                    { name: "Reported User", value: reportedUser.slice(0, 120), inline: true },
+                    { name: "Category", value: "report", inline: true },
+                    { name: "Summary", value: summary.slice(0, 120), inline: false },
+                    { name: "Evidence", value: evidence ? "Provided" : "Not provided yet", inline: true }
                 ]
             )],
             flags: MessageFlags.Ephemeral
@@ -9552,6 +9848,18 @@ client.on("interactionCreate", async interaction => {
         }
         await interaction.showModal(buildTicketIntakeModal()).catch(async () => {
             await interaction.reply({ content: "Unable to open intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === REPORT_IDS.open) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Reports can only be submitted in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(buildReportIntakeModal()).catch(async () => {
+            await interaction.reply({ content: "Unable to open report intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
         });
         return;
     }
