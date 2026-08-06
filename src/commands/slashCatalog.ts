@@ -397,7 +397,10 @@ export function buildSlashCommands(input: {
             .addIntegerOption(o => o.setName("winners").setDescription("Number of winners").setRequired(false))
             .addStringOption(o => o.setName("description").setDescription("Optional giveaway description").setRequired(false))
             .addChannelOption(o => o.setName("channel").setDescription("Channel to post giveaway in").addChannelTypes(ChannelType.GuildText).setRequired(false))
-            .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false)),
+            .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false))
+            .addRoleOption(o => o.setName("mention_role").setDescription("Optional role mention for the giveaway alert").setRequired(false))
+            .addUserOption(o => o.setName("mention_user").setDescription("Optional user mention for the giveaway alert").setRequired(false))
+            .addBooleanOption(o => o.setName("ping_everyone").setDescription("Mention everyone when posting the giveaway").setRequired(false)),
         new SlashCommandBuilder().setName("itemgiveaway").setDescription("Admin: create a raid-item giveaway with automatic reward delivery")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addStringOption(o => o.setName("item").setDescription("Raid item id").setRequired(true).setAutocomplete(true))
@@ -407,7 +410,10 @@ export function buildSlashCommands(input: {
             .addStringOption(o => o.setName("title").setDescription("Optional display title override").setRequired(false))
             .addStringOption(o => o.setName("description").setDescription("Optional giveaway description").setRequired(false))
             .addChannelOption(o => o.setName("channel").setDescription("Channel to post giveaway in").addChannelTypes(ChannelType.GuildText).setRequired(false))
-            .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false)),
+            .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false))
+            .addRoleOption(o => o.setName("mention_role").setDescription("Optional role mention for the giveaway alert").setRequired(false))
+            .addUserOption(o => o.setName("mention_user").setDescription("Optional user mention for the giveaway alert").setRequired(false))
+            .addBooleanOption(o => o.setName("ping_everyone").setDescription("Mention everyone when posting the giveaway").setRequired(false)),
         new SlashCommandBuilder().setName("raidgiveawaypanel").setDescription("Post the admin raid-item giveaway panel in this channel")
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
         new SlashCommandBuilder().setName("giveawayedit").setDescription("Admin: extend or shorten an active giveaway")

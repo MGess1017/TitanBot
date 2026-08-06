@@ -165,6 +165,7 @@ const DEFAULT_TICKET_HANDLER_ROLE_ID = "1506184638207361145";
 const DEFAULT_TICKET_DEFAULT_CATEGORY_ID = "1523411322430296228";
 const DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID = "1506119505720377434";
 const DEFAULT_REPORT_PANEL_CHANNEL_ID = DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
+const DEFAULT_GIVEAWAY_CHANNEL_ID = "1535059013912363008";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1527571592320651285";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
@@ -173,6 +174,7 @@ const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TIC
 const TICKET_DEFAULT_CATEGORY_ID = process.env.TICKET_DEFAULT_CATEGORY_ID || DEFAULT_TICKET_DEFAULT_CATEGORY_ID;
 const PERMANENT_TICKET_PANEL_CHANNEL_ID = process.env.PERMANENT_TICKET_PANEL_CHANNEL_ID || DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
 const REPORT_PANEL_CHANNEL_ID = process.env.REPORT_PANEL_CHANNEL_ID || DEFAULT_REPORT_PANEL_CHANNEL_ID;
+const GIVEAWAY_CHANNEL_ID = process.env.GIVEAWAY_CHANNEL_ID || DEFAULT_GIVEAWAY_CHANNEL_ID;
 const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID || DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID;
 const WELCOME_PANEL_CHANNEL_ID = process.env.WELCOME_PANEL_CHANNEL_ID || DEFAULT_WELCOME_PANEL_CHANNEL_ID;
 const MOD_LOG_CHANNEL_ID = process.env.MOD_LOG_CHANNEL_ID || DEFAULT_MOD_LOG_CHANNEL_ID;
@@ -1711,6 +1713,10 @@ async function createAndPostGiveaway(input: {
     rewardKind: "generic" | "item";
     rewardItemId?: string | null;
     rewardQty?: number;
+    announcementContent?: string;
+    mentionUserIds?: string[];
+    mentionRoleIds?: string[];
+    mentionEveryone?: boolean;
 }): Promise<GiveawayEntry | null> {
     const giveaway: GiveawayEntry = {
         id: giveawayStore.nextId++,
@@ -1736,7 +1742,12 @@ async function createAndPostGiveaway(input: {
     giveawayStore.giveaways.push(giveaway);
     saveGiveawayStore();
 
-    const sent = await input.channel.send({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)], allowedMentions: { parse: [] } }).catch(() => null);
+    const allowedMentions = {
+        parse: input.mentionEveryone ? ["everyone"] as Array<"everyone"> : [],
+        users: input.mentionUserIds || [],
+        roles: input.mentionRoleIds || []
+    };
+    const sent = await input.channel.send({ content: input.announcementContent || undefined, embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)], allowedMentions }).catch(() => null);
     if (!sent) {
         giveawayStore.giveaways = giveawayStore.giveaways.filter(entry => entry.id !== giveaway.id);
         saveGiveawayStore();
@@ -1747,6 +1758,30 @@ async function createAndPostGiveaway(input: {
     giveaway.updatedAt = Date.now();
     saveGiveawayStore();
     return giveaway;
+}
+
+async function resolveConfiguredGiveawayChannel(guild: Guild): Promise<TextChannel | null> {
+    if (!GIVEAWAY_CHANNEL_ID) return null;
+    const channel = guild.channels.cache.get(GIVEAWAY_CHANNEL_ID) || await guild.channels.fetch(GIVEAWAY_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) return null;
+    return channel;
+}
+
+function buildGiveawayAnnouncement(input: {
+    prize: string;
+    mentionRoleId?: string | null;
+    mentionUserId?: string | null;
+    pingEveryone?: boolean;
+}): string {
+    const mentions = [
+        input.pingEveryone ? "@everyone" : null,
+        input.mentionRoleId ? `<@&${input.mentionRoleId}>` : null,
+        input.mentionUserId ? `<@${input.mentionUserId}>` : null
+    ].filter(Boolean);
+    return [
+        mentions.join(" ").trim() || null,
+        `A new giveaway is now live: **${input.prize}**`
+    ].filter(Boolean).join("\n");
 }
 
 async function finalizeGiveaway(giveaway: GiveawayEntry, reason: "timer" | "manual" | "reroll" = "timer"): Promise<void> {
@@ -9341,8 +9376,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const winnerCount = Math.max(1, Math.min(20, interaction.options.getInteger("winners") || 1));
         const description = (interaction.options.getString("description") || "").slice(0, 1000);
         const roleRequired = interaction.options.getRole("role_required");
-        const channel = interaction.options.getChannel("channel") || interaction.channel;
-        if (!channel || channel.type !== ChannelType.GuildText || !("send" in channel)) return "Giveaway channel must be a text channel.";
+        const mentionRole = interaction.options.getRole("mention_role");
+        const mentionUser = interaction.options.getUser("mention_user");
+        const pingEveryone = Boolean(interaction.options.getBoolean("ping_everyone"));
+        const channel = await resolveConfiguredGiveawayChannel(guild);
+        if (!channel) return `Configured giveaway channel ${GIVEAWAY_CHANNEL_ID} is missing or not a text channel.`;
 
         const giveaway = await createAndPostGiveaway({
             guild,
@@ -9353,7 +9391,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             durationMs,
             winnerCount,
             roleRequiredId: roleRequired ? roleRequired.id : null,
-            rewardKind: "generic"
+            rewardKind: "generic",
+            announcementContent: buildGiveawayAnnouncement({ prize, mentionRoleId: mentionRole?.id || null, mentionUserId: mentionUser?.id || null, pingEveryone }),
+            mentionRoleIds: mentionRole ? [mentionRole.id] : [],
+            mentionUserIds: mentionUser ? [mentionUser.id] : [],
+            mentionEveryone: pingEveryone
         });
         if (!giveaway) return "Failed to post giveaway message in the target channel.";
 
@@ -9365,7 +9407,10 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             prize,
             durationMs,
             winnerCount,
-            roleRequiredId: roleRequired?.id || null
+            roleRequiredId: roleRequired?.id || null,
+            mentionRoleId: mentionRole?.id || null,
+            mentionUserId: mentionUser?.id || null,
+            pingEveryone
         });
         await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
             { name: "Prize", value: prize, inline: false },
@@ -9396,8 +9441,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const description = (interaction.options.getString("description") || "").slice(0, 1000);
         const title = (interaction.options.getString("title") || `${item.name} Giveaway`).slice(0, 200);
         const roleRequired = interaction.options.getRole("role_required");
-        const channel = interaction.options.getChannel("channel") || interaction.channel;
-        if (!channel || channel.type !== ChannelType.GuildText || !("send" in channel)) return "Giveaway channel must be a text channel.";
+        const mentionRole = interaction.options.getRole("mention_role");
+        const mentionUser = interaction.options.getUser("mention_user");
+        const pingEveryone = Boolean(interaction.options.getBoolean("ping_everyone"));
+        const channel = await resolveConfiguredGiveawayChannel(guild);
+        if (!channel) return `Configured giveaway channel ${GIVEAWAY_CHANNEL_ID} is missing or not a text channel.`;
 
         const giveaway = await createAndPostGiveaway({
             guild,
@@ -9410,7 +9458,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             roleRequiredId: roleRequired ? roleRequired.id : null,
             rewardKind: "item",
             rewardItemId: itemId,
-            rewardQty: quantity
+            rewardQty: quantity,
+            announcementContent: buildGiveawayAnnouncement({ prize: title, mentionRoleId: mentionRole?.id || null, mentionUserId: mentionUser?.id || null, pingEveryone }),
+            mentionRoleIds: mentionRole ? [mentionRole.id] : [],
+            mentionUserIds: mentionUser ? [mentionUser.id] : [],
+            mentionEveryone: pingEveryone
         });
         if (!giveaway) return "Failed to post raid item giveaway message in the target channel.";
 
@@ -9423,7 +9475,10 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             quantity,
             durationMs,
             winnerCount,
-            roleRequiredId: roleRequired?.id || null
+            roleRequiredId: roleRequired?.id || null,
+            mentionRoleId: mentionRole?.id || null,
+            mentionUserId: mentionUser?.id || null,
+            pingEveryone
         });
         await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
             { name: "Prize", value: title, inline: false },
