@@ -189,6 +189,8 @@ const TICKET_SLA_ALERT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MOD_LOG_EVENT_RETENTION_MS = 2 * 60 * 1000;
 const CLOSED_TRADE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_CLOSED_TRADES = 2000;
+const CLOSED_GIVEAWAY_RETENTION_MS = 60 * 24 * 60 * 60 * 1000;
+const MAX_CLOSED_GIVEAWAYS = 1000;
 const opsAlertLastSent = new Map<string, number>();
 const recentCommandExecutions = new Map<string, number>();
 const inFlightTicketCreates = new Map<string, number>();
@@ -1580,7 +1582,22 @@ const giveawayStore = readJsonWithBackup<GiveawayStore>(
     { nextId: 1, giveaways: [] }
 );
 
+function pruneGiveaways(now = Date.now()): void {
+    const active = giveawayStore.giveaways.filter(entry => entry.status === "active");
+    const closed = giveawayStore.giveaways
+        .filter(entry => entry.status !== "active")
+        .filter(entry => {
+            const closedAt = entry.endedAt || entry.updatedAt || entry.endAt;
+            return now - closedAt <= CLOSED_GIVEAWAY_RETENTION_MS;
+        })
+        .sort((a, b) => (b.endedAt || b.updatedAt || b.endAt) - (a.endedAt || a.updatedAt || a.endAt))
+        .slice(0, MAX_CLOSED_GIVEAWAYS);
+
+    giveawayStore.giveaways = [...active, ...closed];
+}
+
 function saveGiveawayStore(): void {
+    pruneGiveaways();
     writeJsonAtomic(GIVEAWAY_DATA_FILE, giveawayStore);
 }
 

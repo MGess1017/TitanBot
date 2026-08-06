@@ -14,6 +14,10 @@ const stores = [
     validate: (json) => Boolean(json && typeof json.nextId === "number" && Array.isArray(json.offers))
   },
   {
+    rel: "src/data/giveaways.json",
+    validate: (json) => Boolean(json && typeof json.nextId === "number" && Array.isArray(json.giveaways))
+  },
+  {
     rel: "src/data/tickets.json",
     validate: (json) => Boolean(json && typeof json.nextId === "number" && json.guildConfigs && typeof json.guildConfigs === "object" && Array.isArray(json.tickets))
   },
