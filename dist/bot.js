@@ -7816,6 +7816,32 @@ const commandHandlers = {
         ]);
         return `${target.username} has been banned.`;
     },
+    unban: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const userId = interaction.options.getString("user_id", true).trim();
+        const reason = interaction.options.getString("reason")?.trim() || "Unban by administrator action";
+        if (!/^\d{17,20}$/.test(userId))
+            return "Provide a valid Discord user ID.";
+        if (!interaction.guild)
+            return "This command can only be used in a server.";
+        const unbanDedupeError = rejectIfDuplicateCommand(interaction, `unban:user:${userId}`);
+        if (unbanDedupeError)
+            return unbanDedupeError;
+        try {
+            await interaction.guild.members.unban(userId, reason);
+        }
+        catch {
+            return "Unable to unban that user. They may not be banned or I lack Ban Members permission.";
+        }
+        await sendModLog(interaction.guildId, "Unban", [
+            { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Target", value: `<@${userId}> (${userId})`, inline: true },
+            { name: "Reason", value: reason }
+        ]);
+        return `User ${userId} has been unbanned.`;
+    },
     setmodlog: async (interaction) => {
         const adminError = requireAdministrator(interaction);
         if (adminError)

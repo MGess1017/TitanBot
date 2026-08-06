@@ -190,6 +190,10 @@ function buildSlashCommands(input) {
         new discord_js_1.SlashCommandBuilder().setName("ban").setDescription("Ban user")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
             .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
+        new discord_js_1.SlashCommandBuilder().setName("unban").setDescription("Unban user by ID")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addStringOption(o => o.setName("user_id").setDescription("User ID to unban").setRequired(true))
+            .addStringOption(o => o.setName("reason").setDescription("Optional unban reason").setRequired(false)),
         new discord_js_1.SlashCommandBuilder().setName("xpstats").setDescription("Show your XP stats"),
         new discord_js_1.SlashCommandBuilder().setName("health").setDescription("Admin: runtime and persistence diagnostics")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator),

@@ -224,6 +224,10 @@ export function buildSlashCommands(input: {
         new SlashCommandBuilder().setName("ban").setDescription("Ban user")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
+        new SlashCommandBuilder().setName("unban").setDescription("Unban user by ID")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addStringOption(o => o.setName("user_id").setDescription("User ID to unban").setRequired(true))
+            .addStringOption(o => o.setName("reason").setDescription("Optional unban reason").setRequired(false)),
         new SlashCommandBuilder().setName("xpstats").setDescription("Show your XP stats"),
         new SlashCommandBuilder().setName("health").setDescription("Admin: runtime and persistence diagnostics")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
