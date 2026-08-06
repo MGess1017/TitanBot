@@ -114,7 +114,13 @@ import {
 import type { TicketCsatRecord, TicketNote } from "./services/ticketEnhancements";
 
 // Always resolve env vars from this bot project root, even when npm --prefix is used from another cwd.
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
+dotenv.config({ path: path.resolve(__dirname, "../.env"), override: true });
+
+function readEnvFlag(name: string, fallback = false): boolean {
+    const raw = (process.env[name] || "").trim().toLowerCase();
+    if (!raw) return fallback;
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
 
 const client = new Client({
     intents: [
@@ -129,8 +135,9 @@ const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID || "";
 const ACTIVITY_CHANNEL_ID = process.env.DISCORD_ACTIVITY_CHANNEL_ID || "";
 const HEALTH_REPORT_CHANNEL_ID = process.env.HEALTH_REPORT_CHANNEL_ID || ACTIVITY_CHANNEL_ID || "";
 const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
-const STRICT_ENV_REQUIRED = process.env.STRICT_ENV_REQUIRED === "1"
-    || (process.env.STRICT_ENV_REQUIRED !== "0" && process.env.NODE_ENV === "production");
+const STRICT_ENV_REQUIRED = readEnvFlag("STRICT_ENV_REQUIRED", false);
+const ENABLE_STARTUP_AUTOPANELS = readEnvFlag("ENABLE_STARTUP_AUTOPANELS", true);
+const ENABLE_STARTUP_DEPLOYMENT_SUMMARY = readEnvFlag("ENABLE_STARTUP_DEPLOYMENT_SUMMARY", true);
 const XP_COOLDOWN_MS = 0;
 const RAID_COOLDOWN_MS = 5 * 1000;
 const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
@@ -8979,10 +8986,14 @@ client.once("clientReady", async () => {
         if (guild) {
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
-            await ensurePermanentTicketPanelForGuild(guild);
-            await ensureBotFeatureBriefForGuild(guild);
-            await ensureWelcomePanelForGuild(guild);
-            await sendDeploymentSummaryIfNeeded();
+            if (ENABLE_STARTUP_AUTOPANELS) {
+                await ensurePermanentTicketPanelForGuild(guild);
+                await ensureBotFeatureBriefForGuild(guild);
+                await ensureWelcomePanelForGuild(guild);
+            }
+            if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
+                await sendDeploymentSummaryIfNeeded();
+            }
         } else {
             console.warn("DISCORD_GUILD_ID is set but the guild could not be fetched.");
         }
@@ -8992,11 +9003,15 @@ client.once("clientReady", async () => {
     if (client.guilds.cache.size > 0) {
         for (const guild of client.guilds.cache.values()) {
             await guild.commands.set(slashCommands).catch(() => undefined);
-            await ensurePermanentTicketPanelForGuild(guild);
-            await ensureBotFeatureBriefForGuild(guild);
-            await ensureWelcomePanelForGuild(guild);
+            if (ENABLE_STARTUP_AUTOPANELS) {
+                await ensurePermanentTicketPanelForGuild(guild);
+                await ensureBotFeatureBriefForGuild(guild);
+                await ensureWelcomePanelForGuild(guild);
+            }
         }
-        await sendDeploymentSummaryIfNeeded();
+        if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
+            await sendDeploymentSummaryIfNeeded();
+        }
         console.log(`Registered slash commands in ${client.guilds.cache.size} guild(s) for instant updates.`);
     }
 

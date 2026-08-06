@@ -2,9 +2,10 @@
   "name": "titan-raid-bot",
   "version": "1.0.0",
   "description": "A Discord bot for managing XP, FN Token$, and a raid system inspired by Escape from Tarkov.",
-  "main": "src/bot.ts",
+  "main": "dist/bot.js",
   "scripts": {
-    "start": "ts-node src/bot.ts",
+    "start": "node dist/bot.js",
+    "start:src": "ts-node src/bot.ts",
     "build": "tsc",
     "dev": "ts-node-dev src/bot.ts",
     "start:pm2": "npx pm2 start ecosystem.config.cjs --only titan-raid-bot --update-env",
