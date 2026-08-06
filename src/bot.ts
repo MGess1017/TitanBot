@@ -7617,63 +7617,56 @@ function buildBotFeatureBriefPayload(guildName: string) {
         .setDescription([
             `Titan Bot is the primary operations and progression system for **${guildName}**.`,
             "",
-            "It combines persistent raid gameplay, economy progression, moderation controls, and support workflows in one service.",
+            "Use the command menu below to flip through live command pages and read what each bot area does.",
             "",
-            "Use this message as the official reference for capabilities, command entry points, and support flow."
+            "This post is the public command reference for new members, returning players, and staff." 
         ].join("\n"))
         .addFields(
             {
-                name: "🧭 Core Scope",
+                name: "🧭 What This Bot Covers",
                 value: [
-                    "• Persistent raid progression with profile state that carries across sessions.",
-                    "• Economy and inventory systems for long-term member engagement.",
-                    "• Moderation and support tooling for daily server operations."
+                    "• Raid progression and PMC profiles",
+                    "• Economy, inventory, crates, and trading",
+                    "• Giveaways, moderation, support, and report tooling"
                 ].join("\n")
             },
             {
-                name: "⚔️ Member Journey",
+                name: "📚 Browse Command Pages",
                 value: [
-                    "• `/quickstart` to onboard.",
-                    "• `/pmc` and `/raid` to run progression loops.",
-                    "• `/inventory` and `/shop` to manage resources and upgrades."
+                    "• Mission Brief",
+                    "• XP Ops",
+                    "• Raid Ops",
+                    "• Supply Crates",
+                    "• Training Grounds",
+                    "• Bank and Trade",
+                    "• Moderation Desk"
                 ].join("\n")
             },
             {
-                name: "🛡️ Operations Layer",
+                name: "🚀 Fast Start",
                 value: [
-                    "• Role-gated moderation commands: warn, timeout, kick, ban, unban, and purge.",
-                    "• Ticket lifecycle support from open to resolve with audit visibility.",
-                    "• Runtime telemetry and health checks for safer maintenance."
+                    "• `/quickstart` — guided onboarding",
+                    "• `/help` — direct personal help menu",
+                    "• `/ticket` — support request",
+                    "• `/reportintake` — submit a report"
                 ].join("\n")
             },
             {
-                name: "🚀 High-Use Commands",
+                name: "🔔 Public Guide Rules",
                 value: [
-                    "• `/help` — command directory",
-                    "• `/quickstart` — guided setup",
-                    "• `/pmc` `/raid` `/inventory` `/ticket`"
-                ].join("\n")
-            },
-            {
-                name: "🧩 Panel Template",
-                value: [
-                    "**Title:** About Titan Bot",
-                    "**Sections:** Core Scope | Member Journey | Operations Layer | High-Use Commands",
-                    "**CTA:** Start with `/help` and `/quickstart`",
-                    "**Support:** Use `/ticket` for account, bug, or moderation requests"
-                ].join("\n")
-            },
-            {
-                name: "🔔 Governance Note",
-                value: [
-                    "This panel is auto-maintained by Titan Bot. Keep this channel readable and use command replies/tickets for support."
+                    "• Click the menu to change pages",
+                    "• Keep this channel readable; don’t reply with support requests here",
+                    "• Use tickets, reports, or commands for action paths"
                 ].join("\n")
             }
         ), `${guildName} About Titan Bot`, "About Titan Bot • Official Reference Panel");
 
     return {
         embed: embed.toJSON(),
-        isBotFeatureBrief: true
+        components: helpDropdown("general").map(row => row.toJSON()),
+        isBotFeatureBrief: true,
+        withHelpNav: true,
+        helpPage: "general"
     };
 }
 
@@ -7686,23 +7679,39 @@ async function upsertBotFeatureBriefInChannel(guild: Guild, channelId: string): 
 
     const payload = buildBotFeatureBriefPayload(guild.name);
     const embed = payload.embed as APIEmbed;
+    const components = Array.isArray(payload.components) ? payload.components : [];
+
+    const storedMessageId = getGuildPanelMessageId(guild.id, "featureBrief");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) {
+            return { ok: true, action: "updated" };
+        }
+        setGuildPanelMessageId(guild.id, "featureBrief", null);
+    }
 
     let candidateId: string | null = null;
+    const duplicateIds: string[] = [];
     let beforeId: string | undefined;
     const expectedPrefix = `🛰️ ${guild.name} • About Titan Bot`;
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
         const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
         if (!batch || !batch.size) break;
 
-        const candidate = batch.find(message =>
+        const candidates = batch.filter(message =>
             message.author.id === (client.user?.id || "")
             && (
                 message.embeds[0]?.title === expectedPrefix
                 || message.embeds[0]?.footer?.text?.includes("About Titan Bot")
             )
         );
+        const candidate = candidates.first();
         if (candidate) {
             candidateId = candidate.id;
+            for (const duplicate of candidates.values()) {
+                if (duplicate.id !== candidate.id) duplicateIds.push(duplicate.id);
+            }
             break;
         }
 
@@ -7713,17 +7722,24 @@ async function upsertBotFeatureBriefInChannel(guild: Guild, channelId: string): 
 
     if (candidateId) {
         const candidate = await channel.messages.fetch(candidateId).catch(() => null);
-        const edited = await candidate?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
         if (!edited) {
             return { ok: false, error: "Failed to refresh bot feature brief message. Check bot permissions for this channel." };
+        }
+        setGuildPanelMessageId(guild.id, "featureBrief", candidateId);
+        for (const duplicateId of duplicateIds) {
+            if (duplicateId === candidateId) continue;
+            const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);
+            await duplicate?.delete().catch(() => undefined);
         }
         return { ok: true, action: "updated" };
     }
 
-    const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+    const sent = await channel.send({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
     if (!sent) {
         return { ok: false, error: "Failed to post bot feature brief message. Check bot permissions for this channel." };
     }
+    setGuildPanelMessageId(guild.id, "featureBrief", sent.id);
     return { ok: true, action: "posted" };
 }
 
