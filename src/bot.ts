@@ -5264,7 +5264,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         bossFerocity: boss?.ferocity,
         bossBonusXp,
         bossKillChance: Math.round(bossKillChance * 100),
-        bossImageUrl: getBossPortraitUrl(boss?.name || mapCfg.bossName, boss?.title) || undefined,
+        bossImageUrl: bossSpawned ? getBossPortraitUrl(boss?.name || mapCfg.bossName, boss?.title) || undefined : undefined,
         pmcHpMax: bossSpawned ? pmcHpMax : undefined,
         pmcHpRemaining: bossSpawned ? pmcHpRemaining : undefined,
         bossHpMax: bossSpawned ? bossHpMax : undefined,

@@ -491,7 +491,7 @@ export function buildRaidResultPayload(input: {
         .setDescription(result.success
             ? "Strike team returned with confirmed extraction and premium-grade combat telemetry."
             : "Extraction failed. Review loadout synergy, map pressure, and tension before redeploy.")
-        .setThumbnail(result.bossImageUrl || armyIconUrl)
+        .setThumbnail(result.bossSpawned && result.bossImageUrl ? result.bossImageUrl : armyIconUrl)
         .addFields(
             {
                 name: "Mission Header",
