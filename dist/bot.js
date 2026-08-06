@@ -5850,77 +5850,54 @@ function buildBotFeatureBriefPayload(guildName) {
         .setColor(0x0891b2)
         .setTitle(`🛰️ ${guildName} • About Titan Bot`)
         .setDescription([
-        `Titan Bot is the live operations, progression, and raid-combat system running inside **${guildName}**.`,
+        `Titan Bot is the primary operations and progression system for **${guildName}**.`,
         "",
-        "It combines persistent PMC progression, tactical raid gameplay, economy systems, premium loot loops, moderation tooling, and support workflows into one unified experience.",
+        "It combines persistent raid gameplay, economy progression, moderation controls, and support workflows in one service.",
         "",
-        "Use this post as the official about-board for what Titan Bot is, what it does, and where to start."
+        "Use this message as the official reference for capabilities, command entry points, and support flow."
     ].join("\n"))
         .addFields({
-        name: "🧭 What Titan Bot Is",
+        name: "🧭 Core Scope",
         value: [
-            "• A premium progression-focused Discord bot built around raids, bosses, loot, and long-term operator growth.",
-            "• A tactical command suite that mixes game systems, support systems, and live moderation utilities.",
-            "• A persistent profile experience where actions matter over time instead of resetting every session."
+            "• Persistent raid progression with profile state that carries across sessions.",
+            "• Economy and inventory systems for long-term member engagement.",
+            "• Moderation and support tooling for daily server operations."
         ].join("\n")
     }, {
-        name: "⚔️ Core Gameplay Loop",
+        name: "⚔️ Member Journey",
         value: [
-            "• Run raids across escalating maps with conditions, boss spawns, and loadout-aware outcomes.",
-            "• Earn raid XP, tokens, enhanced gear, loot crates, and first-kill boss hearts.",
-            "• Progress your PMC through long-horizon milestone tiers with increasing raid buffs and prestige."
+            "• `/quickstart` to onboard.",
+            "• `/pmc` and `/raid` to run progression loops.",
+            "• `/inventory` and `/shop` to manage resources and upgrades."
         ].join("\n")
     }, {
-        name: "🎒 Economy and Loadout Systems",
+        name: "🛡️ Operations Layer",
         value: [
-            "• Persistent inventory with weapons, armor, consumables, modules, intel, and rare raid artifacts.",
-            "• Wallet, bank, trading, crate openings, and item-use loops that support both progression and economy play.",
-            "• Gear choices matter through buffs, condition counters, loadout synergy, and premium drop tiers."
+            "• Role-gated moderation commands: warn, timeout, kick, ban, unban, and purge.",
+            "• Ticket lifecycle support from open to resolve with audit visibility.",
+            "• Runtime telemetry and health checks for safer maintenance."
         ].join("\n")
     }, {
-        name: "👑 Boss and Progression Identity",
-        value: [
-            "• Bosses have unique ferocity, drops, reward profiles, and first-kill heart trophies.",
-            "• PMC milestone badges unlock at key thresholds and reflect your long-term raid progression.",
-            "• Rare broadcasts announce major unlock moments like new hearts, enhanced recoveries, and tier jumps."
-        ].join("\n")
-    }, {
-        name: "🎫 Support and Operations",
-        value: [
-            "• Private ticket channels with one-active-ticket-per-user enforcement.",
-            "• Lifecycle coverage: open, claim, assign, workflow updates, archive, reopen, permanent resolve.",
-            "• Live ticket ops panel with SLA state, assignment visibility, and action shortcuts.",
-            "• Staff diagnostics and audit tooling are active behind role-gated access."
-        ].join("\n")
-    }, {
-        name: "🛡️ Moderation and Reliability",
-        value: [
-            "• Warning system with case IDs, history lookup, and clear/reset controls.",
-            "• Moderation actions: timeout, kick, ban, tempban, purge.",
-            "• Singleton protection, audit logging, health reporting, telemetry, and regression verification.",
-            "• Built to be both a player experience system and a maintainable live service."
-        ].join("\n")
-    }, {
-        name: "🚀 Best Starting Commands",
+        name: "🚀 High-Use Commands",
         value: [
             "• `/help` — command directory",
-            "• `/quickstart` — guided onboarding",
-            "• `/pmc` — your persistent raid profile",
-            "• `/raid` — launch a mission",
-            "• `/inventory` — review gear and loot",
-            "• `/ticket` — open support"
+            "• `/quickstart` — guided setup",
+            "• `/pmc` `/raid` `/inventory` `/ticket`"
         ].join("\n")
     }, {
-        name: "🔔 About This Post",
+        name: "🧩 Panel Template",
         value: [
-            "• This embed is auto-updated by Titan Bot as the official about-board for the system.",
-            "• Keep this channel readable so members can quickly reference what Titan Bot offers.",
-            "• Future updates can refine this post without breaking the channel history structure."
+            "**Title:** About Titan Bot",
+            "**Sections:** Core Scope | Member Journey | Operations Layer | High-Use Commands",
+            "**CTA:** Start with `/help` and `/quickstart`",
+            "**Support:** Use `/ticket` for account, bug, or moderation requests"
         ].join("\n")
     }, {
-        name: "📌 Titan Bot Identity",
-        value: "Persistent raids • PMC growth • premium loot • boss trophies • support ops • live moderation"
-    }), `${guildName} About Titan Bot`, "About Titan Bot • Live system overview");
+        name: "🔔 Governance Note",
+        value: [
+            "This panel is auto-maintained by Titan Bot. Keep this channel readable and use command replies/tickets for support."
+        ].join("\n")
+    }), `${guildName} About Titan Bot`, "About Titan Bot • Official Reference Panel");
     return {
         embed: embed.toJSON(),
         isBotFeatureBrief: true
@@ -5936,14 +5913,14 @@ async function upsertBotFeatureBriefInChannel(guild, channelId) {
     const embed = payload.embed;
     let candidateId = null;
     let beforeId;
-    const expectedPrefix = `🛰️ ${guild.name} • Titan Bot Feature Brief`;
+    const expectedPrefix = `🛰️ ${guild.name} • About Titan Bot`;
     for (let i = 0; i < 5; i++) {
         const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
         if (!batch || !batch.size)
             break;
         const candidate = batch.find(message => message.author.id === (client.user?.id || "")
             && (message.embeds[0]?.title === expectedPrefix
-                || message.embeds[0]?.footer?.text?.includes("Bot Feature Brief")));
+                || message.embeds[0]?.footer?.text?.includes("About Titan Bot")));
         if (candidate) {
             candidateId = candidate.id;
             break;
