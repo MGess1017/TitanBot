@@ -41,6 +41,7 @@ const dotenv = __importStar(require("dotenv"));
 const discord_js_1 = require("discord.js");
 const fs_extra_1 = __importDefault(require("fs-extra"));
 const node_crypto_1 = __importDefault(require("node:crypto"));
+const node_child_process_1 = require("node:child_process");
 const node_https_1 = __importDefault(require("node:https"));
 const node_os_1 = __importDefault(require("node:os"));
 const path_1 = __importDefault(require("path"));
@@ -101,10 +102,12 @@ const DEFAULT_TICKET_HANDLER_ROLE_ID = "1506184638207361145";
 const DEFAULT_TICKET_DEFAULT_CATEGORY_ID = "1523411322430296228";
 const DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID = "1506119505720377434";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
+const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
 const TICKET_DEFAULT_CATEGORY_ID = process.env.TICKET_DEFAULT_CATEGORY_ID || DEFAULT_TICKET_DEFAULT_CATEGORY_ID;
 const PERMANENT_TICKET_PANEL_CHANNEL_ID = process.env.PERMANENT_TICKET_PANEL_CHANNEL_ID || DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
 const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID || DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID;
+const DEPLOYMENT_SUMMARY_CHANNEL_ID = process.env.DEPLOYMENT_SUMMARY_CHANNEL_ID || DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID;
 const TICKET_EXPORT_WEBHOOK_URL = process.env.TICKET_EXPORT_WEBHOOK_URL || "";
 const ARMY_ICON_URL = "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1fa96.png";
 const OPS_ALERT_COOLDOWN_MS = 60 * 1000;
@@ -304,7 +307,8 @@ async function runStartupPreflight() {
         { key: "TICKET_HANDLER_ROLE_ID", message: "TICKET_HANDLER_ROLE_ID not set; using built-in default role id." },
         { key: "TICKET_DEFAULT_CATEGORY_ID", message: "TICKET_DEFAULT_CATEGORY_ID not set; using built-in default category id." },
         { key: "PERMANENT_TICKET_PANEL_CHANNEL_ID", message: "PERMANENT_TICKET_PANEL_CHANNEL_ID not set; using built-in default channel id." },
-        { key: "BOT_FEATURE_BRIEF_CHANNEL_ID", message: "BOT_FEATURE_BRIEF_CHANNEL_ID not set; using built-in default channel id." }
+        { key: "BOT_FEATURE_BRIEF_CHANNEL_ID", message: "BOT_FEATURE_BRIEF_CHANNEL_ID not set; using built-in default channel id." },
+        { key: "DEPLOYMENT_SUMMARY_CHANNEL_ID", message: "DEPLOYMENT_SUMMARY_CHANNEL_ID not set; using built-in default channel id." }
     ];
     for (const requirement of optionalDefaults) {
         if (!process.env[requirement.key]) {
@@ -542,6 +546,11 @@ function defaultRuntimeMetricsStore() {
             trackedDowntimeMs: 0,
             lastDowntimeMs: 0,
             maxDowntimeMs: 0
+        },
+        deployment: {
+            lastAnnouncedCommit: null,
+            lastAnnouncedAt: null,
+            lastAnnouncedChannelId: null
         }
     };
 }
@@ -553,6 +562,7 @@ function parseRuntimeMetricsStore(raw) {
     const command = value.command || seed.command;
     const tickets = value.tickets || seed.tickets;
     const availability = value.availability || seed.availability;
+    const deployment = value.deployment || seed.deployment;
     return {
         createdAt: typeof value.createdAt === "number" ? value.createdAt : seed.createdAt,
         updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : seed.updatedAt,
@@ -586,6 +596,11 @@ function parseRuntimeMetricsStore(raw) {
             trackedDowntimeMs: typeof availability.trackedDowntimeMs === "number" ? availability.trackedDowntimeMs : 0,
             lastDowntimeMs: typeof availability.lastDowntimeMs === "number" ? availability.lastDowntimeMs : 0,
             maxDowntimeMs: typeof availability.maxDowntimeMs === "number" ? availability.maxDowntimeMs : 0
+        },
+        deployment: {
+            lastAnnouncedCommit: typeof deployment.lastAnnouncedCommit === "string" ? deployment.lastAnnouncedCommit : null,
+            lastAnnouncedAt: typeof deployment.lastAnnouncedAt === "number" ? deployment.lastAnnouncedAt : null,
+            lastAnnouncedChannelId: typeof deployment.lastAnnouncedChannelId === "string" ? deployment.lastAnnouncedChannelId : null
         }
     };
 }
@@ -709,6 +724,95 @@ function appendAuditEvent(eventType, payload) {
     catch {
         // Never crash runtime due to audit logging.
     }
+}
+function readGitOutput(command) {
+    try {
+        const output = (0, node_child_process_1.execSync)(command, {
+            cwd: path_1.default.resolve(__dirname, ".."),
+            stdio: ["ignore", "pipe", "ignore"]
+        }).toString("utf8").trim();
+        return output || null;
+    }
+    catch {
+        return null;
+    }
+}
+function getGitDeploymentInfo() {
+    return {
+        commit: readGitOutput("git rev-parse HEAD"),
+        shortCommit: readGitOutput("git rev-parse --short HEAD"),
+        branch: readGitOutput("git rev-parse --abbrev-ref HEAD"),
+        subject: readGitOutput("git log -1 --pretty=%s")
+    };
+}
+async function sendDeploymentSummaryIfNeeded() {
+    if (!DEPLOYMENT_SUMMARY_CHANNEL_ID)
+        return;
+    const gitInfo = getGitDeploymentInfo();
+    if (gitInfo.commit
+        && runtimeMetrics.deployment.lastAnnouncedCommit === gitInfo.commit
+        && runtimeMetrics.deployment.lastAnnouncedChannelId === DEPLOYMENT_SUMMARY_CHANNEL_ID) {
+        return;
+    }
+    const channel = await client.channels.fetch(DEPLOYMENT_SUMMARY_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel)) {
+        appendAuditEvent("deployment_summary_failed", {
+            channelId: DEPLOYMENT_SUMMARY_CHANNEL_ID,
+            commit: gitInfo.commit,
+            error: "Configured deployment summary channel is missing or not text-based."
+        });
+        return;
+    }
+    const startupAt = runtimeMetrics.availability.lastStartupAt || Date.now();
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x57f287)
+        .setTitle("🚀 Titan Bot Update Deployed")
+        .setDescription("A pulled bot update is now live and the bot finished startup successfully.")
+        .addFields({
+        name: "🧾 Revision",
+        value: [
+            `Commit: **${gitInfo.shortCommit || "unknown"}**`,
+            `Branch: **${gitInfo.branch || "unknown"}**`,
+            `Message: ${clampText(gitInfo.subject || "Unavailable", 140)}`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "✅ Live Status",
+        value: [
+            `Ready at: <t:${Math.floor(startupAt / 1000)}:F>`,
+            `Guilds connected: **${client.guilds.cache.size.toLocaleString()}**`,
+            `Slash commands loaded: **${slashCommands.length.toLocaleString()}**`
+        ].join("\n"),
+        inline: true
+    }, {
+        name: "📡 Runtime",
+        value: [
+            `Latency: **${Math.round(client.ws.ping)}ms**`,
+            `Memory: **${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB RSS**`,
+            `Tracked restarts: **${runtimeMetrics.availability.totalRestarts.toLocaleString()}**`
+        ].join("\n"),
+        inline: true
+    })
+        .setFooter({ text: client.user?.tag ? `${client.user.tag} is online` : "Titan bot is online" })
+        .setTimestamp(new Date(startupAt));
+    const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+    if (!sent) {
+        appendAuditEvent("deployment_summary_failed", {
+            channelId: DEPLOYMENT_SUMMARY_CHANNEL_ID,
+            commit: gitInfo.commit,
+            error: "Failed to send deployment summary message."
+        });
+        return;
+    }
+    runtimeMetrics.deployment.lastAnnouncedCommit = gitInfo.commit;
+    runtimeMetrics.deployment.lastAnnouncedAt = Date.now();
+    runtimeMetrics.deployment.lastAnnouncedChannelId = DEPLOYMENT_SUMMARY_CHANNEL_ID;
+    saveRuntimeMetrics();
+    appendAuditEvent("deployment_summary_sent", {
+        channelId: DEPLOYMENT_SUMMARY_CHANNEL_ID,
+        commit: gitInfo.commit,
+        messageId: sent.id
+    });
 }
 function readInstanceLockState() {
     if (!fs_extra_1.default.existsSync(INSTANCE_LOCK_PATH)) {
@@ -7641,6 +7745,7 @@ client.once("clientReady", async () => {
             console.log(`Registered slash commands for guild ${guild.id}`);
             await ensurePermanentTicketPanelForGuild(guild);
             await ensureBotFeatureBriefForGuild(guild);
+            await sendDeploymentSummaryIfNeeded();
         }
         else {
             console.warn("DISCORD_GUILD_ID is set but the guild could not be fetched.");
@@ -7653,6 +7758,7 @@ client.once("clientReady", async () => {
             await ensurePermanentTicketPanelForGuild(guild);
             await ensureBotFeatureBriefForGuild(guild);
         }
+        await sendDeploymentSummaryIfNeeded();
         console.log(`Registered slash commands in ${client.guilds.cache.size} guild(s) for instant updates.`);
     }
     console.log("Global slash commands cleared to prevent duplicate command entries.");
