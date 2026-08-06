@@ -350,6 +350,14 @@ async function runStartupPreflight() {
     }
     return { errors, warnings };
 }
+function summarizePreflightMessages(messages, limit = 3) {
+    if (messages.length === 0)
+        return "none";
+    const preview = messages.slice(0, limit).join(" | ");
+    if (messages.length <= limit)
+        return preview;
+    return `${preview} | +${messages.length - limit} more`;
+}
 const ACCESS_POINT_BADGES = [
     {
         threshold: 1000,
@@ -8562,13 +8570,11 @@ async function bootServices() {
         return;
     }
     const preflight = await runStartupPreflight();
-    for (const warning of preflight.warnings) {
-        console.warn(`[preflight] ${warning}`);
+    if (preflight.warnings.length > 0) {
+        console.warn(`[preflight] warnings=${preflight.warnings.length} ${summarizePreflightMessages(preflight.warnings)}`);
     }
     if (preflight.errors.length > 0) {
-        for (const error of preflight.errors) {
-            console.error(`[preflight] ${error}`);
-        }
+        console.error(`[preflight] errors=${preflight.errors.length} ${summarizePreflightMessages(preflight.errors)}`);
         postOpsAlert("error", "Startup preflight failed", {
             errors: preflight.errors.join(" | "),
             warnings: preflight.warnings.join(" | ")
