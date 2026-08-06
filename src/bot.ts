@@ -3,6 +3,7 @@ import * as dotenv from "dotenv";
 import {
     ActionRowBuilder,
     APIEmbed,
+    AuditLogEvent,
     ButtonBuilder,
     ButtonStyle,
     ActivityType,
@@ -153,11 +154,15 @@ const DEFAULT_TICKET_HANDLER_ROLE_ID = "1506184638207361145";
 const DEFAULT_TICKET_DEFAULT_CATEGORY_ID = "1523411322430296228";
 const DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID = "1506119505720377434";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
+const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1527571592320651285";
+const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
 const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
 const TICKET_DEFAULT_CATEGORY_ID = process.env.TICKET_DEFAULT_CATEGORY_ID || DEFAULT_TICKET_DEFAULT_CATEGORY_ID;
 const PERMANENT_TICKET_PANEL_CHANNEL_ID = process.env.PERMANENT_TICKET_PANEL_CHANNEL_ID || DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
 const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID || DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID;
+const WELCOME_PANEL_CHANNEL_ID = process.env.WELCOME_PANEL_CHANNEL_ID || DEFAULT_WELCOME_PANEL_CHANNEL_ID;
+const MOD_LOG_CHANNEL_ID = process.env.MOD_LOG_CHANNEL_ID || DEFAULT_MOD_LOG_CHANNEL_ID;
 const DEPLOYMENT_SUMMARY_CHANNEL_ID = process.env.DEPLOYMENT_SUMMARY_CHANNEL_ID || DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID;
 const TICKET_EXPORT_WEBHOOK_URL = process.env.TICKET_EXPORT_WEBHOOK_URL || "";
 const ARMY_ICON_URL = "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1fa96.png";
@@ -169,6 +174,7 @@ const opsAlertLastSent = new Map<string, number>();
 const recentCommandExecutions = new Map<string, number>();
 const inFlightTicketCreates = new Map<string, number>();
 const ticketSlaAlertState = new Map<string, number>();
+const recentModerationLogEvents = new Map<string, number>();
 const INSTANCE_LOCK_PATH = path.join(
     os.tmpdir(),
     `titan-raid-bot.${crypto.createHash("sha1").update(String(process.env.DISCORD_TOKEN || "no-token")).digest("hex").slice(0, 12)}.lock`
@@ -371,6 +377,8 @@ async function runStartupPreflight(): Promise<{ errors: string[]; warnings: stri
         { key: "TICKET_DEFAULT_CATEGORY_ID", message: "TICKET_DEFAULT_CATEGORY_ID not set; using built-in default category id." },
         { key: "PERMANENT_TICKET_PANEL_CHANNEL_ID", message: "PERMANENT_TICKET_PANEL_CHANNEL_ID not set; using built-in default channel id." },
         { key: "BOT_FEATURE_BRIEF_CHANNEL_ID", message: "BOT_FEATURE_BRIEF_CHANNEL_ID not set; using built-in default channel id." },
+        { key: "WELCOME_PANEL_CHANNEL_ID", message: "WELCOME_PANEL_CHANNEL_ID not set; using built-in default channel id." },
+        { key: "MOD_LOG_CHANNEL_ID", message: "MOD_LOG_CHANNEL_ID not set; using built-in default channel id." },
         { key: "DEPLOYMENT_SUMMARY_CHANNEL_ID", message: "DEPLOYMENT_SUMMARY_CHANNEL_ID not set; using built-in default channel id." }
     ];
 
@@ -1027,6 +1035,23 @@ async function sendDeploymentSummaryIfNeeded(): Promise<void> {
         commit: gitInfo.commit,
         messageId: sent.id
     });
+}
+
+function rememberModerationLog(action: "kick" | "ban", guildId: string, userId: string): void {
+    recentModerationLogEvents.set(`${action}:${guildId}:${userId}`, Date.now());
+}
+
+function shouldSkipRecentModerationLog(action: "kick" | "ban", guildId: string, userId: string, windowMs = 15_000): boolean {
+    const now = Date.now();
+    for (const [key, ts] of recentModerationLogEvents.entries()) {
+        if (now - ts > windowMs) recentModerationLogEvents.delete(key);
+    }
+
+    const key = `${action}:${guildId}:${userId}`;
+    const last = recentModerationLogEvents.get(key) || 0;
+    if (now - last <= windowMs) return true;
+    recentModerationLogEvents.set(key, now);
+    return false;
 }
 
 function readInstanceLockState(): {
@@ -2257,7 +2282,7 @@ function saveModerationStore(): void {
 function ensureGuildModeration(guildId: string): GuildModerationState {
     if (!moderationStore.guilds[guildId]) {
         moderationStore.guilds[guildId] = {
-            modLogChannelId: null,
+            modLogChannelId: MOD_LOG_CHANNEL_ID || null,
             lockdownChannelId: null,
             nextCaseId: 1,
             warnings: {}
@@ -2266,11 +2291,12 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     }
 
     const g = moderationStore.guilds[guildId] as Partial<GuildModerationState>;
-    if (g.modLogChannelId === undefined) g.modLogChannelId = null;
+    if (!g.modLogChannelId) g.modLogChannelId = MOD_LOG_CHANNEL_ID || null;
     if (g.lockdownChannelId === undefined) g.lockdownChannelId = null;
     if (g.nextCaseId === undefined || g.nextCaseId < 1) g.nextCaseId = 1;
     if (!g.warnings || typeof g.warnings !== "object") g.warnings = {};
     moderationStore.guilds[guildId] = g as GuildModerationState;
+    saveModerationStore();
     return moderationStore.guilds[guildId];
 }
 
@@ -2292,11 +2318,12 @@ async function sendModLog(
     fields: Array<{ name: string; value: string; inline?: boolean }>
 ): Promise<void> {
     const state = ensureGuildModeration(guildId);
-    if (!state.modLogChannelId) return;
+    const targetChannelId = state.modLogChannelId || MOD_LOG_CHANNEL_ID;
+    if (!targetChannelId) return;
 
     const guild = client.guilds.cache.get(guildId);
     if (!guild) return;
-    const channel = guild.channels.cache.get(state.modLogChannelId);
+    const channel = guild.channels.cache.get(targetChannelId) || await guild.channels.fetch(targetChannelId).catch(() => null);
     if (!channel || !channel.isTextBased()) return;
 
     const embed = brandLiveEmbed(new EmbedBuilder()
@@ -6675,6 +6702,128 @@ async function ensurePermanentTicketPanelForGuild(guild: Guild): Promise<void> {
     }
 }
 
+function buildWelcomePayload(guildName: string) {
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle(`🌤️ Welcome to ${guildName}`)
+        .setDescription([
+            `Glad you're here. **${guildName}** is meant to stay active, sharp, and easy to navigate without burying people in fluff.`,
+            "",
+            "Read the rules below once, respect staff calls when they are made, and keep your time here clean so the server stays useful for everyone.",
+            "",
+            "✨ **Quick read. Straight expectations. No guesswork.**"
+        ].join("\n"))
+        .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f31f.png")
+        .setImage("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f6e1.png")
+        .addFields(
+            {
+                name: "🧭 Server Tone",
+                value: [
+                    "Be civil, be direct, and do not turn routine moderation into a debate stage.",
+                    "",
+                    "Staff decisions are operational calls first. If you want leniency, give staff a reason to trust your behavior."
+                ].join("\n")
+            },
+            {
+                name: "⛔ Hard Bans",
+                value: [
+                    "**Disrespect toward Owners** or building up warnings/reports past a reasonable limit can lead straight to removal.",
+                    "",
+                    "**Owners and Admins hold final say** and may ban for any reason they judge necessary for the server.",
+                    "",
+                    "📝 **All bans are appealable one time only.**"
+                ].join("\n")
+            },
+            {
+                name: "🚪 Kicks",
+                value: [
+                    "Kicks happen when you clearly push an admin too far for obvious reasons and staff decide the behavior needs to stop immediately.",
+                    "",
+                    "**Owners/Admins hold the authority to kick or ban who they please.**"
+                ].join("\n")
+            },
+            {
+                name: "📌 What To Remember",
+                value: [
+                    "• Respect the people running the server.",
+                    "• Do not stack warnings, reports, or avoidable friction.",
+                    "• Appeals are limited, so do not waste the one chance you get."
+                ].join("\n")
+            }
+        ), "Welcome Desk", `${guildName} rules board`);
+
+    return { embed: embed.toJSON() };
+}
+
+async function upsertWelcomePanelInChannel(guild: Guild, channelId: string): Promise<{ ok: true; action: "posted" | "updated" } | { ok: false; error: string }> {
+    const channel = (guild.channels.cache.get(channelId)
+        || await guild.channels.fetch(channelId).catch(() => null));
+    if (!channel || channel.type !== ChannelType.GuildText) {
+        return { ok: false, error: "Configured welcome panel channel is missing or not a text channel." };
+    }
+
+    const payload = buildWelcomePayload(guild.name);
+    const embed = payload.embed as APIEmbed;
+
+    let candidateId: string | null = null;
+    let beforeId: string | undefined;
+    const expectedTitle = `🌤️ Welcome to ${guild.name}`;
+    for (let i = 0; i < 5; i++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+        if (!batch || !batch.size) break;
+
+        const candidate = batch.find(message =>
+            message.author.id === (client.user?.id || "")
+            && (
+                message.embeds[0]?.title === expectedTitle
+                || message.embeds[0]?.footer?.text?.includes("rules board")
+            )
+        );
+        if (candidate) {
+            candidateId = candidate.id;
+            break;
+        }
+
+        const last = batch.last();
+        beforeId = last?.id;
+        if (!beforeId) break;
+    }
+
+    if (candidateId) {
+        const candidate = await channel.messages.fetch(candidateId).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        if (!edited) {
+            return { ok: false, error: "Failed to refresh welcome panel message. Check bot permissions for this channel." };
+        }
+        return { ok: true, action: "updated" };
+    }
+
+    const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+    if (!sent) {
+        return { ok: false, error: "Failed to post welcome panel message. Check bot permissions for this channel." };
+    }
+    return { ok: true, action: "posted" };
+}
+
+async function ensureWelcomePanelForGuild(guild: Guild): Promise<void> {
+    if (!WELCOME_PANEL_CHANNEL_ID) return;
+    const result = await upsertWelcomePanelInChannel(guild, WELCOME_PANEL_CHANNEL_ID);
+    if (result.ok) {
+        appendAuditEvent("welcome_panel_upsert", {
+            guildId: guild.id,
+            channelId: WELCOME_PANEL_CHANNEL_ID,
+            action: result.action
+        });
+    } else {
+        appendAuditEvent("welcome_panel_upsert_failed", {
+            guildId: guild.id,
+            channelId: WELCOME_PANEL_CHANNEL_ID,
+            error: result.error
+        });
+        console.warn(`Welcome panel upsert skipped for guild ${guild.id}: ${result.error}`);
+    }
+}
+
 function buildBotFeatureBriefPayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x0891b2)
@@ -8729,6 +8878,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const member = interaction.guild ? await interaction.guild.members.fetch(target.id).catch(() => null) : null;
         if (!member) return "Unable to find that member in this server.";
         await member.kick("Kick by administrator action");
+        rememberModerationLog("kick", interaction.guildId!, target.id);
         await sendModLog(interaction.guildId!, "Kick", [
             { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
             { name: "Target", value: `<@${target.id}>`, inline: true },
@@ -8745,6 +8895,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const member = interaction.guild ? await interaction.guild.members.fetch(target.id).catch(() => null) : null;
         if (!member) return "Unable to find that member in this server.";
         await member.ban({ reason: "Ban by administrator action" });
+        rememberModerationLog("ban", interaction.guildId!, target.id);
         await sendModLog(interaction.guildId!, "Ban", [
             { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
             { name: "Target", value: `<@${target.id}>`, inline: true },
@@ -8823,6 +8974,7 @@ client.once("clientReady", async () => {
             console.log(`Registered slash commands for guild ${guild.id}`);
             await ensurePermanentTicketPanelForGuild(guild);
             await ensureBotFeatureBriefForGuild(guild);
+            await ensureWelcomePanelForGuild(guild);
             await sendDeploymentSummaryIfNeeded();
         } else {
             console.warn("DISCORD_GUILD_ID is set but the guild could not be fetched.");
@@ -8835,6 +8987,7 @@ client.once("clientReady", async () => {
             await guild.commands.set(slashCommands).catch(() => undefined);
             await ensurePermanentTicketPanelForGuild(guild);
             await ensureBotFeatureBriefForGuild(guild);
+            await ensureWelcomePanelForGuild(guild);
         }
         await sendDeploymentSummaryIfNeeded();
         console.log(`Registered slash commands in ${client.guilds.cache.size} guild(s) for instant updates.`);
@@ -8842,6 +8995,46 @@ client.once("clientReady", async () => {
 
     console.log("Global slash commands cleared to prevent duplicate command entries.");
     console.log("Guild-only slash commands are active.");
+});
+
+client.on("guildBanAdd", async ban => {
+    const guildId = ban.guild.id;
+    const userId = ban.user.id;
+    if (shouldSkipRecentModerationLog("ban", guildId, userId)) return;
+
+    const audit = await ban.guild.fetchAuditLogs({ type: AuditLogEvent.MemberBanAdd, limit: 6 }).catch(() => null);
+    const entry = audit?.entries.find(item => {
+        const targetId = item.target && "id" in item.target ? item.target.id : null;
+        return targetId === userId && Date.now() - item.createdTimestamp < 15_000;
+    });
+
+    const moderatorId = entry?.executor?.id;
+    const reason = entry?.reason || "No reason provided";
+    await sendModLog(guildId, "Ban", [
+        { name: "Moderator", value: moderatorId ? `<@${moderatorId}>` : "Unknown", inline: true },
+        { name: "Target", value: `<@${userId}>`, inline: true },
+        { name: "Reason", value: reason }
+    ]);
+});
+
+client.on("guildMemberRemove", async member => {
+    const guildId = member.guild.id;
+    const userId = member.id;
+    const audit = await member.guild.fetchAuditLogs({ type: AuditLogEvent.MemberKick, limit: 6 }).catch(() => null);
+    const entry = audit?.entries.find(item => {
+        const targetId = item.target && "id" in item.target ? item.target.id : null;
+        return targetId === userId && Date.now() - item.createdTimestamp < 15_000;
+    });
+    if (!entry) return;
+    if (shouldSkipRecentModerationLog("kick", guildId, userId)) return;
+
+    const moderatorId = entry.executor?.id;
+    const reason = entry.reason || "No reason provided";
+    await sendModLog(guildId, "Kick", [
+        { name: "Moderator", value: moderatorId ? `<@${moderatorId}>` : "Unknown", inline: true },
+        { name: "Target", value: `<@${userId}>`, inline: true },
+        { name: "Reason", value: reason }
+    ]);
 });
 
 setInterval(() => {
