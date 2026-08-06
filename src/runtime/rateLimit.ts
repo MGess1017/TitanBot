@@ -1,5 +1,7 @@
 const commandRateLimitState = new Map<string, number>();
 const RATE_LIMIT_STATE_RETENTION_MS = 10 * 60 * 1000;
+const RATE_LIMIT_STATE_HARD_CAP = 50_000;
+const RATE_LIMIT_STATE_COMPACT_TARGET = 25_000;
 let lastPruneAt = 0;
 
 function pruneRateLimitState(now = Date.now()): void {
@@ -9,6 +11,16 @@ function pruneRateLimitState(now = Date.now()): void {
             commandRateLimitState.delete(key);
         }
     }
+
+    if (commandRateLimitState.size > RATE_LIMIT_STATE_HARD_CAP) {
+        const entries = Array.from(commandRateLimitState.entries())
+            .sort((a, b) => b[1] - a[1]);
+        commandRateLimitState.clear();
+        for (const [key, ts] of entries.slice(0, RATE_LIMIT_STATE_COMPACT_TARGET)) {
+            commandRateLimitState.set(key, ts);
+        }
+    }
+
     lastPruneAt = now;
 }
 

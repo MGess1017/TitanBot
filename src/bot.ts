@@ -183,6 +183,8 @@ const OPS_ALERT_RETENTION_MS = Math.max(15 * 60 * 1000, OPS_ALERT_COOLDOWN_MS * 
 const TICKET_CREATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 const TICKET_SLA_ALERT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MOD_LOG_EVENT_RETENTION_MS = 2 * 60 * 1000;
+const CLOSED_TRADE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_CLOSED_TRADES = 2000;
 const opsAlertLastSent = new Map<string, number>();
 const recentCommandExecutions = new Map<string, number>();
 const inFlightTicketCreates = new Map<string, number>();
@@ -1441,15 +1443,70 @@ function readTradeStore(): TradeStore {
     return readJsonWithBackup(TRADE_DATA_FILE, raw => {
         const candidate = raw as Partial<TradeStore>;
         if (candidate && Array.isArray(candidate.offers) && typeof candidate.nextId === "number") {
-            return { nextId: Math.max(1, candidate.nextId), offers: candidate.offers };
+            const offers = normalizeTradeOffers(candidate.offers);
+            return { nextId: Math.max(1, candidate.nextId), offers };
         }
         return null;
     }, { nextId: 1, offers: [] });
 }
 
+function normalizeTradeOffers(rawOffers: unknown[], now = Date.now()): TradeOffer[] {
+    const openOffers: TradeOffer[] = [];
+    const recentClosedOffers: TradeOffer[] = [];
+
+    for (const raw of rawOffers) {
+        if (!raw || typeof raw !== "object") continue;
+        const row = raw as Partial<TradeOffer>;
+        if (typeof row.id !== "number" || !Number.isFinite(row.id)) continue;
+        if (typeof row.guildId !== "string" || typeof row.fromUserId !== "string" || typeof row.toUserId !== "string") continue;
+        if (typeof row.offerItemId !== "string" || typeof row.requestItemId !== "string") continue;
+        if (typeof row.offerQty !== "number" || typeof row.requestQty !== "number") continue;
+
+        const status: TradeOfferStatus = row.status === "accepted" || row.status === "declined" || row.status === "cancelled"
+            ? row.status
+            : "open";
+        const createdAt = typeof row.createdAt === "number" && Number.isFinite(row.createdAt) ? row.createdAt : now;
+        const updatedAt = typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : createdAt;
+        const offer: TradeOffer = {
+            id: Math.max(1, Math.floor(row.id)),
+            guildId: row.guildId,
+            fromUserId: row.fromUserId,
+            toUserId: row.toUserId,
+            offerItemId: row.offerItemId,
+            offerQty: Math.max(1, Math.floor(row.offerQty)),
+            requestItemId: row.requestItemId,
+            requestQty: Math.max(1, Math.floor(row.requestQty)),
+            status,
+            createdAt,
+            updatedAt
+        };
+
+        if (status === "open") {
+            openOffers.push(offer);
+            continue;
+        }
+
+        if (now - updatedAt <= CLOSED_TRADE_RETENTION_MS) {
+            recentClosedOffers.push(offer);
+        }
+    }
+
+    recentClosedOffers.sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id);
+    const trimmedClosed = recentClosedOffers.slice(0, MAX_CLOSED_TRADES);
+    return [...openOffers, ...trimmedClosed];
+}
+
+function pruneTradeOffers(now = Date.now()): void {
+    const normalized = normalizeTradeOffers(tradeStore.offers as unknown[], now);
+    if (normalized.length !== tradeStore.offers.length) {
+        tradeStore.offers = normalized;
+    }
+}
+
 const tradeStore = readTradeStore();
 
 function saveTradeStore(): void {
+    pruneTradeOffers();
     writeJsonAtomic(TRADE_DATA_FILE, tradeStore);
 }
 
@@ -9216,20 +9273,6 @@ process.on("beforeExit", () => {
     releaseInstanceLock();
 });
 
-process.on("uncaughtException", error => {
-    recordRuntimeShutdown("uncaught_exception");
-    appendAuditEvent("uncaught_exception", { message: error.message, stack: error.stack });
-    checkpointState("uncaught_exception");
-    releaseInstanceLock();
-});
-
-process.on("unhandledRejection", reason => {
-    recordRuntimeShutdown("unhandled_rejection");
-    appendAuditEvent("unhandled_rejection", { reason: String(reason) });
-    checkpointState("unhandled_rejection");
-    releaseInstanceLock();
-});
-
 client.on("interactionCreate", async interaction => {
     if (interaction.isAutocomplete()) {
         const focused = interaction.options.getFocused(true);
@@ -9832,6 +9875,8 @@ client.on("messageCreate", async message => {
 process.on("unhandledRejection", reason => {
     console.error("Unhandled promise rejection:", reason);
     recordRuntimeShutdown("unhandled_rejection_late_handler");
+    appendAuditEvent("unhandled_rejection", { reason: toSafeString(reason) });
+    checkpointState("unhandled_rejection");
     postOpsAlert("error", "Unhandled promise rejection", {
         reason: toSafeString(reason)
     });
@@ -9841,6 +9886,8 @@ process.on("unhandledRejection", reason => {
 process.on("uncaughtException", error => {
     console.error("Uncaught exception:", error);
     recordRuntimeShutdown("uncaught_exception_late_handler");
+    appendAuditEvent("uncaught_exception", { message: error.message, stack: error.stack });
+    checkpointState("uncaught_exception");
     postOpsAlert("error", "Uncaught exception", {
         name: error.name,
         message: error.message
