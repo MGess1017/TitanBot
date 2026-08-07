@@ -6643,6 +6643,85 @@ function formatCasinoResult(options: {
     return JSON.stringify(payload);
 }
 
+function magicSlotSymbolEmoji(symbol: MagicSlotSymbol): string {
+    if (symbol === "WAND") return "🪄";
+    if (symbol === "POTION") return "🧪";
+    if (symbol === "DRAGON") return "🐉";
+    if (symbol === "SPELLBOOK") return "📘";
+    if (symbol === "CRYSTAL") return "🔮";
+    return "✨";
+}
+
+function formatMagicSlotsResult(options: {
+    userId: string;
+    outcome: CasinoOutcome;
+    bet: number;
+    payout: number;
+    walletBefore: number;
+    walletAfter: number;
+    luckyLabel: string;
+    boardRows: string[];
+    winningLines: Array<{ pattern: string; emojiLine: string; multiplier: number; rule: string }>;
+    baseMultiplier: number;
+    totalBonusHits: number;
+}): string {
+    const outcomePayload = getCasinoOutcomePayload(options.outcome);
+    const net = options.payout - options.bet;
+    const winSummary = options.winningLines.length
+        ? options.winningLines
+            .slice(0, 4)
+            .map(win => `• ${win.pattern}: ${win.emojiLine} -> ${win.multiplier.toFixed(2)}x (${win.rule})`)
+            .join("\n")
+        : "No winning paths this spin.";
+
+    const embed = new EmbedBuilder()
+        .setColor(outcomePayload.color)
+        .setTitle(`🎰 Magic Slots • ${outcomePayload.label}`)
+        .setDescription("Single-bet rune board spin. Straight rows and zig-zag paths are auto-scored.")
+        .addFields(
+            {
+                name: "Spin",
+                value: [
+                    `Bet: ${formatTokenAmount(options.bet)}`,
+                    `Payout: ${formatTokenAmount(options.payout)}`,
+                    `Net: ${formatNetAmount(net)}`,
+                    `Wallet: ${formatTokenAmount(options.walletBefore)} -> ${formatTokenAmount(options.walletAfter)}`,
+                    `Lucky: ${options.luckyLabel}`,
+                    `Bonus Hits: ${options.totalBonusHits}`,
+                    `Base Multiplier: ${options.baseMultiplier.toFixed(2)}x`
+                ].join("\n"),
+                inline: false
+            },
+            {
+                name: "Machine",
+                value: `\`\`\`\n${options.boardRows.join("\n")}\n\`\`\``,
+                inline: false
+            },
+            {
+                name: "Winning Paths",
+                value: winSummary,
+                inline: false
+            },
+            {
+                name: "Legend",
+                value: "🪄 Wand  🧪 Potion  🐉 Dragon  📘 Spellbook  🔮 Crystal  ✨ Bonus",
+                inline: false
+            }
+        )
+        .setFooter({ text: buildCasinoSessionLine(options.userId) })
+        .setTimestamp(new Date());
+
+    return JSON.stringify({
+        embed: embed.toJSON(),
+        components: buildCasinoActionComponents({
+            userId: options.userId,
+            gameKey: "slots",
+            bet: Math.max(1, Math.floor(options.bet)),
+            arg: "single"
+        })
+    });
+}
+
 function playDice(userId: string, bet: number, choice: string): string {
     const betError = validateCasinoBet(userId, bet);
     if (betError) return betError;
@@ -7057,37 +7136,26 @@ function playSlots(userId: string, bet: number): string {
     if (payout > 0) addTokens(userId, payout);
     recordGameResult(userId, "slots", payout > 0 ? "win" : "loss", totalBet, payout);
 
-    const boardRows = machineGrid.map((row, idx) => `R${idx + 1}  ${row.join(" | ")}`);
-    const winningLines = lineWins.length
-        ? lineWins.map(win => `${win.pattern}: ${win.symbols} -> ${win.multiplier.toFixed(2)}x (${win.rule}, streak ${win.streak}, bonus ${win.bonusHits})`).join("\n")
-        : "None";
-    const activePatternText = activePatterns.map((pattern, idx) => `${idx + 1}. ${pattern.name} (${pattern.kind})`).join("\n");
+    const boardRows = machineGrid.map((row, idx) => `R${idx + 1} ${row.map(symbol => `[${magicSlotSymbolEmoji(symbol)}]`).join("")}`);
+    const winningEmojiLines = lineWins.map(win => ({
+        pattern: win.pattern,
+        emojiLine: win.symbols.split(" | ").map(symbol => magicSlotSymbolEmoji(symbol as MagicSlotSymbol)).join(" "),
+        multiplier: win.multiplier,
+        rule: win.rule
+    }));
 
-    return formatCasinoResult({
+    return formatMagicSlotsResult({
         userId,
-        gameKey: "slots",
-        gameIcon: "🎰",
-        gameName: "Magic Slots",
         outcome: payout > 0 ? "win" : "loss",
         bet: totalBet,
         payout,
         walletBefore,
         walletAfter: getTokens(userId),
         luckyLabel: lucky.label,
-        details: [
-            { label: "Spin Bet", value: formatTokenAmount(bet) },
-            { label: "Reels x Rows", value: `${MAGIC_SLOT_REELS} x ${MAGIC_SLOT_ROWS}` },
-            { label: "Patterns Evaluated", value: `${activePatterns.length}` },
-            { label: "Base Multiplier", value: `${baseMultiplier.toFixed(2)}x` },
-            { label: "BONUS Hits", value: `${totalBonusHits}` },
-            { label: "Winning Patterns", value: String(lineWins.length) }
-        ],
-        sections: [
-            { title: "Machine Grid", value: boardRows.join("\n") },
-            { title: "Active Patterns", value: activePatternText },
-            { title: "Line Hits", value: winningLines }
-        ],
-        actionMeta: { bet, arg: "single" }
+        boardRows,
+        winningLines: winningEmojiLines,
+        baseMultiplier,
+        totalBonusHits
     });
 }
 
