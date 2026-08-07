@@ -7597,6 +7597,37 @@ async function ensurePermanentReportPanelForGuild(guild: Guild): Promise<void> {
     }
 }
 
+async function removeLegacyReportPanelForGuild(guild: Guild): Promise<void> {
+    if (!REPORT_PANEL_CHANNEL_ID) return;
+    const channel = guild.channels.cache.get(REPORT_PANEL_CHANNEL_ID) || await guild.channels.fetch(REPORT_PANEL_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) return;
+
+    const storedReportPanelId = getGuildPanelMessageId(guild.id, "report");
+    if (storedReportPanelId) {
+        const stored = await channel.messages.fetch(storedReportPanelId).catch(() => null);
+        await stored?.delete().catch(() => undefined);
+        setGuildPanelMessageId(guild.id, "report", null);
+    }
+
+    let beforeId: string | undefined;
+    for (let i = 0; i < 6; i++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+        if (!batch || !batch.size) break;
+
+        const legacy = batch.filter(message =>
+            message.author.id === (client.user?.id || "")
+            && (message.embeds[0]?.title === "🚨 FN Report Desk" || messageHasReportOpenButton(message as MessageWithComponents))
+        );
+        for (const message of legacy.values()) {
+            await message.delete().catch(() => undefined);
+        }
+
+        const last = batch.last();
+        beforeId = last?.id;
+        if (!beforeId) break;
+    }
+}
+
 function buildWelcomePayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x3b82f6)
@@ -10357,6 +10388,7 @@ client.once("clientReady", async () => {
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
             if (ENABLE_STARTUP_AUTOPANELS) {
+                await removeLegacyReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
@@ -10374,6 +10406,7 @@ client.once("clientReady", async () => {
         for (const guild of client.guilds.cache.values()) {
             await guild.commands.set(slashCommands).catch(() => undefined);
             if (ENABLE_STARTUP_AUTOPANELS) {
+                await removeLegacyReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
