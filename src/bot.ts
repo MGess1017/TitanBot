@@ -6664,6 +6664,9 @@ function formatMagicSlotsResult(options: {
     winningLines: Array<{ pattern: string; emojiLine: string; multiplier: number; rule: string }>;
     baseMultiplier: number;
     totalBonusHits: number;
+    totalHits: number;
+    jackpotRows: number;
+    scaledMultiplier: number;
 }): string {
     const outcomePayload = getCasinoOutcomePayload(options.outcome);
     const net = options.payout - options.bet;
@@ -6687,8 +6690,11 @@ function formatMagicSlotsResult(options: {
                     `Net: ${formatNetAmount(net)}`,
                     `Wallet: ${formatTokenAmount(options.walletBefore)} -> ${formatTokenAmount(options.walletAfter)}`,
                     `Lucky: ${options.luckyLabel}`,
+                    `Effective Return: ${options.scaledMultiplier.toFixed(2)}x`,
                     `Bonus Hits: ${options.totalBonusHits}`,
-                    `Base Multiplier: ${options.baseMultiplier.toFixed(2)}x`
+                    `Base Multiplier: ${options.baseMultiplier.toFixed(2)}x`,
+                    `Paid Paths: ${options.winningLines.length}/${options.totalHits}`,
+                    `Bonus-Row Jackpot Hits: ${options.jackpotRows}`
                 ].join("\n"),
                 inline: false
             },
@@ -6963,9 +6969,12 @@ function playBlackjack(userId: string, bet: number, style: string): string {
 type MagicSlotSymbol = "WAND" | "POTION" | "DRAGON" | "SPELLBOOK" | "CRYSTAL" | "BONUS";
 type MagicPatternKind = "straight" | "zigzag";
 
-const MAGIC_SLOT_BONUS_CHANCE = 0.1;
+const MAGIC_SLOT_BONUS_CHANCE = 0.025;
 const MAGIC_SLOT_REELS = 6;
 const MAGIC_SLOT_ROWS = 6;
+const MAGIC_SLOT_RETURN_SCALE = 0.27;
+const MAGIC_SLOT_MAX_PAID_PATTERNS = 3;
+const MAGIC_SLOT_BONUS_ROW_JACKPOT_MULTIPLIER = 65;
 const MAGIC_SLOT_PATTERNS: Array<{ name: string; kind: MagicPatternKind; path: number[] }> = [
     { name: "Runic Row 1", kind: "straight", path: [0, 0, 0, 0, 0, 0] },
     { name: "Runic Row 2", kind: "straight", path: [1, 1, 1, 1, 1, 1] },
@@ -7004,10 +7013,10 @@ function spinMagicSlotSymbol(): MagicSlotSymbol {
 }
 
 function getMagicSlotSymbolBoost(symbol: Exclude<MagicSlotSymbol, "BONUS">): number {
-    if (symbol === "DRAGON") return 1.5;
-    if (symbol === "CRYSTAL") return 1.35;
-    if (symbol === "SPELLBOOK") return 1.25;
-    if (symbol === "POTION") return 1.1;
+    if (symbol === "DRAGON") return 1.18;
+    if (symbol === "CRYSTAL") return 1.1;
+    if (symbol === "SPELLBOOK") return 1.06;
+    if (symbol === "POTION") return 1.03;
     return 1;
 }
 
@@ -7018,7 +7027,21 @@ function scoreMagicPattern(symbols: MagicSlotSymbol[], kind: MagicPatternKind): 
     bonusHits: number;
     multiplier: number;
     rule: string;
+    jackpot: boolean;
 } {
+    const allBonus = symbols.every(symbol => symbol === "BONUS");
+    if (allBonus) {
+        return {
+            hit: true,
+            streak: MAGIC_SLOT_REELS,
+            anchor: null,
+            bonusHits: MAGIC_SLOT_REELS,
+            multiplier: MAGIC_SLOT_BONUS_ROW_JACKPOT_MULTIPLIER,
+            rule: "full-bonus jackpot row",
+            jackpot: true
+        };
+    }
+
     let anchor: Exclude<MagicSlotSymbol, "BONUS"> | null = null;
     let streak = 0;
     let bonusHits = 0;
@@ -7051,33 +7074,39 @@ function scoreMagicPattern(symbols: MagicSlotSymbol[], kind: MagicPatternKind): 
             anchor,
             bonusHits,
             multiplier: 0,
-            rule: "no_match"
+            rule: "no_match",
+            jackpot: false
         };
     }
 
     let base = 0;
     let rule = "2-identical";
-    if (streak >= 3) {
-        base = kind === "straight" ? 5 : 3;
+    if (streak >= 6) {
+        base = kind === "straight" ? 12 : 8;
+        rule = kind === "straight" ? "6-identical straight" : "6-identical zig-zag";
+    } else if (streak >= 5) {
+        base = kind === "straight" ? 6.5 : 4.6;
+        rule = kind === "straight" ? "5-identical straight" : "5-identical zig-zag";
+    } else if (streak >= 4) {
+        base = kind === "straight" ? 3.2 : 2.2;
+        rule = kind === "straight" ? "4-identical straight" : "4-identical zig-zag";
+    } else if (streak >= 3) {
+        base = kind === "straight" ? 1.35 : 0.95;
         rule = kind === "straight" ? "3-identical straight" : "3-identical zig-zag";
     } else {
-        base = 2;
-    }
-
-    if (streak > 3) {
-        base += (streak - 3) * (kind === "straight" ? 1.25 : 1.0);
-        rule = `${rule} + streak bonus`;
+        base = kind === "straight" ? 0.38 : 0.24;
     }
 
     const symbolBoost = getMagicSlotSymbolBoost(anchor);
-    const bonusBoost = bonusHits > 0 ? 1 + (bonusHits * 0.35) : 1;
+    const bonusBoost = bonusHits > 0 ? 1 + (bonusHits * 0.1) : 1;
     return {
         hit: true,
         streak,
         anchor,
         bonusHits,
         multiplier: base * symbolBoost * bonusBoost,
-        rule
+        rule,
+        jackpot: false
     };
 }
 
@@ -7109,16 +7138,14 @@ function playSlots(userId: string, bet: number): string {
     );
 
     const activePatterns = MAGIC_SLOT_PATTERNS;
-    let baseMultiplier = 0;
-    let totalBonusHits = 0;
     const lineWins: Array<{ pattern: string; symbols: string; multiplier: number; rule: string; streak: number; bonusHits: number }> = [];
+    let jackpotRows = 0;
 
     for (const pattern of activePatterns) {
         const lineSymbols = pattern.path.map((rowIndex, reelIndex) => machineGrid[rowIndex]?.[reelIndex] || "WAND");
         const scored = scoreMagicPattern(lineSymbols, pattern.kind);
         if (!scored.hit || scored.multiplier <= 0) continue;
-        baseMultiplier += scored.multiplier;
-        totalBonusHits += scored.bonusHits;
+        if (scored.jackpot) jackpotRows += 1;
         lineWins.push({
             pattern: pattern.name,
             symbols: lineSymbols.join(" | "),
@@ -7129,15 +7156,22 @@ function playSlots(userId: string, bet: number): string {
         });
     }
 
+    const paidWins = [...lineWins]
+        .sort((a, b) => b.multiplier - a.multiplier)
+        .slice(0, MAGIC_SLOT_MAX_PAID_PATTERNS);
+    const baseMultiplier = paidWins.reduce((sum, win) => sum + win.multiplier, 0);
+    const totalBonusHits = paidWins.reduce((sum, win) => sum + win.bonusHits, 0);
+
     const lucky = rollLuckyMultiplier();
     const totalMultiplier = Math.max(0, baseMultiplier) * lucky.multiplier;
-    const profit = totalMultiplier > 0 ? Math.max(1, Math.floor(bet * totalMultiplier)) : 0;
-    const payout = profit > 0 ? totalBet + profit : 0;
+    const scaledMultiplier = totalMultiplier * MAGIC_SLOT_RETURN_SCALE;
+    const payout = totalMultiplier > 0 ? Math.max(1, Math.floor(totalBet * scaledMultiplier)) : 0;
     if (payout > 0) addTokens(userId, payout);
-    recordGameResult(userId, "slots", payout > 0 ? "win" : "loss", totalBet, payout);
+    const outcome: CasinoOutcome = payout > totalBet ? "win" : payout === totalBet ? "push" : "loss";
+    recordGameResult(userId, "slots", outcome, totalBet, payout);
 
     const boardRows = machineGrid.map((row, idx) => `R${idx + 1} ${row.map(symbol => `[${magicSlotSymbolEmoji(symbol)}]`).join("")}`);
-    const winningEmojiLines = lineWins.map(win => ({
+    const winningEmojiLines = paidWins.map(win => ({
         pattern: win.pattern,
         emojiLine: win.symbols.split(" | ").map(symbol => magicSlotSymbolEmoji(symbol as MagicSlotSymbol)).join(" "),
         multiplier: win.multiplier,
@@ -7146,7 +7180,7 @@ function playSlots(userId: string, bet: number): string {
 
     return formatMagicSlotsResult({
         userId,
-        outcome: payout > 0 ? "win" : "loss",
+        outcome,
         bet: totalBet,
         payout,
         walletBefore,
@@ -7155,7 +7189,10 @@ function playSlots(userId: string, bet: number): string {
         boardRows,
         winningLines: winningEmojiLines,
         baseMultiplier,
-        totalBonusHits
+        totalBonusHits,
+        totalHits: lineWins.length,
+        jackpotRows,
+        scaledMultiplier
     });
 }
 
