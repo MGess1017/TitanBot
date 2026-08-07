@@ -1656,7 +1656,7 @@ function buildGiveawayEmbed(giveaway: GiveawayEntry, now = Date.now()): EmbedBui
             { name: "Entries", value: `${giveaway.entries.length}`, inline: true },
             { name: "Reward", value: rewardDetail, inline: false },
             { name: "Role Requirement", value: giveaway.roleRequiredId ? `<@&${giveaway.roleRequiredId}>` : "None", inline: true },
-            { name: giveaway.status === "active" ? "Ends" : "Ended", value: giveaway.status === "active" ? `<t:${Math.floor(giveaway.endAt / 1000)}:R>\n${formatGiveawayDuration(remainingMs)} remaining` : (giveaway.endedAt ? `<t:${Math.floor(giveaway.endedAt / 1000)}:R>` : "Ended"), inline: false },
+            { name: giveaway.status === "active" ? "Ends" : "Ended", value: giveaway.status === "active" ? `<t:${Math.floor(giveaway.endAt / 1000)}:R>\n<t:${Math.floor(giveaway.endAt / 1000)}:F>` : (giveaway.endedAt ? `<t:${Math.floor(giveaway.endedAt / 1000)}:R>` : "Ended"), inline: false },
             { name: "Current Winners", value: winnersText, inline: false }
         )
         .setFooter({ text: giveaway.status === "active" ? "Press Enter Giveaway below to participate." : "Giveaway closed." })
@@ -1829,6 +1829,13 @@ async function processDueGiveaways(now = Date.now()): Promise<void> {
     const due = giveawayStore.giveaways.filter(giveaway => giveaway.status === "active" && giveaway.endAt <= now);
     for (const giveaway of due) {
         await finalizeGiveaway(giveaway, "timer");
+    }
+}
+
+async function refreshActiveGiveawayEmbeds(now = Date.now()): Promise<void> {
+    const active = giveawayStore.giveaways.filter(giveaway => giveaway.status === "active" && giveaway.endAt > now);
+    for (const giveaway of active) {
+        await syncGiveawayMessage(giveaway);
     }
 }
 
@@ -10381,6 +10388,10 @@ setInterval(() => {
 setInterval(() => {
     void processDueGiveaways();
 }, 15_000).unref();
+
+setInterval(() => {
+    void refreshActiveGiveawayEmbeds();
+}, 60_000).unref();
 
 setTimeout(() => {
     void sendAutomatedHealthReport("startup_warmup");
