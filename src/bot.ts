@@ -6429,7 +6429,7 @@ function getCasinoOddsSnapshot(gameKey: Exclude<GameStatKey, "raid">): string {
     if (gameKey === "roulette") return "Number call is highest variance (36.00x base), color/parity offers steadier hit rates (2.00x base).";
     if (gameKey === "blackjack") return "Safe style lowers bust risk, aggressive style raises upside volatility.";
     if (gameKey === "crash") return "Lower targets cash more often, higher targets spike multiplier but fail more often.";
-    if (gameKey === "slots") return "Magic Slots pays on 2+ symbol streaks across 6 reels with stronger straight-line payouts.";
+    if (gameKey === "slots") return "Magic Slots uses one spin bet on a 6x6 board with straight and zig-zag win paths.";
     if (gameKey === "coinflip") return "Pure 50/50 call before lucky modifier influence.";
     if (gameKey === "baccarat") return "Tie has the largest payout but lowest consistency; player/banker are steadier.";
     if (gameKey === "hilo") return "Large card-distance wins pay more; close outcomes are safer but lower yield.";
@@ -6483,7 +6483,7 @@ function defaultCasinoArgForGame(gameKey: CasinoGameKey): string {
     if (gameKey === "roulette") return "red";
     if (gameKey === "blackjack") return "safe";
     if (gameKey === "crash") return "1.50";
-    if (gameKey === "slots") return "3";
+    if (gameKey === "slots") return "single";
     if (gameKey === "coinflip") return "heads";
     if (gameKey === "baccarat") return "player";
     if (gameKey === "hilo") return "higher";
@@ -6886,16 +6886,20 @@ type MagicPatternKind = "straight" | "zigzag";
 
 const MAGIC_SLOT_BONUS_CHANCE = 0.1;
 const MAGIC_SLOT_REELS = 6;
-const MAGIC_SLOT_ROWS = 3;
+const MAGIC_SLOT_ROWS = 6;
 const MAGIC_SLOT_PATTERNS: Array<{ name: string; kind: MagicPatternKind; path: number[] }> = [
-    { name: "Arcane Top", kind: "straight", path: [0, 0, 0, 0, 0, 0] },
-    { name: "Arcane Middle", kind: "straight", path: [1, 1, 1, 1, 1, 1] },
-    { name: "Arcane Bottom", kind: "straight", path: [2, 2, 2, 2, 2, 2] },
-    { name: "Lightning Weave", kind: "zigzag", path: [0, 1, 0, 1, 0, 1] },
-    { name: "Dragon Weave", kind: "zigzag", path: [2, 1, 2, 1, 2, 1] },
-    { name: "Mystic V", kind: "zigzag", path: [0, 1, 2, 1, 0, 1] },
-    { name: "Mystic Invert", kind: "zigzag", path: [2, 1, 0, 1, 2, 1] },
-    { name: "Crystal Rise", kind: "zigzag", path: [0, 0, 1, 1, 2, 2] }
+    { name: "Runic Row 1", kind: "straight", path: [0, 0, 0, 0, 0, 0] },
+    { name: "Runic Row 2", kind: "straight", path: [1, 1, 1, 1, 1, 1] },
+    { name: "Runic Row 3", kind: "straight", path: [2, 2, 2, 2, 2, 2] },
+    { name: "Runic Row 4", kind: "straight", path: [3, 3, 3, 3, 3, 3] },
+    { name: "Runic Row 5", kind: "straight", path: [4, 4, 4, 4, 4, 4] },
+    { name: "Runic Row 6", kind: "straight", path: [5, 5, 5, 5, 5, 5] },
+    { name: "Storm Weave 1", kind: "zigzag", path: [0, 1, 0, 1, 0, 1] },
+    { name: "Storm Weave 2", kind: "zigzag", path: [1, 2, 1, 2, 1, 2] },
+    { name: "Storm Weave 3", kind: "zigzag", path: [2, 3, 2, 3, 2, 3] },
+    { name: "Storm Weave 4", kind: "zigzag", path: [3, 4, 3, 4, 3, 4] },
+    { name: "Storm Weave 5", kind: "zigzag", path: [4, 5, 4, 5, 4, 5] },
+    { name: "Arcane Crown", kind: "zigzag", path: [0, 1, 2, 1, 0, 1] }
 ];
 
 function spinMagicSlotBaseSymbol(): Exclude<MagicSlotSymbol, "BONUS"> {
@@ -7013,9 +7017,8 @@ function buildCrashMeter(target: number, crashPoint: number): string {
     return `[${cells.join("")}]`;
 }
 
-function playSlots(userId: string, bet: number, lines: number): string {
-    if (lines < 1 || lines > 8) return "Lines must be between 1 and 8.";
-    const totalBet = bet * lines;
+function playSlots(userId: string, bet: number): string {
+    const totalBet = bet;
     const betError = validateCasinoBet(userId, totalBet);
     if (betError) return betError;
 
@@ -7026,7 +7029,7 @@ function playSlots(userId: string, bet: number, lines: number): string {
         Array.from({ length: MAGIC_SLOT_REELS }, () => spinMagicSlotSymbol())
     );
 
-    const activePatterns = MAGIC_SLOT_PATTERNS.slice(0, lines);
+    const activePatterns = MAGIC_SLOT_PATTERNS;
     let baseMultiplier = 0;
     let totalBonusHits = 0;
     const lineWins: Array<{ pattern: string; symbols: string; multiplier: number; rule: string; streak: number; bonusHits: number }> = [];
@@ -7072,19 +7075,19 @@ function playSlots(userId: string, bet: number, lines: number): string {
         walletAfter: getTokens(userId),
         luckyLabel: lucky.label,
         details: [
-            { label: "Bet Per Line", value: formatTokenAmount(bet) },
-            { label: "Active Lines", value: `${lines}/8` },
+            { label: "Spin Bet", value: formatTokenAmount(bet) },
             { label: "Reels x Rows", value: `${MAGIC_SLOT_REELS} x ${MAGIC_SLOT_ROWS}` },
+            { label: "Patterns Evaluated", value: `${activePatterns.length}` },
             { label: "Base Multiplier", value: `${baseMultiplier.toFixed(2)}x` },
             { label: "BONUS Hits", value: `${totalBonusHits}` },
-            { label: "Winning Lines", value: String(lineWins.length) }
+            { label: "Winning Patterns", value: String(lineWins.length) }
         ],
         sections: [
             { title: "Machine Grid", value: boardRows.join("\n") },
             { title: "Active Patterns", value: activePatternText },
             { title: "Line Hits", value: winningLines }
         ],
-        actionMeta: { bet, arg: String(lines) }
+        actionMeta: { bet, arg: "single" }
     });
 }
 
@@ -7473,8 +7476,7 @@ async function runCasinoQuickAction(input: {
         return { gameKey: resolvedGame, payload: await playCrash(input.userId, effectiveBet, Number.isFinite(target) ? target : 1.5) };
     }
     if (resolvedGame === "slots") {
-        const lines = Math.max(1, Math.min(8, Number.parseInt(arg || "3", 10) || 3));
-        return { gameKey: resolvedGame, payload: playSlots(input.userId, effectiveBet, lines) };
+        return { gameKey: resolvedGame, payload: playSlots(input.userId, effectiveBet) };
     }
     if (resolvedGame === "coinflip") return { gameKey: resolvedGame, payload: playCoinflip(input.userId, effectiveBet, arg || "heads") };
     if (resolvedGame === "baccarat") return { gameKey: resolvedGame, payload: playBaccarat(input.userId, effectiveBet, arg || "player") };
@@ -10206,13 +10208,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     },
     slots: async interaction => {
         const bet = interaction.options.getInteger("bet", true);
-        const lines = interaction.options.getInteger("lines", true);
-        return playSlots(interaction.user.id, bet, lines);
+        return playSlots(interaction.user.id, bet);
     },
     magicslots: async interaction => {
         const bet = interaction.options.getInteger("bet", true);
-        const lines = interaction.options.getInteger("lines", true);
-        return playSlots(interaction.user.id, bet, lines);
+        return playSlots(interaction.user.id, bet);
     },
     coinflip: async interaction => {
         const bet = interaction.options.getInteger("bet", true);
