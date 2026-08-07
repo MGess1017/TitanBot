@@ -11,7 +11,6 @@ const source = fs.readFileSync(BOT_FILE, "utf8");
 
 const adminCommands = [
   "addpoints",
-  "pointsuser",
   "timeout",
   "kick",
   "ban",
@@ -26,8 +25,11 @@ const adminCommands = [
   "incident",
   "xpverify",
   "rolesanity",
-  "ticketsanity"
-  ,"announce"
+  "ticketsanity",
+  "announce",
+  "reportintake",
+  "reportprofile",
+  "reportanalytics"
 ];
 
 const failures = [];

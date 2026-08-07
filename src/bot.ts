@@ -2354,59 +2354,6 @@ function buildTicketIntakeModal(): ModalBuilder {
         );
 }
 
-function buildReportIntakeModal(): ModalBuilder {
-    const targetInput = new TextInputBuilder()
-        .setCustomId(REPORT_IDS.target)
-        .setLabel("Reported User / ID")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(80)
-        .setPlaceholder("Username, display name, or Discord ID");
-
-    const summaryInput = new TextInputBuilder()
-        .setCustomId(REPORT_IDS.summary)
-        .setLabel("Report Summary")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(120)
-        .setPlaceholder("Cheating, harassment, scam attempt, abuse, etc.");
-
-    const detailsInput = new TextInputBuilder()
-        .setCustomId(REPORT_IDS.details)
-        .setLabel("Incident Details")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
-        .setMaxLength(900)
-        .setPlaceholder("What happened, when it happened, and why action is needed.");
-
-    const locationInput = new TextInputBuilder()
-        .setCustomId(REPORT_IDS.location)
-        .setLabel("Location / Message Link")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(120)
-        .setPlaceholder("Channel, thread, message link, or match reference");
-
-    const evidenceInput = new TextInputBuilder()
-        .setCustomId(REPORT_IDS.evidence)
-        .setLabel("Evidence Links")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(false)
-        .setMaxLength(400)
-        .setPlaceholder("Screenshots, clips, logs, external proof, witness links");
-
-    return new ModalBuilder()
-        .setCustomId(REPORT_IDS.intakeModal)
-        .setTitle("User Report Intake")
-        .addComponents(
-            new ActionRowBuilder<TextInputBuilder>().addComponents(targetInput),
-            new ActionRowBuilder<TextInputBuilder>().addComponents(summaryInput),
-            new ActionRowBuilder<TextInputBuilder>().addComponents(detailsInput),
-            new ActionRowBuilder<TextInputBuilder>().addComponents(locationInput),
-            new ActionRowBuilder<TextInputBuilder>().addComponents(evidenceInput)
-        );
-}
-
 function buildRaidItemGiveawayModal(): ModalBuilder {
     return new ModalBuilder()
         .setCustomId(GIVEAWAY_IDS.raidItemModal)
@@ -3155,13 +3102,7 @@ const TICKET_IDS = {
 } as const;
 
 const REPORT_IDS = {
-    open: "report_open",
-    intakeModal: "report_intake_modal",
-    target: "report_target",
-    summary: "report_summary",
-    details: "report_details",
-    location: "report_location",
-    evidence: "report_evidence"
+    open: "report_open"
 } as const;
 
 const GIVEAWAY_IDS = {
@@ -7348,68 +7289,6 @@ function buildTicketPanelPayload(guildName: string) {
     };
 }
 
-function buildReportPanelPayload(guildName: string) {
-    const embed = brandLiveEmbed(new EmbedBuilder()
-        .setColor(0xb91c1c)
-        .setTitle("🚨 FN Report Desk")
-        .setDescription([
-            `Report harmful behavior inside **${guildName}** through a private tracked case.`,
-            "",
-            "Use this for harassment, cheating, scams, impersonation, abuse, or threats that need staff review.",
-            "",
-            "Good reports include a target, context, evidence, and a precise summary."
-        ].join("\n"))
-        .addFields(
-            {
-                name: "🧭 Desk Purpose",
-                value: [
-                    "Private report lane for user safety, behavior issues, and moderation review.",
-                    "",
-                    "Every submission is logged and moved through the same tracked ops workflow as support tickets."
-                ].join("\n")
-            },
-            {
-                name: "📝 What To Include",
-                value: [
-                    "Reported user name or ID",
-                    "What happened and when",
-                    "Channel or message reference",
-                    "Evidence links or screenshots"
-                ].join("\n")
-            },
-            {
-                name: "⚡ Review Priority",
-                value: [
-                    "Reports open as high-priority tracked cases.",
-                    "",
-                    "Staff can claim, assign, escalate, archive, and resolve them from the live panel."
-                ].join("\n")
-            },
-            {
-                name: "🔐 Privacy",
-                value: [
-                    "Only the reporter, admins, and the handler role can view the report channel.",
-                    "",
-                    "Audit logs and report metadata are preserved for accountability."
-                ].join("\n")
-            }
-        ), "FN Report Intake Desk", `${guildName} report panel`);
-
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-            .setCustomId(REPORT_IDS.open)
-            .setLabel("Submit User Report")
-            .setEmoji("🚨")
-            .setStyle(ButtonStyle.Danger)
-    );
-
-    return {
-        embed: embed.toJSON(),
-        components: [row.toJSON()],
-        isReportPanel: true
-    };
-}
-
 function buildRaidItemGiveawayPanelPayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0xf59e0b)
@@ -7505,60 +7384,6 @@ async function upsertTicketPanelInChannel(guild: Guild, channelId: string): Prom
     return { ok: true, action: "posted" };
 }
 
-async function upsertReportPanelInChannel(guild: Guild, channelId: string): Promise<{ ok: true; action: "posted" | "updated" } | { ok: false; error: string }> {
-    const channel = (guild.channels.cache.get(channelId)
-        || await guild.channels.fetch(channelId).catch(() => null));
-    if (!channel || channel.type !== ChannelType.GuildText) {
-        return { ok: false, error: "Configured report panel channel is missing or not a text channel." };
-    }
-
-    const panel = buildReportPanelPayload(guild.name);
-    const embed = panel.embed as APIEmbed;
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-            .setCustomId(REPORT_IDS.open)
-            .setLabel("Submit User Report")
-            .setEmoji("🚨")
-            .setStyle(ButtonStyle.Danger)
-    );
-
-    let candidateId: string | null = null;
-    let beforeId: string | undefined;
-    const expectedTitle = "🚨 FN Report Desk";
-    for (let i = 0; i < 5; i++) {
-        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
-        if (!batch || !batch.size) break;
-
-        const candidate = batch.find(message =>
-            message.author.id === (client.user?.id || "")
-            && (messageHasReportOpenButton(message as MessageWithComponents) || message.embeds[0]?.title === expectedTitle)
-        );
-        if (candidate) {
-            candidateId = candidate.id;
-            break;
-        }
-
-        const last = batch.last();
-        beforeId = last?.id;
-        if (!beforeId) break;
-    }
-
-    if (candidateId) {
-        const candidate = await channel.messages.fetch(candidateId).catch(() => null);
-        const edited = await candidate?.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
-        if (!edited) {
-            return { ok: false, error: "Failed to refresh report panel message. Check bot permissions for this channel." };
-        }
-        return { ok: true, action: "updated" };
-    }
-
-    const sent = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
-    if (!sent) {
-        return { ok: false, error: "Failed to post report panel message. Check bot permissions for this channel." };
-    }
-    return { ok: true, action: "posted" };
-}
-
 async function ensurePermanentTicketPanelForGuild(guild: Guild): Promise<void> {
     if (!PERMANENT_TICKET_PANEL_CHANNEL_ID) return;
     const result = await upsertTicketPanelInChannel(guild, PERMANENT_TICKET_PANEL_CHANNEL_ID);
@@ -7575,25 +7400,6 @@ async function ensurePermanentTicketPanelForGuild(guild: Guild): Promise<void> {
             error: result.error
         });
         console.warn(`Permanent ticket panel upsert skipped for guild ${guild.id}: ${result.error}`);
-    }
-}
-
-async function ensurePermanentReportPanelForGuild(guild: Guild): Promise<void> {
-    if (!REPORT_PANEL_CHANNEL_ID) return;
-    const result = await upsertReportPanelInChannel(guild, REPORT_PANEL_CHANNEL_ID);
-    if (result.ok) {
-        appendAuditEvent("report_panel_permanent_upsert", {
-            guildId: guild.id,
-            channelId: REPORT_PANEL_CHANNEL_ID,
-            action: result.action
-        });
-    } else {
-        appendAuditEvent("report_panel_permanent_upsert_failed", {
-            guildId: guild.id,
-            channelId: REPORT_PANEL_CHANNEL_ID,
-            error: result.error
-        });
-        console.warn(`Permanent report panel upsert skipped for guild ${guild.id}: ${result.error}`);
     }
 }
 
@@ -8394,9 +8200,6 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     help: async interaction => {
         return JSON.stringify(await buildHelpPayload("general", interaction.guild));
     },
-    quickstart: async interaction => {
-        return JSON.stringify({ embed: buildQuickstartEmbed(interaction.user).toJSON() });
-    },
     xproles: async interaction => {
         const lines = await resolveXpRoleLines(interaction.guild);
         const sections = buildThemedRoleSections(lines);
@@ -8446,36 +8249,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const memory = process.memoryUsage();
         return buildStatusLines(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())).join("\n");
     },
-    testupdate: async () => "Updated",
-    findbots: async interaction => {
-        const guildError = requireGuild(interaction);
-        if (guildError) return guildError;
-
-        const guild = interaction.guild!;
-        await guild.members.fetch().catch(() => undefined);
-
-        const botMembers = guild.members.cache.filter(member => member.user.bot);
-        if (!botMembers.size) {
-            return "No bot accounts found in this server.";
-        }
-
-        const selfId = client.user?.id;
-        const lines = botMembers
-            .map(member => {
-                const marker = member.id === selfId ? "(this bot)" : "";
-                return `- ${member.user.tag} | ID: ${member.id} ${marker}`.trim();
-            })
-            .sort((a, b) => a.localeCompare(b));
-
-        return [
-            `Bots in ${guild.name}:`,
-            ...lines,
-            "",
-            "Remove the extra app in Server Settings -> Members (or Integrations), then keep only the line marked (this bot)."
-        ].join("\n");
-    },
     balance: async interaction => handleCoreCommand("balance", interaction),
-    token: async interaction => handleCoreCommand("token", interaction),
     bank: async interaction => handleCoreCommand("bank", interaction),
     deposit: async interaction => {
         const amount = interaction.options.getInteger("amount", true);
@@ -9307,9 +9081,6 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     },
     ticketassign: async interaction => {
         return await ticketCommandHandlers.ticketassign(interaction);
-    },
-    ticketassgin: async interaction => {
-        return await ticketCommandHandlers.ticketassgin(interaction);
     },
     ticketstatus: async interaction => {
         return await ticketCommandHandlers.ticketstatus(interaction);
@@ -10232,12 +10003,6 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             { name: "New Total", value: `${total}`, inline: true }
         ]);
         return `${user.username} now has ${total} Access Points.`;
-    },
-    pointsuser: async interaction => {
-        const adminError = requireAdministrator(interaction);
-        if (adminError) return adminError;
-        const user = interaction.options.getUser("user", true);
-        return `${user.username} has ${getPoints(user.id)} Access Points.`;
     },
     timeout: async interaction => {
         const adminError = requireAdministrator(interaction);
