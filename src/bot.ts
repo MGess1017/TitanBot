@@ -7522,53 +7522,12 @@ async function ensurePermanentReportPanelForGuild(guild: Guild): Promise<void> {
 
 function buildWelcomePayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
-        .setColor(0xf59e0b)
-        .setTitle(`🌤️ Welcome to ${guildName}`)
-        .setDescription([
-            `Glad you're here. **${guildName}** is meant to stay active, sharp, and easy to navigate without burying people in fluff.`,
-            "",
-            "Read the rules below once, respect staff calls when they are made, and keep your time here clean so the server stays useful for everyone.",
-            "",
-            "✨ **Quick read. Straight expectations. No guesswork.**"
-        ].join("\n"))
-        .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f31f.png")
-        .setImage("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f6e1.png")
-        .addFields(
-            {
-                name: "🧭 Server Tone",
-                value: [
-                    "Be civil, be direct, and do not turn routine moderation into a debate stage.",
-                    "",
-                    "Staff decisions are operational calls first. If you want leniency, give staff a reason to trust your behavior."
-                ].join("\n")
-            },
-            {
-                name: "⛔ Hard Bans",
-                value: [
-                    "**Disrespect toward Owners** or building up warnings/reports past a reasonable limit can lead straight to removal.",
-                    "",
-                    "**Owners and Admins hold final say** and may ban for any reason they judge necessary for the server.",
-                    "",
-                    "📝 **All bans are appealable one time only.**"
-                ].join("\n")
-            },
-            {
-                name: "🚪 Kicks",
-                value: [
-                    "Kicks happen when you clearly push an admin too far for obvious reasons and staff decide the behavior needs to stop immediately.",
-                    "",
-                    "**Owners/Admins hold the authority to kick or ban who they please.**"
-                ].join("\n")
-            },
-            {
-                name: "📌 What To Remember",
-                value: [
-                    "• Respect the people running the server.",
-                    "• Do not stack warnings, reports, or avoidable friction.",
-                    "• Appeals are limited, so do not waste the one chance you get."
-                ].join("\n")
-            }
-        ), "Welcome Desk", `${guildName} rules board`);
+        .setColor(0x3b82f6)
+        .setTitle("Welcome to FN Tarkov")
+        .addFields({
+            name: "Discord Invite",
+            value: "https://discord.gg/dnj5KmDyx"
+        }), "Welcome Desk", `${guildName} welcome page`);
 
     return { embed: embed.toJSON() };
 }
@@ -7596,7 +7555,7 @@ async function upsertWelcomePanelInChannel(guild: Guild, channelId: string): Pro
     let candidateId: string | null = null;
     const duplicateIds: string[] = [];
     let beforeId: string | undefined;
-    const expectedTitle = `🌤️ Welcome to ${guild.name}`;
+    const expectedTitle = "Welcome to FN Tarkov";
     for (let i = 0; i < 10; i++) {
         const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
         if (!batch || !batch.size) break;
@@ -7605,7 +7564,7 @@ async function upsertWelcomePanelInChannel(guild: Guild, channelId: string): Pro
             message.author.id === (client.user?.id || "")
             && (
                 message.embeds[0]?.title === expectedTitle
-                || message.embeds[0]?.footer?.text?.includes("rules board")
+                || message.embeds[0]?.footer?.text?.includes("welcome page")
             )
         );
         const candidate = candidates.first();
