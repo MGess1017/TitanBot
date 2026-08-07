@@ -165,7 +165,8 @@ const DEFAULT_TICKET_DEFAULT_CATEGORY_ID = "1523411322430296228";
 const DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID = "1506119505720377434";
 const DEFAULT_REPORT_PANEL_CHANNEL_ID = DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
 const DEFAULT_GIVEAWAY_CHANNEL_ID = "1535059013912363008";
-const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535132577059307583";
+const DEFAULT_REPORT_ADMIN_PANEL_CHANNEL_ID = "1535132577059307583";
+const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1527571592320651285";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
@@ -175,6 +176,7 @@ const TICKET_DEFAULT_CATEGORY_ID = process.env.TICKET_DEFAULT_CATEGORY_ID || DEF
 const PERMANENT_TICKET_PANEL_CHANNEL_ID = process.env.PERMANENT_TICKET_PANEL_CHANNEL_ID || DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
 const REPORT_PANEL_CHANNEL_ID = process.env.REPORT_PANEL_CHANNEL_ID || DEFAULT_REPORT_PANEL_CHANNEL_ID;
 const GIVEAWAY_CHANNEL_ID = process.env.GIVEAWAY_CHANNEL_ID || DEFAULT_GIVEAWAY_CHANNEL_ID;
+const REPORT_ADMIN_PANEL_CHANNEL_ID = process.env.REPORT_ADMIN_PANEL_CHANNEL_ID || DEFAULT_REPORT_ADMIN_PANEL_CHANNEL_ID;
 const REPORT_LOG_CHANNEL_ID = process.env.REPORT_LOG_CHANNEL_ID || DEFAULT_REPORT_LOG_CHANNEL_ID;
 const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID || DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID;
 const WELCOME_PANEL_CHANNEL_ID = process.env.WELCOME_PANEL_CHANNEL_ID || DEFAULT_WELCOME_PANEL_CHANNEL_ID;
@@ -1891,6 +1893,7 @@ type GuildModerationState = {
     panelMessageIds?: {
         welcome?: string | null;
         report?: string | null;
+        reportAdmin?: string | null;
         featureBrief?: string | null;
     };
 };
@@ -2354,6 +2357,50 @@ function buildTicketIntakeModal(): ModalBuilder {
         );
 }
 
+function buildAdminReportIntakeModal(): ModalBuilder {
+    const targetInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.adminTarget)
+        .setLabel("Target User ID or Mention")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(80)
+        .setPlaceholder("123456789012345678 or <@123...>");
+
+    const summaryInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.adminSummary)
+        .setLabel("Report Summary")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(120)
+        .setPlaceholder("Cheating, harassment, scam, abuse, etc.");
+
+    const detailsInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.adminDetails)
+        .setLabel("Detailed Context")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(900)
+        .setPlaceholder("Optional incident details, timeline, and context.");
+
+    const evidenceInput = new TextInputBuilder()
+        .setCustomId(REPORT_IDS.adminEvidence)
+        .setLabel("Evidence Links")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(500)
+        .setPlaceholder("Optional screenshots, clips, logs, links.");
+
+    return new ModalBuilder()
+        .setCustomId(REPORT_IDS.adminModal)
+        .setTitle("Admin Report Intake")
+        .addComponents(
+            new ActionRowBuilder<TextInputBuilder>().addComponents(targetInput),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(summaryInput),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(detailsInput),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(evidenceInput)
+        );
+}
+
 function buildRaidItemGiveawayModal(): ModalBuilder {
     return new ModalBuilder()
         .setCustomId(GIVEAWAY_IDS.raidItemModal)
@@ -2375,6 +2422,111 @@ function buildRaidItemGiveawayModal(): ModalBuilder {
                 new TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidDescription).setLabel("Description").setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(400).setPlaceholder("Optional context or event blurb")
             )
         );
+}
+
+function buildAdminReportPanelPayload(guildName: string) {
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0x0ea5e9)
+        .setTitle("🛡️ Admin Report Panel")
+        .setDescription([
+            "Administrator-only formal report intake panel.",
+            "",
+            "Use this to file tracked reports against players.",
+            `All submitted reports are automatically logged to <#${REPORT_LOG_CHANNEL_ID}>.`
+        ].join("\n"))
+        .addFields(
+            { name: "Scope", value: "Reports against players only. Support requests must use the support ticket panel.", inline: false },
+            { name: "Access", value: "Admins only", inline: true },
+            { name: "Server", value: guildName, inline: true }
+        ), "FN Admin Report Control", `${guildName} admin report panel`);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(REPORT_IDS.adminOpen)
+            .setLabel("File User Report")
+            .setEmoji("🚨")
+            .setStyle(ButtonStyle.Danger)
+    );
+
+    return { embed: embed.toJSON(), components: [row.toJSON()] };
+}
+
+async function upsertAdminReportPanelInChannel(guild: Guild, channelId: string): Promise<{ ok: true; action: "posted" | "updated" } | { ok: false; error: string }> {
+    const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+        return { ok: false, error: "Configured admin report panel channel is missing or not a text channel." };
+    }
+
+    const payload = buildAdminReportPanelPayload(guild.name);
+    const embed = payload.embed as APIEmbed;
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(REPORT_IDS.adminOpen)
+            .setLabel("File User Report")
+            .setEmoji("🚨")
+            .setStyle(ButtonStyle.Danger)
+    );
+
+    const storedMessageId = getGuildPanelMessageId(guild.id, "reportAdmin");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) {
+            return { ok: true, action: "updated" };
+        }
+        setGuildPanelMessageId(guild.id, "reportAdmin", null);
+    }
+
+    let candidateId: string | null = null;
+    const duplicateIds: string[] = [];
+    let beforeId: string | undefined;
+    for (let i = 0; i < 8; i++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+        if (!batch || !batch.size) break;
+
+        const candidates = batch.filter(message =>
+            message.author.id === (client.user?.id || "")
+            && (
+                message.embeds[0]?.title === "🛡️ Admin Report Panel"
+                || message.embeds[0]?.footer?.text?.includes("admin report panel")
+            )
+        );
+
+        const candidate = candidates.first();
+        if (candidate) {
+            candidateId = candidate.id;
+            for (const duplicate of candidates.values()) {
+                if (duplicate.id !== candidate.id) duplicateIds.push(duplicate.id);
+            }
+            break;
+        }
+
+        const last = batch.last();
+        beforeId = last?.id;
+        if (!beforeId) break;
+    }
+
+    if (candidateId) {
+        const candidate = await channel.messages.fetch(candidateId).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+        if (!edited) {
+            return { ok: false, error: "Failed to refresh admin report panel message. Check bot permissions for this channel." };
+        }
+        setGuildPanelMessageId(guild.id, "reportAdmin", candidateId);
+        for (const duplicateId of duplicateIds) {
+            if (duplicateId === candidateId) continue;
+            const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);
+            await duplicate?.delete().catch(() => undefined);
+        }
+        return { ok: true, action: "updated" };
+    }
+
+    const sent = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+    if (!sent) {
+        return { ok: false, error: "Failed to post admin report panel message. Check bot permissions for this channel." };
+    }
+    setGuildPanelMessageId(guild.id, "reportAdmin", sent.id);
+    return { ok: true, action: "posted" };
 }
 
 function buildTicketCsatButtons(ticketId: number): ActionRowBuilder<ButtonBuilder> {
@@ -2806,13 +2958,13 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     return moderationStore.guilds[guildId];
 }
 
-function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "featureBrief"): string | null {
+function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief"): string | null {
     const cfg = ensureGuildModeration(guildId);
     const value = cfg.panelMessageIds?.[panel];
     return value ? String(value) : null;
 }
 
-function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "featureBrief", messageId: string | null): void {
+function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief", messageId: string | null): void {
     const cfg = ensureGuildModeration(guildId);
     if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
     cfg.panelMessageIds[panel] = messageId;
@@ -2872,6 +3024,53 @@ async function sendFormalUserReportLog(guild: Guild, entry: UserReportEntry): Pr
         .setTimestamp(new Date(entry.createdAt)), "FN Admin Report Ledger", `${guild.name} report log`);
 
     await channel.send({ embeds: [embed.toJSON()], allowedMentions: { parse: [] } }).catch(() => undefined);
+}
+
+function parseUserIdFromReportTarget(raw: string): string | null {
+    const trimmed = raw.trim();
+    const mentionMatch = trimmed.match(/^<@!?(\d{17,21})>$/);
+    if (mentionMatch) return mentionMatch[1];
+    if (/^\d{17,21}$/.test(trimmed)) return trimmed;
+    return null;
+}
+
+async function submitFormalUserReport(input: {
+    guild: Guild;
+    reporterId: string;
+    targetUser: User;
+    summary: string;
+    details: string;
+    evidence: string | null;
+}): Promise<{ entry: UserReportEntry; totalReportsForTarget: number; flagged: boolean }> {
+    const entry = createGuildUserReport({
+        guildId: input.guild.id,
+        reporterId: input.reporterId,
+        targetUserId: input.targetUser.id,
+        targetTag: input.targetUser.tag || input.targetUser.username,
+        summary: input.summary,
+        details: input.details,
+        evidence: input.evidence
+    });
+
+    await sendFormalUserReportLog(input.guild, entry);
+
+    const totalReportsForTarget = getGuildUserReports(input.guild.id)
+        .filter(report => report.targetUserId === input.targetUser.id)
+        .length;
+    const flagged = totalReportsForTarget >= 10;
+
+    appendAuditEvent("report_intake_submitted", {
+        guildId: input.guild.id,
+        reportId: entry.id,
+        reporterId: input.reporterId,
+        targetUserId: input.targetUser.id,
+        summary: entry.summary,
+        evidenceProvided: Boolean(input.evidence),
+        totalReportsForTarget,
+        flagged
+    });
+
+    return { entry, totalReportsForTarget, flagged };
 }
 
 function parseDurationMs(raw: string): number | null {
@@ -3102,7 +3301,13 @@ const TICKET_IDS = {
 } as const;
 
 const REPORT_IDS = {
-    open: "report_open"
+    open: "report_open",
+    adminOpen: "report_admin_open",
+    adminModal: "report_admin_modal",
+    adminTarget: "report_admin_target",
+    adminSummary: "report_admin_summary",
+    adminDetails: "report_admin_details",
+    adminEvidence: "report_admin_evidence"
 } as const;
 
 const GIVEAWAY_IDS = {
@@ -7434,6 +7639,25 @@ async function removeLegacyReportPanelForGuild(guild: Guild): Promise<void> {
     }
 }
 
+async function ensureAdminReportPanelForGuild(guild: Guild): Promise<void> {
+    if (!REPORT_ADMIN_PANEL_CHANNEL_ID) return;
+    const result = await upsertAdminReportPanelInChannel(guild, REPORT_ADMIN_PANEL_CHANNEL_ID);
+    if (result.ok) {
+        appendAuditEvent("admin_report_panel_upsert", {
+            guildId: guild.id,
+            channelId: REPORT_ADMIN_PANEL_CHANNEL_ID,
+            action: result.action
+        });
+    } else {
+        appendAuditEvent("admin_report_panel_upsert_failed", {
+            guildId: guild.id,
+            channelId: REPORT_ADMIN_PANEL_CHANNEL_ID,
+            error: result.error
+        });
+        console.warn(`Admin report panel upsert skipped for guild ${guild.id}: ${result.error}`);
+    }
+}
+
 function buildWelcomePayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x3b82f6)
@@ -8963,43 +9187,26 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const details = (interaction.options.getString("details") || "").trim();
         const evidence = (interaction.options.getString("evidence") || "").trim() || null;
 
-        const entry = createGuildUserReport({
-            guildId: guild.id,
+        const result = await submitFormalUserReport({
+            guild,
             reporterId: interaction.user.id,
-            targetUserId: target.id,
-            targetTag: target.tag || target.username,
+            targetUser: target,
             summary,
             details,
             evidence
         });
 
-        await sendFormalUserReportLog(guild, entry);
-
-        const targetReports = getGuildUserReports(guild.id).filter(report => report.targetUserId === target.id);
-        const flagged = targetReports.length >= 10;
-
-        appendAuditEvent("report_intake_submitted", {
-            guildId: guild.id,
-            reportId: entry.id,
-            reporterId: interaction.user.id,
-            targetUserId: target.id,
-            summary: entry.summary,
-            evidenceProvided: Boolean(evidence),
-            totalReportsForTarget: targetReports.length,
-            flagged
-        });
-
         return JSON.stringify({
             embed: new EmbedBuilder()
-                .setColor(flagged ? 0xdc2626 : 0x0ea5e9)
+                .setColor(result.flagged ? 0xdc2626 : 0x0ea5e9)
                 .setTitle("🚨 Formal User Report Filed")
                 .addFields(
-                    { name: "Report ID", value: `#${entry.id}`, inline: true },
+                    { name: "Report ID", value: `#${result.entry.id}`, inline: true },
                     { name: "Target", value: `<@${target.id}>`, inline: true },
                     { name: "Reporter", value: `<@${interaction.user.id}>`, inline: true },
-                    { name: "Summary", value: entry.summary, inline: false },
+                    { name: "Summary", value: result.entry.summary, inline: false },
                     { name: "Evidence", value: evidence || "Not provided", inline: false },
-                    { name: "Total Reports On User", value: `${targetReports.length}${flagged ? " 🚩" : ""}`, inline: true },
+                    { name: "Total Reports On User", value: `${result.totalReportsForTarget}${result.flagged ? " 🚩" : ""}`, inline: true },
                     { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true }
                 )
                 .setTimestamp(new Date())
@@ -10154,6 +10361,7 @@ client.once("clientReady", async () => {
             console.log(`Registered slash commands for guild ${guild.id}`);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await removeLegacyReportPanelForGuild(guild);
+                await ensureAdminReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
@@ -10172,6 +10380,7 @@ client.once("clientReady", async () => {
             await guild.commands.set(slashCommands).catch(() => undefined);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await removeLegacyReportPanelForGuild(guild);
+                await ensureAdminReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
@@ -10421,6 +10630,68 @@ client.on("interactionCreate", async interaction => {
                     { name: "KB References", value: getKbSuggestions(reason).map(item => `• ${item}`).join("\n"), inline: false }
                 ]
             )],
+            flags: MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === REPORT_IDS.adminModal) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Admin report intake can only be used in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const member = interaction.member as GuildMember | null;
+        if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: "Only administrators can file reports from this panel.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const targetRaw = interaction.fields.getTextInputValue(REPORT_IDS.adminTarget) || "";
+        const targetId = parseUserIdFromReportTarget(targetRaw);
+        if (!targetId) {
+            await interaction.reply({ content: "Target must be a valid Discord user mention or user ID.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const targetUser = await client.users.fetch(targetId).catch(() => null);
+        if (!targetUser) {
+            await interaction.reply({ content: "Unable to fetch that user from Discord.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const summary = (interaction.fields.getTextInputValue(REPORT_IDS.adminSummary) || "").trim();
+        const details = (interaction.fields.getTextInputValue(REPORT_IDS.adminDetails) || "").trim();
+        const evidence = (interaction.fields.getTextInputValue(REPORT_IDS.adminEvidence) || "").trim() || null;
+        if (!summary) {
+            await interaction.reply({ content: "Report summary is required.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const result = await submitFormalUserReport({
+            guild,
+            reporterId: interaction.user.id,
+            targetUser,
+            summary,
+            details,
+            evidence
+        });
+
+        await interaction.reply({
+            embeds: [new EmbedBuilder()
+                .setColor(result.flagged ? 0xdc2626 : 0x0ea5e9)
+                .setTitle("🚨 Formal User Report Filed")
+                .addFields(
+                    { name: "Report ID", value: `#${result.entry.id}`, inline: true },
+                    { name: "Target", value: `<@${targetUser.id}>`, inline: true },
+                    { name: "Reporter", value: `<@${interaction.user.id}>`, inline: true },
+                    { name: "Summary", value: result.entry.summary, inline: false },
+                    { name: "Evidence", value: evidence || "Not provided", inline: false },
+                    { name: "Total Reports On User", value: `${result.totalReportsForTarget}${result.flagged ? " 🚩" : ""}`, inline: true },
+                    { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true }
+                )
+                .setTimestamp(new Date())],
             flags: MessageFlags.Ephemeral
         }).catch(() => undefined);
         return;
@@ -10699,8 +10970,25 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
+    if (interaction.isButton() && interaction.customId === REPORT_IDS.adminOpen) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Admin report panel can only be used in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member as GuildMember | null;
+        if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: "Only administrators can file reports from this panel.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(buildAdminReportIntakeModal()).catch(async () => {
+            await interaction.reply({ content: "Unable to open admin report intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+
     if (interaction.isButton() && interaction.customId === REPORT_IDS.open) {
-        await interaction.reply({ content: "Public report desk intake is disabled. Admins should use /reportintake.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        await interaction.reply({ content: "Public report desk intake is disabled. Admins should use /reportintake or the admin report panel.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
 
