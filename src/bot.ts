@@ -3073,6 +3073,75 @@ async function submitFormalUserReport(input: {
     return { entry, totalReportsForTarget, flagged };
 }
 
+async function sendFormalUserReportResolutionLog(guild: Guild, entry: UserReportEntry): Promise<void> {
+    const channel = guild.channels.cache.get(REPORT_LOG_CHANNEL_ID) || await guild.channels.fetch(REPORT_LOG_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) return;
+
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0x16a34a)
+        .setTitle(`Report #${entry.id} Resolved`)
+        .addFields(
+            { name: "Target", value: `<@${entry.targetUserId}> (${entry.targetTag})`, inline: false },
+            { name: "Reporter", value: `<@${entry.reporterId}>`, inline: true },
+            { name: "Resolved By", value: entry.resolvedById ? `<@${entry.resolvedById}>` : "Unknown", inline: true },
+            { name: "Disposition", value: entry.resolutionNote || "No note provided.", inline: false },
+            { name: "Summary", value: entry.summary || "No summary provided.", inline: false }
+        )
+        .setTimestamp(new Date(entry.resolvedAt || Date.now())), "FN Admin Report Ledger", `${guild.name} report resolution`);
+
+    await channel.send({ embeds: [embed.toJSON()], allowedMentions: { parse: [] } }).catch(() => undefined);
+}
+
+async function resolveFormalUserReport(input: {
+    guild: Guild;
+    actorId: string;
+    targetUserId: string;
+    action: string;
+    reason: string;
+    reportId?: number;
+}): Promise<{ ok: true; entry: UserReportEntry; remainingOpenForTarget: number } | { ok: false; error: string }> {
+    const cfg = ensureGuildModeration(input.guild.id);
+    const reports = cfg.reports || [];
+    const openForTarget = reports
+        .filter(report => report.targetUserId === input.targetUserId && report.status === "open")
+        .sort((a, b) => b.createdAt - a.createdAt);
+
+    if (!openForTarget.length) {
+        return { ok: false, error: "No open reports exist for that user." };
+    }
+
+    let entry: UserReportEntry | undefined;
+    if (input.reportId && input.reportId > 0) {
+        entry = openForTarget.find(report => report.id === input.reportId);
+        if (!entry) {
+            return { ok: false, error: "That report ID is not an open report for this user." };
+        }
+    } else {
+        entry = openForTarget[0];
+    }
+
+    entry.status = "resolved";
+    entry.resolvedAt = Date.now();
+    entry.resolvedById = input.actorId;
+    entry.resolutionNote = `[${input.action}] ${input.reason}`.slice(0, 300);
+    saveModerationStore();
+
+    await sendFormalUserReportResolutionLog(input.guild, entry);
+
+    const remainingOpenForTarget = (cfg.reports || []).filter(report => report.targetUserId === input.targetUserId && report.status === "open").length;
+    appendAuditEvent("report_resolve", {
+        guildId: input.guild.id,
+        reportId: entry.id,
+        resolverId: input.actorId,
+        targetUserId: input.targetUserId,
+        action: input.action,
+        reason: input.reason,
+        remainingOpenForTarget
+    });
+
+    return { ok: true, entry, remainingOpenForTarget };
+}
+
 function parseDurationMs(raw: string): number | null {
     const match = raw.trim().toLowerCase().match(/^(\d+)(s|m|h|d)$/);
     if (!match) return null;
@@ -9335,7 +9404,44 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         return ["🚨 Formal Report Queue", `Showing ${openReports.length} open report(s)`, "", ...lines].join("\n");
     },
     reportresolve: async interaction => {
-        return "Legacy ticket-based report resolution is disabled. Use `/reportintake` and `/reportprofile` for the admin report ledger flow.";
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const guild = interaction.guild;
+        if (!guild) return "This command can only be used in a server.";
+
+        const target = interaction.options.getUser("user", true);
+        const action = interaction.options.getString("action", true);
+        const reason = (interaction.options.getString("reason") || "Report review completed").trim();
+        const reportId = interaction.options.getInteger("report_id") || undefined;
+
+        const resolved = await resolveFormalUserReport({
+            guild,
+            actorId: interaction.user.id,
+            targetUserId: target.id,
+            action,
+            reason,
+            reportId
+        });
+
+        if (!resolved.ok) return resolved.error;
+
+        return JSON.stringify({
+            embed: new EmbedBuilder()
+                .setColor(0x16a34a)
+                .setTitle("✅ Report Closed")
+                .addFields(
+                    { name: "Report ID", value: `#${resolved.entry.id}`, inline: true },
+                    { name: "Target", value: `<@${target.id}>`, inline: true },
+                    { name: "Resolved By", value: `<@${interaction.user.id}>`, inline: true },
+                    { name: "Disposition", value: action, inline: true },
+                    { name: "Reason", value: reason, inline: false },
+                    { name: "Remaining Open Reports On User", value: `${resolved.remainingOpenForTarget}`, inline: true },
+                    { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true }
+                )
+                .setTimestamp(new Date())
+                .toJSON(),
+            ephemeral: true
+        });
     },
     reportanalytics: async interaction => {
         const adminError = requireAdministrator(interaction);

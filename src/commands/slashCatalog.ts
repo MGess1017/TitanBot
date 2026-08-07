@@ -301,8 +301,9 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("reportqueue").setDescription("Staff: view active report cases only")
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
-        new SlashCommandBuilder().setName("reportresolve").setDescription("Staff: resolve an archived report with moderation disposition")
-            .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+        new SlashCommandBuilder().setName("reportresolve").setDescription("Admin: close an open report case on a user")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addUserOption(o => o.setName("user").setDescription("User whose open report should be closed").setRequired(true))
             .addStringOption(o => o.setName("action").setDescription("Disposition taken").setRequired(true)
                 .addChoices(
                     { name: "warned", value: "warned" },
@@ -313,8 +314,7 @@ export function buildSlashCommands(input: {
                     { name: "insufficient_evidence", value: "insufficient_evidence" }
                 ))
             .addStringOption(o => o.setName("reason").setDescription("Resolution summary").setRequired(false))
-            .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional report channel").addChannelTypes(ChannelType.GuildText).setRequired(false))
-            .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional report channel ID").setRequired(false)),
+            .addIntegerOption(o => o.setName("report_id").setDescription("Optional specific report ID for this user (defaults to newest open)").setRequired(false)),
         new SlashCommandBuilder().setName("reportanalytics").setDescription("Admin: analytics for report cases only")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("reportsearch").setDescription("Staff: search report cases by owner, status, and text")
