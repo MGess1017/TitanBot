@@ -145,6 +145,7 @@ const RAID_COOLDOWN_MS = 5 * 1000;
 const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
 const WEEKLY_BALANCE_REPORT_MS = 7 * 24 * 60 * 60 * 1000;
 const HEALTH_WATCHDOG_INTERVAL_MS = 10 * 60 * 1000;
+const UNCLAIMED_TICKET_AUTO_CLOSE_MS = 30 * 60 * 1000;
 const BACKUP_STALE_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
 const PREFIX = "$";
 const MIN_BET = 1;
@@ -4138,68 +4139,21 @@ async function runTicketSlaWatchdog(guild: Guild, reason: string): Promise<void>
     );
 
     for (const ticket of activeTickets) {
-        const thresholds = buildTicketSlaThresholds(ticket);
-        const sla = getTicketSlaEscalationState(ticket, now, thresholds);
         const status = normalizeTicketStatus(ticket.status);
 
-        if (sla.firstResponseWarn && shouldEmitTicketSlaAlert(ticket.id, "fr_warn", now)) {
-            await sendTicketSlaAlert(
-                guild,
-                `⏱️ Ticket #${ticket.id} First Response Warning`,
-                [
-                    `Channel: <#${ticket.channelId}>`,
-                    `Owner: <@${ticket.ownerId}>`,
-                    `State: ${status}/${ticket.workflowStatus}`,
-                    `No first response yet after ${Math.round(thresholds.firstResponseWarnMs / 60000)} minutes.`
-                ],
-                "warn"
-            );
-            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "fr_warn", reason });
-        }
-
-        if (sla.firstResponseBreach && shouldEmitTicketSlaAlert(ticket.id, "fr_breach", now)) {
-            await sendTicketSlaAlert(
-                guild,
-                `🚨 Ticket #${ticket.id} First Response Breach`,
-                [
-                    `Channel: <#${ticket.channelId}>`,
-                    `Owner: <@${ticket.ownerId}>`,
-                    `State: ${status}/${ticket.workflowStatus}`,
-                    `No first response recorded after ${Math.round(thresholds.firstResponseBreachMs / 60000)} minutes.`
-                ],
-                "error"
-            );
-            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "fr_breach", reason });
-        }
-
-        if (sla.resolveWarn && shouldEmitTicketSlaAlert(ticket.id, "res_warn", now)) {
-            await sendTicketSlaAlert(
-                guild,
-                `⚠️ Ticket #${ticket.id} Resolution Warning`,
-                [
-                    `Channel: <#${ticket.channelId}>`,
-                    `Owner: <@${ticket.ownerId}>`,
-                    `State: ${status}/${ticket.workflowStatus}`,
-                    `Ticket is older than ${Math.round(thresholds.resolveWarnMs / 3600000)} hours and still unresolved.`
-                ],
-                "warn"
-            );
-            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "res_warn", reason });
-        }
-
-        if (sla.resolveBreach && shouldEmitTicketSlaAlert(ticket.id, "res_breach", now)) {
-            await sendTicketSlaAlert(
-                guild,
-                `🚨 Ticket #${ticket.id} Resolution Breach`,
-                [
-                    `Channel: <#${ticket.channelId}>`,
-                    `Owner: <@${ticket.ownerId}>`,
-                    `State: ${status}/${ticket.workflowStatus}`,
-                    `Ticket exceeded ${Math.round(thresholds.resolveBreachMs / 3600000)} hour resolution target.`
-                ],
-                "error"
-            );
-            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "res_breach", reason });
+        // SLA alerts are disabled. Instead, auto-close stale unclaimed tickets.
+        if (status === "open" && !ticket.claimedById && now - ticket.createdAt >= UNCLAIMED_TICKET_AUTO_CLOSE_MS) {
+            const closedById = guild.members.me?.id || guild.ownerId;
+            await closeTicketChannel(guild, ticket.channelId, closedById, "Auto-closed: ticket was not claimed within 30 minutes.");
+            appendAuditEvent("ticket_auto_close_unclaimed", {
+                guildId: guild.id,
+                ticketId: ticket.id,
+                channelId: ticket.channelId,
+                ownerId: ticket.ownerId,
+                ageMinutes: Math.floor((now - ticket.createdAt) / 60000),
+                thresholdMinutes: Math.floor(UNCLAIMED_TICKET_AUTO_CLOSE_MS / 60000),
+                reason
+            });
         }
     }
 }
