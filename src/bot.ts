@@ -6419,7 +6419,7 @@ function getCasinoOddsSnapshot(gameKey: Exclude<GameStatKey, "raid">): string {
     if (gameKey === "roulette") return "Number call is highest variance (36.00x base), color/parity offers steadier hit rates (2.00x base).";
     if (gameKey === "blackjack") return "Safe style lowers bust risk, aggressive style raises upside volatility.";
     if (gameKey === "crash") return "Lower targets cash more often, higher targets spike multiplier but fail more often.";
-    if (gameKey === "slots") return "Magic Slots runs an ultra-rare jackpot profile: low hit frequency, reel-weighted odds, and high top-tier payouts.";
+    if (gameKey === "slots") return "Magic Slots uses regular-casino reel odds, with ultra jackpots unlocked only on Ultra Bonus Win Spins.";
     if (gameKey === "coinflip") return "Pure 50/50 call before lucky modifier influence.";
     if (gameKey === "baccarat") return "Tie has the largest payout but lowest consistency; player/banker are steadier.";
     if (gameKey === "hilo") return "Large card-distance wins pay more; close outcomes are safer but lower yield.";
@@ -6961,65 +6961,66 @@ type MagicPatternKind = "straight" | "zigzag";
 
 const MAGIC_SLOT_REELS = 6;
 const MAGIC_SLOT_ROWS = 6;
-const MAGIC_SLOT_RETURN_SCALE = 0.17;
+const MAGIC_SLOT_RETURN_SCALE = 0.25;
 const MAGIC_SLOT_MAX_PAID_PATTERNS = 3;
-const MAGIC_SLOT_BONUS_ROW_JACKPOT_MULTIPLIER = 1800;
-const MAGIC_SLOT_ZIGZAG_PAYOUT_FACTOR = 0.82;
+const MAGIC_SLOT_BONUS_ROW_JACKPOT_MULTIPLIER = 220;
+const MAGIC_SLOT_ULTRA_BONUS_ROW_JACKPOT_MULTIPLIER = 1500;
+const MAGIC_SLOT_ZIGZAG_PAYOUT_FACTOR = 0.88;
 const MAGIC_SLOT_PAYTABLE: Record<Exclude<MagicSlotSymbol, "BONUS">, Record<3 | 4 | 5 | 6, number>> = {
-    WAND: { 3: 0.08, 4: 0.3, 5: 1.1, 6: 2.7 },
-    POTION: { 3: 0.12, 4: 0.5, 5: 1.8, 6: 4.8 },
-    SPELLBOOK: { 3: 0.2, 4: 0.82, 5: 2.9, 6: 7.5 },
-    CRYSTAL: { 3: 0.36, 4: 1.45, 5: 5.1, 6: 15.5 },
-    DRAGON: { 3: 0.62, 4: 2.85, 5: 11.8, 6: 52 }
+    WAND: { 3: 0.28, 4: 0.9, 5: 2.8, 6: 7 },
+    POTION: { 3: 0.36, 4: 1.2, 5: 3.8, 6: 9.5 },
+    SPELLBOOK: { 3: 0.48, 4: 1.7, 5: 5.6, 6: 13.5 },
+    CRYSTAL: { 3: 0.72, 4: 2.6, 5: 8.9, 6: 22 },
+    DRAGON: { 3: 1.2, 4: 4.8, 5: 17, 6: 68 }
 };
 const MAGIC_SLOT_REEL_TABLES: Array<Array<{ symbol: MagicSlotSymbol; weight: number }>> = [
     [
         { symbol: "WAND", weight: 40 },
         { symbol: "POTION", weight: 30 },
         { symbol: "SPELLBOOK", weight: 20 },
-        { symbol: "CRYSTAL", weight: 8 },
-        { symbol: "DRAGON", weight: 3 },
-        { symbol: "BONUS", weight: 0.2 }
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 4 },
+        { symbol: "BONUS", weight: 0.9 }
     ],
     [
         { symbol: "WAND", weight: 38 },
         { symbol: "POTION", weight: 31 },
         { symbol: "SPELLBOOK", weight: 19 },
-        { symbol: "CRYSTAL", weight: 9 },
-        { symbol: "DRAGON", weight: 3 },
-        { symbol: "BONUS", weight: 0.2 }
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 4 },
+        { symbol: "BONUS", weight: 0.95 }
     ],
     [
         { symbol: "WAND", weight: 36 },
         { symbol: "POTION", weight: 31 },
         { symbol: "SPELLBOOK", weight: 20 },
-        { symbol: "CRYSTAL", weight: 9 },
-        { symbol: "DRAGON", weight: 4 },
-        { symbol: "BONUS", weight: 0.22 }
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 5 },
+        { symbol: "BONUS", weight: 1.05 }
     ],
     [
         { symbol: "WAND", weight: 36 },
         { symbol: "POTION", weight: 30 },
         { symbol: "SPELLBOOK", weight: 20 },
-        { symbol: "CRYSTAL", weight: 9 },
-        { symbol: "DRAGON", weight: 4 },
-        { symbol: "BONUS", weight: 0.22 }
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 5 },
+        { symbol: "BONUS", weight: 1.05 }
     ],
     [
         { symbol: "WAND", weight: 37 },
         { symbol: "POTION", weight: 30 },
         { symbol: "SPELLBOOK", weight: 19 },
-        { symbol: "CRYSTAL", weight: 9 },
-        { symbol: "DRAGON", weight: 4 },
-        { symbol: "BONUS", weight: 0.2 }
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 5 },
+        { symbol: "BONUS", weight: 0.95 }
     ],
     [
         { symbol: "WAND", weight: 39 },
         { symbol: "POTION", weight: 29 },
         { symbol: "SPELLBOOK", weight: 19 },
-        { symbol: "CRYSTAL", weight: 9 },
-        { symbol: "DRAGON", weight: 3 },
-        { symbol: "BONUS", weight: 0.2 }
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 4 },
+        { symbol: "BONUS", weight: 0.9 }
     ]
 ];
 const MAGIC_SLOT_PATTERNS: Array<{ name: string; kind: MagicPatternKind; path: number[] }> = [
@@ -7049,11 +7050,17 @@ function spinMagicSlotSymbol(reelIndex: number): MagicSlotSymbol {
 }
 
 function getMagicSlotSymbolBoost(symbol: Exclude<MagicSlotSymbol, "BONUS">): number {
-    if (symbol === "DRAGON") return 1.08;
-    if (symbol === "CRYSTAL") return 1.05;
-    if (symbol === "SPELLBOOK") return 1.03;
+    if (symbol === "DRAGON") return 1.06;
+    if (symbol === "CRYSTAL") return 1.04;
+    if (symbol === "SPELLBOOK") return 1.02;
     if (symbol === "POTION") return 1.01;
     return 1;
+}
+
+function detectUltraBonusWinSpin(grid: MagicSlotSymbol[][], preliminaryWins: Array<{ streak: number; bonusHits: number }>): boolean {
+    const totalBonusSymbols = grid.flat().filter(symbol => symbol === "BONUS").length;
+    const bonusAssistedPremiumLine = preliminaryWins.some(win => win.streak >= 4 && win.bonusHits >= 1);
+    return totalBonusSymbols >= 3 && bonusAssistedPremiumLine;
 }
 
 function scoreMagicPattern(symbols: MagicSlotSymbol[], kind: MagicPatternKind): {
@@ -7103,7 +7110,7 @@ function scoreMagicPattern(symbols: MagicSlotSymbol[], kind: MagicPatternKind): 
         break;
     }
 
-    if (!anchor || streak < 4) {
+    if (!anchor || streak < 3) {
         return {
             hit: false,
             streak,
@@ -7121,18 +7128,6 @@ function scoreMagicPattern(symbols: MagicSlotSymbol[], kind: MagicPatternKind): 
 
     if (kind === "zigzag") {
         base *= MAGIC_SLOT_ZIGZAG_PAYOUT_FACTOR;
-    }
-
-    // Rare top-tier hits to mimic real machine "headline" moments.
-    if (anchor === "DRAGON" && streak === 6 && bonusHits === 0) {
-        base = kind === "straight" ? 520 : 390;
-        rule = kind === "straight" ? "grand dragon line" : "dragon weave grand";
-    } else if (anchor === "DRAGON" && streak === 6 && bonusHits >= 2) {
-        base = kind === "straight" ? 760 : 560;
-        rule = kind === "straight" ? "mythic dragon wild line" : "mythic dragon wild weave";
-    } else if (anchor === "CRYSTAL" && streak === 6 && bonusHits >= 1) {
-        base = kind === "straight" ? 180 : 128;
-        rule = kind === "straight" ? "prism surge line" : "prism surge weave";
     }
 
     const symbolBoost = getMagicSlotSymbolBoost(anchor);
@@ -7176,6 +7171,15 @@ function playSlots(userId: string, bet: number): string {
     );
 
     const activePatterns = MAGIC_SLOT_PATTERNS;
+    const preliminaryWins: Array<{ streak: number; bonusHits: number }> = [];
+    for (const pattern of activePatterns) {
+        const lineSymbols = pattern.path.map((rowIndex, reelIndex) => machineGrid[rowIndex]?.[reelIndex] || "WAND");
+        const scored = scoreMagicPattern(lineSymbols, pattern.kind);
+        if (!scored.hit || scored.multiplier <= 0) continue;
+        preliminaryWins.push({ streak: scored.streak, bonusHits: scored.bonusHits });
+    }
+
+    const ultraBonusMode = detectUltraBonusWinSpin(machineGrid, preliminaryWins);
     const lineWins: Array<{ pattern: string; symbols: string; multiplier: number; rule: string; streak: number; bonusHits: number }> = [];
     let jackpotRows = 0;
 
@@ -7183,12 +7187,30 @@ function playSlots(userId: string, bet: number): string {
         const lineSymbols = pattern.path.map((rowIndex, reelIndex) => machineGrid[rowIndex]?.[reelIndex] || "WAND");
         const scored = scoreMagicPattern(lineSymbols, pattern.kind);
         if (!scored.hit || scored.multiplier <= 0) continue;
-        if (scored.jackpot) jackpotRows += 1;
+        let effectiveMultiplier = scored.multiplier;
+        let effectiveRule = scored.rule;
+
+        if (scored.jackpot && ultraBonusMode) {
+            effectiveMultiplier = MAGIC_SLOT_ULTRA_BONUS_ROW_JACKPOT_MULTIPLIER;
+            effectiveRule = "ultra bonus jackpot row";
+            jackpotRows += 1;
+        } else if (scored.jackpot) {
+            jackpotRows += 1;
+        } else if (ultraBonusMode) {
+            if (scored.anchor === "DRAGON" && scored.streak >= 6 && scored.bonusHits >= 1) {
+                effectiveMultiplier = pattern.kind === "straight" ? 320 : 250;
+                effectiveRule = pattern.kind === "straight" ? "ultra dragon line" : "ultra dragon weave";
+            } else if (scored.anchor === "CRYSTAL" && scored.streak >= 6 && scored.bonusHits >= 1) {
+                effectiveMultiplier = pattern.kind === "straight" ? 110 : 82;
+                effectiveRule = pattern.kind === "straight" ? "ultra prism line" : "ultra prism weave";
+            }
+        }
+
         lineWins.push({
             pattern: pattern.name,
             symbols: lineSymbols.join(" | "),
-            multiplier: scored.multiplier,
-            rule: scored.rule,
+            multiplier: effectiveMultiplier,
+            rule: effectiveRule,
             streak: scored.streak,
             bonusHits: scored.bonusHits
         });
@@ -7222,7 +7244,7 @@ function playSlots(userId: string, bet: number): string {
         payout,
         walletBefore,
         walletAfter: getTokens(userId),
-        luckyLabel: "Reel-weighted profile",
+        luckyLabel: ultraBonusMode ? "Ultra Bonus Win Spin (3+ BONUS + bonus-assisted premium line)" : "Standard reel profile",
         boardRows,
         winningLines: winningEmojiLines,
         baseMultiplier,
