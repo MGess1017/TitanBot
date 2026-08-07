@@ -8719,6 +8719,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         if (!guild) return "This command can only be used in a server.";
 
         const fix = interaction.options.getBoolean("fix") || false;
+        const restartAfter = interaction.options.getBoolean("restart") || false;
         const roleReport = await collectRoleSanityReport(guild);
         const ticketReport = await collectTicketSanityReport(guild);
 
@@ -8739,6 +8740,9 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                 `Role remediation: ${roleFix.started ? "started" : `skipped (${roleFix.reason || "unknown"})`}`,
                 `Ticket remediation: removed missing ${ticketFix.removedDeleted}, removed inaccessible ${ticketFix.removedInaccessible}, deduped ${ticketFix.deduped}, panel backfill ${ticketFix.panelBackfilled}`
             ];
+        }
+        if (restartAfter) {
+            remediationLines.push("Restart: scheduled after incident response is sent.");
         }
 
         const embed = new EmbedBuilder()
@@ -8785,6 +8789,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             userId: interaction.user.id,
             issueCount,
             fixRequested: fix,
+            restartRequested: restartAfter,
             roleMissing: roleReport.missing.length,
             roleHierarchyBlocked: roleReport.hierarchyBlocked.length,
             roleMultiTierMembers: roleReport.multiTierMembers,
@@ -8793,6 +8798,13 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             ticketPanelMissing: ticketReport.panelMissing,
             ticketSlaBreaches: ticketReport.slaBreaches
         });
+
+        if (restartAfter) {
+            setTimeout(() => {
+                console.log(`[incident] Restart requested by ${interaction.user.id}. Exiting process for PM2 restart.`);
+                process.exit(0);
+            }, 2500);
+        }
 
         return JSON.stringify({ embed: embed.toJSON() });
     },

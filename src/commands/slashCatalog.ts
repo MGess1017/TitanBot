@@ -219,7 +219,8 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("incident").setDescription("Admin: run consolidated health and sanity triage")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-            .addBooleanOption(o => o.setName("fix").setDescription("Attempt remediation actions where possible").setRequired(false)),
+            .addBooleanOption(o => o.setName("fix").setDescription("Attempt remediation actions where possible").setRequired(false))
+            .addBooleanOption(o => o.setName("restart").setDescription("Restart the bot after triage completes (PM2 required)").setRequired(false)),
         new SlashCommandBuilder().setName("xpverify").setDescription("Admin: verify persisted XP state for a user")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addUserOption(o => o.setName("user").setDescription("User to verify").setRequired(true)),
