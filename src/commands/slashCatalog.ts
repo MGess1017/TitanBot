@@ -240,7 +240,12 @@ export function buildSlashCommands(input: {
                     { name: "Normal", value: "normal" },
                     { name: "High", value: "high" }
                 )),
-        new SlashCommandBuilder().setName("reportintake").setDescription("Open a structured user report intake modal"),
+        new SlashCommandBuilder().setName("reportintake").setDescription("Admin: file a formal user report")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addUserOption(o => o.setName("user").setDescription("User being reported").setRequired(true))
+            .addStringOption(o => o.setName("summary").setDescription("Short report summary").setRequired(true))
+            .addStringOption(o => o.setName("details").setDescription("Detailed report context").setRequired(false))
+            .addStringOption(o => o.setName("evidence").setDescription("Evidence links or references").setRequired(false)),
         new SlashCommandBuilder().setName("ticketintake").setDescription("Open a smart intake modal for structured support requests"),
         new SlashCommandBuilder().setName("ticketforce").setDescription("Open a ticket and bypass duplicate/KB deflection checks")
             .addStringOption(o => o.setName("reason").setDescription("Short reason for your ticket").setRequired(true))
@@ -252,8 +257,9 @@ export function buildSlashCommands(input: {
                 )),
         new SlashCommandBuilder().setName("ticketpanel").setDescription("Post the support ticket panel in this channel")
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
-        new SlashCommandBuilder().setName("reportpanel").setDescription("Post the user report panel in this channel")
-            .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+        new SlashCommandBuilder().setName("reportprofile").setDescription("Admin: view a user's report profile")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addUserOption(o => o.setName("user").setDescription("User to inspect").setRequired(true)),
         new SlashCommandBuilder().setName("claimticket").setDescription("Claim a tracked ticket (handler/admin only)")
             .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional ticket channel (use when running outside ticket)").addChannelTypes(ChannelType.GuildText).setRequired(false))
             .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional ticket channel ID when channel picker does not show it").setRequired(false)),

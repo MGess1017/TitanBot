@@ -63,7 +63,6 @@ import {
     xpBar
 } from "./utils";
 import {
-    buildReportIntakeReason,
     buildTicketIntakeReason,
     canReopenTicket,
     classifyTicketCategory,
@@ -166,6 +165,7 @@ const DEFAULT_TICKET_DEFAULT_CATEGORY_ID = "1523411322430296228";
 const DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID = "1506119505720377434";
 const DEFAULT_REPORT_PANEL_CHANNEL_ID = DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
 const DEFAULT_GIVEAWAY_CHANNEL_ID = "1535059013912363008";
+const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535132577059307583";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1527571592320651285";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
@@ -175,6 +175,7 @@ const TICKET_DEFAULT_CATEGORY_ID = process.env.TICKET_DEFAULT_CATEGORY_ID || DEF
 const PERMANENT_TICKET_PANEL_CHANNEL_ID = process.env.PERMANENT_TICKET_PANEL_CHANNEL_ID || DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
 const REPORT_PANEL_CHANNEL_ID = process.env.REPORT_PANEL_CHANNEL_ID || DEFAULT_REPORT_PANEL_CHANNEL_ID;
 const GIVEAWAY_CHANNEL_ID = process.env.GIVEAWAY_CHANNEL_ID || DEFAULT_GIVEAWAY_CHANNEL_ID;
+const REPORT_LOG_CHANNEL_ID = process.env.REPORT_LOG_CHANNEL_ID || DEFAULT_REPORT_LOG_CHANNEL_ID;
 const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID || DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID;
 const WELCOME_PANEL_CHANNEL_ID = process.env.WELCOME_PANEL_CHANNEL_ID || DEFAULT_WELCOME_PANEL_CHANNEL_ID;
 const MOD_LOG_CHANNEL_ID = process.env.MOD_LOG_CHANNEL_ID || DEFAULT_MOD_LOG_CHANNEL_ID;
@@ -1865,10 +1866,27 @@ type WarnEntry = {
     timestamp: number;
 };
 
+type UserReportEntry = {
+    id: number;
+    reporterId: string;
+    targetUserId: string;
+    targetTag: string;
+    summary: string;
+    details: string;
+    evidence: string | null;
+    status: "open" | "resolved";
+    createdAt: number;
+    resolvedAt: number | null;
+    resolvedById: string | null;
+    resolutionNote: string | null;
+};
+
 type GuildModerationState = {
     modLogChannelId: string | null;
     lockdownChannelId: string | null;
     nextCaseId: number;
+    nextReportId?: number;
+    reports?: UserReportEntry[];
     warnings: Record<string, WarnEntry[]>;
     panelMessageIds?: {
         welcome?: string | null;
@@ -2820,6 +2838,8 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
             modLogChannelId: MOD_LOG_CHANNEL_ID || null,
             lockdownChannelId: null,
             nextCaseId: 1,
+            nextReportId: 1,
+            reports: [],
             warnings: {},
             panelMessageIds: {}
         };
@@ -2830,6 +2850,8 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     if (!g.modLogChannelId) g.modLogChannelId = MOD_LOG_CHANNEL_ID || null;
     if (g.lockdownChannelId === undefined) g.lockdownChannelId = null;
     if (g.nextCaseId === undefined || g.nextCaseId < 1) g.nextCaseId = 1;
+    if (g.nextReportId === undefined || g.nextReportId < 1) g.nextReportId = 1;
+    if (!Array.isArray(g.reports)) g.reports = [];
     if (!g.warnings || typeof g.warnings !== "object") g.warnings = {};
     if (!g.panelMessageIds || typeof g.panelMessageIds !== "object") g.panelMessageIds = {};
     moderationStore.guilds[guildId] = g as GuildModerationState;
@@ -2848,6 +2870,61 @@ function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "
     if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
     cfg.panelMessageIds[panel] = messageId;
     saveModerationStore();
+}
+
+function getGuildUserReports(guildId: string): UserReportEntry[] {
+    return ensureGuildModeration(guildId).reports || [];
+}
+
+function createGuildUserReport(input: {
+    guildId: string;
+    reporterId: string;
+    targetUserId: string;
+    targetTag: string;
+    summary: string;
+    details: string;
+    evidence: string | null;
+}): UserReportEntry {
+    const cfg = ensureGuildModeration(input.guildId);
+    const entry: UserReportEntry = {
+        id: cfg.nextReportId || 1,
+        reporterId: input.reporterId,
+        targetUserId: input.targetUserId,
+        targetTag: input.targetTag,
+        summary: input.summary.slice(0, 180),
+        details: input.details.slice(0, 900),
+        evidence: input.evidence ? input.evidence.slice(0, 500) : null,
+        status: "open",
+        createdAt: Date.now(),
+        resolvedAt: null,
+        resolvedById: null,
+        resolutionNote: null
+    };
+    cfg.nextReportId = (cfg.nextReportId || 1) + 1;
+    if (!cfg.reports) cfg.reports = [];
+    cfg.reports.push(entry);
+    saveModerationStore();
+    return entry;
+}
+
+async function sendFormalUserReportLog(guild: Guild, entry: UserReportEntry): Promise<void> {
+    const channel = guild.channels.cache.get(REPORT_LOG_CHANNEL_ID) || await guild.channels.fetch(REPORT_LOG_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) return;
+
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0xb91c1c)
+        .setTitle(`Report #${entry.id} Filed`)
+        .addFields(
+            { name: "Target", value: `<@${entry.targetUserId}> (${entry.targetTag})`, inline: false },
+            { name: "Reporter", value: `<@${entry.reporterId}>`, inline: true },
+            { name: "Status", value: entry.status.toUpperCase(), inline: true },
+            { name: "Summary", value: entry.summary || "No summary provided.", inline: false },
+            { name: "Details", value: entry.details || "No details provided.", inline: false },
+            { name: "Evidence", value: entry.evidence || "Not provided", inline: false }
+        )
+        .setTimestamp(new Date(entry.createdAt)), "FN Admin Report Ledger", `${guild.name} report log`);
+
+    await channel.send({ embeds: [embed.toJSON()], allowedMentions: { parse: [] } }).catch(() => undefined);
 }
 
 function parseDurationMs(raw: string): number | null {
@@ -7199,7 +7276,7 @@ function buildTicketPanelPayload(guildName: string) {
             {
                 name: "🧭 Desk Purpose",
                 value: [
-                    "Private support lane for reports, appeals, account help, and operations issues.",
+                    "Private support lane for account help, billing, appeals, and operations issues.",
                     "",
                     "Built for clean tracking from open to final resolution."
                 ].join("\n")
@@ -7252,9 +7329,9 @@ function buildTicketPanelPayload(guildName: string) {
             },
             {
                 name: "⚖️ Rules",
-                value: "One active support ticket and one active report case per user. Spam or abuse may trigger moderation actions."
+                value: "One active support ticket per user. Spam or abuse may trigger moderation actions."
             }
-        ), "FN Support Front Desk", `${guildName} support panel`);
+        ), "FN Support Desk", `${guildName} support panel`);
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -9070,29 +9147,105 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     ticket: async interaction => {
         return await ticketCommandHandlers.ticket(interaction);
     },
-    reportintake: async () => {
-        return "Report intake modal is ready. Run /reportintake again if you did not receive the popup.";
-    },
-    reportpanel: async interaction => {
-        const guildError = requireGuild(interaction);
-        if (guildError) return guildError;
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
-            return "You need Manage Channels to post the report panel.";
-        }
-        if (!interaction.channel || !interaction.channel.isTextBased()) {
-            return "This command requires a text channel.";
-        }
+    reportintake: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const guild = interaction.guild;
+        if (!guild) return "This command can only be used in a server.";
 
-        const result = await upsertReportPanelInChannel(interaction.guild!, interaction.channel.id);
-        if (!result.ok) return result.error || "Unable to upsert report panel.";
+        const target = interaction.options.getUser("user", true);
+        const summary = interaction.options.getString("summary", true).trim();
+        const details = (interaction.options.getString("details") || "").trim();
+        const evidence = (interaction.options.getString("evidence") || "").trim() || null;
 
-        appendAuditEvent("report_panel_upsert", {
-            guildId: interaction.guildId,
-            channelId: interaction.channel.id,
-            action: result.action,
-            actorId: interaction.user.id
+        const entry = createGuildUserReport({
+            guildId: guild.id,
+            reporterId: interaction.user.id,
+            targetUserId: target.id,
+            targetTag: target.tag || target.username,
+            summary,
+            details,
+            evidence
         });
-        return result.action === "updated" ? "✅ Report panel refreshed in this channel." : "✅ Report panel posted in this channel.";
+
+        await sendFormalUserReportLog(guild, entry);
+
+        const targetReports = getGuildUserReports(guild.id).filter(report => report.targetUserId === target.id);
+        const flagged = targetReports.length >= 10;
+
+        appendAuditEvent("report_intake_submitted", {
+            guildId: guild.id,
+            reportId: entry.id,
+            reporterId: interaction.user.id,
+            targetUserId: target.id,
+            summary: entry.summary,
+            evidenceProvided: Boolean(evidence),
+            totalReportsForTarget: targetReports.length,
+            flagged
+        });
+
+        return JSON.stringify({
+            embed: new EmbedBuilder()
+                .setColor(flagged ? 0xdc2626 : 0x0ea5e9)
+                .setTitle("🚨 Formal User Report Filed")
+                .addFields(
+                    { name: "Report ID", value: `#${entry.id}`, inline: true },
+                    { name: "Target", value: `<@${target.id}>`, inline: true },
+                    { name: "Reporter", value: `<@${interaction.user.id}>`, inline: true },
+                    { name: "Summary", value: entry.summary, inline: false },
+                    { name: "Evidence", value: evidence || "Not provided", inline: false },
+                    { name: "Total Reports On User", value: `${targetReports.length}${flagged ? " 🚩" : ""}`, inline: true },
+                    { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true }
+                )
+                .setTimestamp(new Date())
+                .toJSON(),
+            ephemeral: true
+        });
+    },
+    reportprofile: async interaction => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const guild = interaction.guild;
+        if (!guild) return "This command can only be used in a server.";
+
+        const target = interaction.options.getUser("user", true);
+        const member = await guild.members.fetch(target.id).catch(() => null);
+        const reports = getGuildUserReports(guild.id)
+            .filter(report => report.targetUserId === target.id)
+            .sort((a, b) => b.createdAt - a.createdAt);
+
+        const flagged = reports.length >= 10;
+        const recent = reports.slice(0, 8).map(report => {
+            const state = report.status === "resolved" ? "resolved" : "open";
+            return `#${report.id} [${state}] by <@${report.reporterId}> | ${report.summary.slice(0, 80)} | <t:${Math.floor(report.createdAt / 1000)}:R>`;
+        });
+
+        appendAuditEvent("report_profile_view", {
+            guildId: guild.id,
+            actorId: interaction.user.id,
+            targetUserId: target.id,
+            totalReports: reports.length,
+            flagged
+        });
+
+        return JSON.stringify({
+            embed: new EmbedBuilder()
+                .setColor(flagged ? 0xdc2626 : 0x0ea5e9)
+                .setTitle(`Report Profile: ${target.username}`)
+                .addFields(
+                    { name: "Discord User", value: `<@${target.id}>`, inline: true },
+                    { name: "User ID", value: target.id, inline: true },
+                    { name: "Account Created", value: `<t:${Math.floor(target.createdTimestamp / 1000)}:F>`, inline: true },
+                    { name: "Joined Server", value: member?.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:F>` : "Unknown", inline: true },
+                    { name: "Reports Filed Against User", value: `${reports.length}`, inline: true },
+                    { name: "Risk Flag", value: flagged ? "🚩 Flagged (10+ reports)" : "No flag", inline: true },
+                    { name: "Recent Reports", value: recent.length ? recent.join("\n") : "No reports filed against this user.", inline: false }
+                )
+                .setFooter({ text: `Report logs channel: ${REPORT_LOG_CHANNEL_ID}` })
+                .setTimestamp(new Date())
+                .toJSON(),
+            ephemeral: true
+        });
     },
     ticketintake: async () => {
         return "Ticket intake modal is ready. Run /ticketintake again if you did not receive the popup.";
@@ -9149,85 +9302,31 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         return await ticketCommandHandlers.ticketanalytics(interaction);
     },
     reportqueue: async interaction => {
-        const guildError = requireGuild(interaction);
-        if (guildError) return guildError;
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
+        const guild = interaction.guild;
+        if (!guild) return "This command can only be used in a server.";
 
-        const member = interaction.member as GuildMember | null;
-        if (!member || !canManageTicketActions(member)) {
-            return "Only admins or the handler role can view the report queue.";
-        }
+        const openReports = getGuildUserReports(guild.id)
+            .filter(report => report.status === "open")
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 25);
 
-        await pruneDeletedTicketRecords(interaction.guild!);
-        await pruneInaccessibleOwnerTicketRecords(interaction.guild!);
+        if (!openReports.length) return "No active formal reports right now.";
 
-        const visible = ticketStore.tickets
-            .filter(ticket => ticket.guildId === interaction.guildId)
-            .filter(ticket => getTicketCaseBucket(ticket.category || ticket.reason) === "report")
-            .filter(ticket => normalizeTicketStatus(ticket.status) !== "resolved")
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .slice(0, 20);
-
-        if (!visible.length) return "No active report cases right now.";
-
-        const lines = visible.map(ticket => {
-            const sla = getTicketSlaState(ticket);
-            const slaText = `${sla.firstResponseOverdue ? "FR-BREACH" : "FR-OK"}/${sla.resolveOverdue ? "RES-BREACH" : "RES-OK"}`;
-            return `#${ticket.id} [${ticket.status}|${ticket.workflowStatus}|${ticket.priority}] <#${ticket.channelId}> | reporter <@${ticket.ownerId}>${ticket.claimedById ? ` | Claimed <@${ticket.claimedById}>` : ""}${ticket.assignedToId ? ` | Assigned <@${ticket.assignedToId}>` : ""} | SLA ${slaText} | updated <t:${Math.floor(ticket.updatedAt / 1000)}:R>`;
-        });
+        const lines = openReports.map(report => `#${report.id} target <@${report.targetUserId}> | reporter <@${report.reporterId}> | ${report.summary.slice(0, 90)} | <t:${Math.floor(report.createdAt / 1000)}:R>`);
 
         appendAuditEvent("report_queue_view", {
-            guildId: interaction.guildId,
+            guildId: guild.id,
             actorId: interaction.user.id,
-            total: visible.length
+            total: openReports.length,
+            source: "admin_report_ledger"
         });
 
-        return [
-            "🚨 Report Queue",
-            `Showing ${visible.length} active report case(s)`,
-            "",
-            ...lines
-        ].join("\n");
+        return ["🚨 Formal Report Queue", `Showing ${openReports.length} open report(s)`, "", ...lines].join("\n");
     },
     reportresolve: async interaction => {
-        const guildError = requireGuild(interaction);
-        if (guildError) return guildError;
-        const member = interaction.member as GuildMember | null;
-        if (!member || !canManageTicketActions(member)) {
-            return "Only admins or the handler role can resolve report cases.";
-        }
-
-        const target = resolveTicketTargetChannelId(interaction);
-        if (target.error || !target.channelId) return target.error || "Unable to resolve the target report channel.";
-
-        const tracked = await ensureTrackedTicketByChannelId(interaction.guild!, target.channelId, interaction.user.id);
-        if (!tracked) return "This channel is not a tracked report and could not be imported.";
-        if (getTicketCaseBucket(tracked.category || tracked.reason) !== "report") return "This command only applies to report cases.";
-        const ticket = findArchivedTicketByChannel(target.channelId);
-        if (!ticket) return "This report must be archived before final resolution.";
-
-        const action = interaction.options.getString("action", true);
-        const reason = (interaction.options.getString("reason") || "Report review complete").slice(0, 220);
-        const composedReason = `[report-action:${action}] ${reason}`;
-        const msg = await resolveTicketChannel(interaction.guild!, target.channelId, interaction.user.id, composedReason);
-        const resolved = findTicketByChannel(target.channelId);
-        appendAuditEvent("report_resolve", {
-            guildId: interaction.guildId,
-            ticketId: ticket.id,
-            action,
-            resolverId: interaction.user.id,
-            reason
-        });
-        if (!resolved) return msg;
-        return buildTicketCommandEmbedPayload(
-            "🚨 Report Resolved",
-            "Report case was resolved with a final moderation disposition.",
-            resolved,
-            [
-                { name: "Disposition", value: action, inline: true },
-                { name: "Resolved By", value: `<@${interaction.user.id}>`, inline: true },
-                { name: "Resolution Note", value: reason, inline: false }
-            ]
-        );
+        return "Legacy ticket-based report resolution is disabled. Use `/reportintake` and `/reportprofile` for the admin report ledger flow.";
     },
     reportanalytics: async interaction => {
         const adminError = requireAdministrator(interaction);
@@ -9235,45 +9334,39 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const guild = interaction.guild;
         if (!guild) return "This command can only be used in a server.";
 
-        const scoped = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id && getTicketCaseBucket(ticket.category || ticket.reason) === "report");
-        const open = scoped.filter(ticket => ticket.status === "open").length;
-        const claimed = scoped.filter(ticket => ticket.status === "claimed").length;
-        const archived = scoped.filter(ticket => ticket.status === "archived").length;
-        const resolved = scoped.filter(ticket => ticket.status === "resolved").length;
+        const scoped = getGuildUserReports(guild.id);
+        const open = scoped.filter(report => report.status === "open").length;
+        const resolved = scoped.filter(report => report.status === "resolved").length;
         const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-        const createdLast7d = scoped.filter(ticket => ticket.createdAt >= sevenDaysAgo).length;
-        const resolvedLast7d = scoped.filter(ticket => ticket.status === "resolved" && (ticket.resolvedAt || 0) >= sevenDaysAgo).length;
-        const avgNotes = scoped.length ? (scoped.reduce((sum, ticket) => sum + (ticket.internalNotes?.length || 0), 0) / scoped.length).toFixed(1) : "0.0";
-        const highPriority = scoped.filter(ticket => ticket.priority === "high").length;
-        const activeRisk = scoped.filter(ticket => {
-            const sla = getTicketSlaState(ticket);
-            return sla.firstResponseOverdue || sla.resolveOverdue;
-        }).length;
+        const createdLast7d = scoped.filter(report => report.createdAt >= sevenDaysAgo).length;
+        const resolvedLast7d = scoped.filter(report => report.status === "resolved" && (report.resolvedAt || 0) >= sevenDaysAgo).length;
+        const byTarget = new Map<string, number>();
+        for (const report of scoped) {
+            byTarget.set(report.targetUserId, (byTarget.get(report.targetUserId) || 0) + 1);
+        }
+        const flaggedUsers = [...byTarget.values()].filter(count => count >= 10).length;
 
         appendAuditEvent("report_analytics", {
             guildId: guild.id,
             userId: interaction.user.id,
             total: scoped.length,
             open,
-            claimed,
-            archived,
             resolved,
             createdLast7d,
             resolvedLast7d,
-            highPriority,
-            activeRisk
+            flaggedUsers
         });
 
         return JSON.stringify({
             embed: new EmbedBuilder()
                 .setColor(0xb91c1c)
                 .setTitle("🚨 Report Analytics")
-                .setDescription("Moderation report-case throughput, workload, and risk snapshot.")
+                .setDescription("Admin report ledger throughput and risk snapshot.")
                 .addFields(
-                    { name: "Case Totals", value: [`Total: ${scoped.length}`, `Open: ${open}`, `Claimed: ${claimed}`, `Archived: ${archived}`, `Resolved: ${resolved}`].join("\n"), inline: false },
+                    { name: "Case Totals", value: [`Total: ${scoped.length}`, `Open: ${open}`, `Resolved: ${resolved}`].join("\n"), inline: false },
                     { name: "7-Day Flow", value: [`Created: ${createdLast7d}`, `Resolved: ${resolvedLast7d}`].join("\n"), inline: true },
-                    { name: "Severity", value: [`High Priority: ${highPriority}`, `Active SLA Risk: ${activeRisk}`].join("\n"), inline: true },
-                    { name: "Investigation Notes", value: `Average internal notes per case: ${avgNotes}`, inline: false }
+                    { name: "Risk", value: `Flagged users (10+ reports): ${flaggedUsers}`, inline: true },
+                    { name: "Log Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: false }
                 )
                 .setTimestamp(new Date())
                 .toJSON()
@@ -9283,10 +9376,8 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const guildError = requireGuild(interaction);
         if (guildError) return guildError;
 
-        const member = interaction.member as GuildMember | null;
-        if (!member || !canManageTicketActions(member)) {
-            return "Only admins or the handler role can search report history.";
-        }
+        const adminError = requireAdministrator(interaction);
+        if (adminError) return adminError;
 
         const guild = interaction.guild!;
         const owner = interaction.options.getUser("owner");
@@ -9295,24 +9386,32 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const page = Math.max(1, interaction.options.getInteger("page") || 1);
         const pageSize = Math.max(5, Math.min(20, interaction.options.getInteger("page_size") || 10));
 
-        let scoped = ticketStore.tickets
-            .filter(ticket => ticket.guildId === guild.id)
-            .filter(ticket => getTicketCaseBucket(ticket.category || ticket.reason) === "report");
+        let scoped = getGuildUserReports(guild.id);
 
         if (owner) {
-            scoped = scoped.filter(ticket => ticket.ownerId === owner.id);
+            scoped = scoped.filter(report => report.reporterId === owner.id);
         }
-        if (status) {
-            scoped = scoped.filter(ticket => normalizeTicketStatus(ticket.status) === status);
+        if (status && (status === "open" || status === "resolved")) {
+            scoped = scoped.filter(report => report.status === status);
         }
         if (query) {
-            scoped = scoped.filter(ticket => getTicketSearchIndex(ticket).includes(query));
+            scoped = scoped.filter(report => {
+                const haystack = [
+                    report.summary,
+                    report.details,
+                    report.evidence || "",
+                    report.targetTag,
+                    report.targetUserId,
+                    report.reporterId
+                ].join(" ").toLowerCase();
+                return haystack.includes(query);
+            });
         }
 
-        scoped = scoped.sort((a, b) => b.updatedAt - a.updatedAt);
+        scoped = scoped.sort((a, b) => b.createdAt - a.createdAt);
         const total = scoped.length;
         if (!total) {
-            return "No report cases matched your filters.";
+            return "No formal reports matched your filters.";
         }
 
         const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -9320,9 +9419,9 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const start = (safePage - 1) * pageSize;
         const visible = scoped.slice(start, start + pageSize);
 
-        const lines = visible.map(ticket => {
-            const noteCount = ticket.internalNotes?.length || 0;
-            return `#${ticket.id} [${ticket.status}|${ticket.workflowStatus}|${ticket.priority}] <#${ticket.channelId}> | reporter <@${ticket.ownerId}> | notes ${noteCount} | updated <t:${Math.floor(ticket.updatedAt / 1000)}:R>`;
+        const lines = visible.map(report => {
+            const state = report.status === "resolved" ? "resolved" : "open";
+            return `#${report.id} [${state}] target <@${report.targetUserId}> | reporter <@${report.reporterId}> | ${report.summary.slice(0, 90)} | <t:${Math.floor(report.createdAt / 1000)}:R>`;
         });
 
         appendAuditEvent("report_search", {
@@ -9345,7 +9444,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         ].filter(Boolean).join(", ") || "none";
 
         return [
-            "🚨 Report Search Results",
+            "🚨 Formal Report Search Results",
             `Filters: ${filterSummary}`,
             `Page ${safePage}/${totalPages} | Showing ${visible.length}/${total}`,
             "",
@@ -10259,7 +10358,6 @@ client.once("clientReady", async () => {
             console.log(`Registered slash commands for guild ${guild.id}`);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await ensurePermanentTicketPanelForGuild(guild);
-                await ensurePermanentReportPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
             }
@@ -10277,7 +10375,6 @@ client.once("clientReady", async () => {
             await guild.commands.set(slashCommands).catch(() => undefined);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await ensurePermanentTicketPanelForGuild(guild);
-                await ensurePermanentReportPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
             }
@@ -10492,17 +10589,6 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
-    if (interaction.isChatInputCommand() && interaction.commandName === "reportintake") {
-        const guildError = requireGuild(interaction);
-        if (guildError) {
-            await interaction.reply({ content: guildError, flags: MessageFlags.Ephemeral }).catch(() => undefined);
-            return;
-        }
-        await interaction.showModal(buildReportIntakeModal()).catch(async () => {
-            await interaction.reply({ content: "Unable to open report intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
-        });
-        return;
-    }
 
     if (interaction.isModalSubmit() && interaction.customId === TICKET_IDS.intakeModal) {
         const guild = interaction.guild;
@@ -10542,77 +10628,6 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === REPORT_IDS.intakeModal) {
-        const guild = interaction.guild;
-        if (!guild) {
-            await interaction.reply({ content: "Report intake can only be used in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
-            return;
-        }
-
-        const reportedUser = interaction.fields.getTextInputValue(REPORT_IDS.target) || "Unknown target";
-        const summary = interaction.fields.getTextInputValue(REPORT_IDS.summary) || "User report";
-        const details = interaction.fields.getTextInputValue(REPORT_IDS.details) || "";
-        const location = interaction.fields.getTextInputValue(REPORT_IDS.location) || "";
-        const evidence = interaction.fields.getTextInputValue(REPORT_IDS.evidence) || "";
-        const reason = buildReportIntakeReason({ reportedUser, summary, details, location, evidence, severity: "high" });
-
-        const created = await createTicketChannel(guild, interaction.user.id, reason, "high", false);
-        if (created.error) {
-            await interaction.reply({ content: created.error, flags: MessageFlags.Ephemeral }).catch(() => undefined);
-            return;
-        }
-
-        const ticket = created.channelId ? findTicketByChannel(created.channelId) : null;
-        if (ticket) {
-            addTicketInternalNote(ticket, {
-                byId: interaction.user.id,
-                at: Date.now(),
-                note: [
-                    `REPORT TARGET: ${reportedUser}`,
-                    `SUMMARY: ${summary}`,
-                    location ? `LOCATION: ${location}` : null,
-                    evidence ? `EVIDENCE: ${evidence}` : null
-                ].filter(Boolean).join(" | ")
-            });
-        }
-
-        await sendTicketLog(guild.id, `Report Intake #${ticket?.id || "pending"} Submitted`, [
-            { name: "Reporter", value: `<@${interaction.user.id}>`, inline: true },
-            { name: "Reported User", value: reportedUser.slice(0, 200), inline: true },
-            { name: "Priority", value: "HIGH", inline: true },
-            { name: "Summary", value: summary.slice(0, 300), inline: false },
-            { name: "Location", value: location || "Not provided", inline: false },
-            { name: "Evidence", value: evidence || "Not provided", inline: false },
-            { name: "Ticket Channel", value: created.channelId ? `<#${created.channelId}>` : "Pending", inline: false }
-        ]);
-
-        appendAuditEvent("report_intake_submitted", {
-            guildId: guild.id,
-            reporterId: interaction.user.id,
-            reportedUser,
-            summary,
-            location,
-            evidenceProvided: Boolean(evidence),
-            ticketId: ticket?.id || null,
-            channelId: created.channelId || null
-        });
-
-        await interaction.reply({
-            embeds: [buildTicketCommandEmbed(
-                "🚨 Report Submitted",
-                "Your user report was submitted as a tracked high-priority case.",
-                ticket || undefined,
-                [
-                    { name: "Reported User", value: reportedUser.slice(0, 120), inline: true },
-                    { name: "Category", value: "report", inline: true },
-                    { name: "Summary", value: summary.slice(0, 120), inline: false },
-                    { name: "Evidence", value: evidence ? "Provided" : "Not provided yet", inline: true }
-                ]
-            )],
-            flags: MessageFlags.Ephemeral
-        }).catch(() => undefined);
-        return;
-    }
 
     if (interaction.isModalSubmit() && interaction.customId === GIVEAWAY_IDS.raidItemModal) {
         const guild = interaction.guild;
@@ -10887,14 +10902,7 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (interaction.isButton() && interaction.customId === REPORT_IDS.open) {
-        const guild = interaction.guild;
-        if (!guild) {
-            await interaction.reply({ content: "Reports can only be submitted in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
-            return;
-        }
-        await interaction.showModal(buildReportIntakeModal()).catch(async () => {
-            await interaction.reply({ content: "Unable to open report intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
-        });
+        await interaction.reply({ content: "Public report desk intake is disabled. Admins should use /reportintake.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
 
