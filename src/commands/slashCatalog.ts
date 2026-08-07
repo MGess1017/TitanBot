@@ -157,9 +157,9 @@ export function buildSlashCommands(input: {
         new SlashCommandBuilder().setName("crash").setDescription("Play crash")
             .addIntegerOption(o => o.setName("bet").setDescription("Amount").setRequired(true))
             .addNumberOption(o => o.setName("target").setDescription("Multiplier (1.05-10.0)").setRequired(true)),
-        new SlashCommandBuilder().setName("slots").setDescription("Play multi-line slots with lucky multipliers")
+        new SlashCommandBuilder().setName("slots").setDescription("Play Magic Slots: 6 reels, wizard symbols, and zig-zag paylines")
             .addIntegerOption(o => o.setName("bet").setDescription("Bet per line").setRequired(true))
-            .addIntegerOption(o => o.setName("lines").setDescription("Number of active lines (1-8)").setRequired(true)
+            .addIntegerOption(o => o.setName("lines").setDescription("Number of active patterns (1-8)").setRequired(true)
                 .addChoices(
                     { name: "1 line", value: 1 },
                     { name: "2 lines", value: 2 },
@@ -330,28 +330,19 @@ export function buildSlashCommands(input: {
                 ))
             .addIntegerOption(o => o.setName("page").setDescription("Result page number").setRequired(false))
             .addIntegerOption(o => o.setName("page_size").setDescription("Results per page (5-20)").setRequired(false)),
-        new SlashCommandBuilder().setName("ticketsearch").setDescription("Staff: search tickets by owner, status, category, and text")
-            .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
-            .addStringOption(o => o.setName("query").setDescription("Search text in reason/category/internal notes").setRequired(false))
-            .addUserOption(o => o.setName("owner").setDescription("Filter by ticket owner").setRequired(false))
-            .addStringOption(o => o.setName("status").setDescription("Filter by lifecycle status").setRequired(false)
+        new SlashCommandBuilder().setName("magicslots").setDescription("Alias for Magic Slots: 6 reels, wizard symbols, and zig-zag paylines")
+            .addIntegerOption(o => o.setName("bet").setDescription("Bet per line").setRequired(true))
+            .addIntegerOption(o => o.setName("lines").setDescription("Number of active patterns (1-8)").setRequired(true)
                 .addChoices(
-                    { name: "open", value: "open" },
-                    { name: "claimed", value: "claimed" },
-                    { name: "archived", value: "archived" },
-                    { name: "resolved", value: "resolved" }
-                ))
-            .addStringOption(o => o.setName("category").setDescription("Filter by ticket category").setRequired(false)
-                .addChoices(
-                    { name: "general", value: "general" },
-                    { name: "bug", value: "bug" },
-                    { name: "appeal", value: "appeal" },
-                    { name: "billing", value: "billing" },
-                    { name: "account", value: "account" },
-                    { name: "report", value: "report" }
-                ))
-            .addIntegerOption(o => o.setName("page").setDescription("Result page number").setRequired(false))
-            .addIntegerOption(o => o.setName("page_size").setDescription("Results per page (5-20)").setRequired(false)),
+                    { name: "1 line", value: 1 },
+                    { name: "2 lines", value: 2 },
+                    { name: "3 lines", value: 3 },
+                    { name: "4 lines", value: 4 },
+                    { name: "5 lines", value: 5 },
+                    { name: "6 lines", value: 6 },
+                    { name: "7 lines", value: 7 },
+                    { name: "8 lines", value: 8 }
+                )),
         new SlashCommandBuilder().setName("ticketworkload").setDescription("Admin: handler workload and SLA risk distribution")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("ticketnote").setDescription("Add a private handler note to a ticket")

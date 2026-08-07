@@ -9772,84 +9772,6 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     giveaways: async interaction => {
         return await commandHandlers.giveawaylist(interaction);
     },
-    ticketsearch: async interaction => {
-        const guildError = requireGuild(interaction);
-        if (guildError) return guildError;
-
-        const member = interaction.member as GuildMember | null;
-        if (!member || !canManageTicketActions(member)) {
-            return "Only admins or the handler role can search ticket history.";
-        }
-
-        const guild = interaction.guild!;
-        const owner = interaction.options.getUser("owner");
-        const status = interaction.options.getString("status");
-        const category = interaction.options.getString("category");
-        const query = (interaction.options.getString("query") || "").trim().toLowerCase();
-        const page = Math.max(1, interaction.options.getInteger("page") || 1);
-        const pageSize = Math.max(5, Math.min(20, interaction.options.getInteger("page_size") || 10));
-
-        let scoped = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id);
-        if (owner) {
-            scoped = scoped.filter(ticket => ticket.ownerId === owner.id);
-        }
-        if (status) {
-            scoped = scoped.filter(ticket => normalizeTicketStatus(ticket.status) === status);
-        }
-        if (category) {
-            scoped = scoped.filter(ticket => classifyTicketCategory(ticket.category || ticket.reason) === category);
-        }
-        if (query) {
-            scoped = scoped.filter(ticket => getTicketSearchIndex(ticket).includes(query));
-        }
-
-        scoped = scoped.sort((a, b) => b.updatedAt - a.updatedAt);
-        const total = scoped.length;
-        if (!total) {
-            return "No tickets matched your filters.";
-        }
-
-        const totalPages = Math.max(1, Math.ceil(total / pageSize));
-        const safePage = Math.min(page, totalPages);
-        const start = (safePage - 1) * pageSize;
-        const visible = scoped.slice(start, start + pageSize);
-
-        const lines = visible.map(ticket => {
-            const ownerRef = `<@${ticket.ownerId}>`;
-            const categoryLabel = classifyTicketCategory(ticket.category || ticket.reason);
-            const noteCount = ticket.internalNotes?.length || 0;
-            return `#${ticket.id} [${ticket.status}|${ticket.workflowStatus}|${categoryLabel}|${ticket.priority}] <#${ticket.channelId}> | owner ${ownerRef} | notes ${noteCount} | updated <t:${Math.floor(ticket.updatedAt / 1000)}:R>`;
-        });
-
-        appendAuditEvent("ticket_search", {
-            guildId: guild.id,
-            actorId: interaction.user.id,
-            filters: {
-                ownerId: owner?.id || null,
-                status: status || null,
-                category: category || null,
-                query: query || null,
-                page: safePage,
-                pageSize
-            },
-            total
-        });
-
-        const filterSummary = [
-            owner ? `owner=<@${owner.id}>` : null,
-            status ? `status=${status}` : null,
-            category ? `category=${category}` : null,
-            query ? `query=${query}` : null
-        ].filter(Boolean).join(", ") || "none";
-
-        return [
-            `🔎 Ticket Search Results`,
-            `Filters: ${filterSummary}`,
-            `Page ${safePage}/${totalPages} | Showing ${visible.length}/${total}`,
-            "",
-            ...lines
-        ].join("\n");
-    },
     ticketworkload: async interaction => {
         const adminError = requireAdministrator(interaction);
         if (adminError) return adminError;
@@ -10283,6 +10205,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         return await playCrash(interaction.user.id, bet, target);
     },
     slots: async interaction => {
+        const bet = interaction.options.getInteger("bet", true);
+        const lines = interaction.options.getInteger("lines", true);
+        return playSlots(interaction.user.id, bet, lines);
+    },
+    magicslots: async interaction => {
         const bet = interaction.options.getInteger("bet", true);
         const lines = interaction.options.getInteger("lines", true);
         return playSlots(interaction.user.id, bet, lines);
