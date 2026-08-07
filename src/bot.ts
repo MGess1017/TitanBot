@@ -81,7 +81,6 @@ import { buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload
 import { getRaidOutcome, getRaidRewards } from "./game/raid";
 import * as RaidDomain from "./raid/domain";
 import * as RaidRuntime from "./raid/runtime";
-import { getTicketSlaEscalationState } from "./services/ticketOps";
 import { buildTicketTranscriptStub, exportTicketTranscript } from "./services/ticketTranscript";
 import type { TicketTranscriptStub } from "./services/ticketTranscript";
 import { buildTicketCommandHandlers } from "./commands/ticketCommands";
@@ -192,7 +191,6 @@ const CASINO_ACTION_RATE_LIMIT_WINDOW_MS = 1200;
 const IN_MEMORY_STATE_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
 const OPS_ALERT_RETENTION_MS = Math.max(15 * 60 * 1000, OPS_ALERT_COOLDOWN_MS * 4);
 const TICKET_CREATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
-const TICKET_SLA_ALERT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MOD_LOG_EVENT_RETENTION_MS = 2 * 60 * 1000;
 const CLOSED_TRADE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_CLOSED_TRADES = 2000;
@@ -201,7 +199,6 @@ const MAX_CLOSED_GIVEAWAYS = 1000;
 const opsAlertLastSent = new Map<string, number>();
 const recentCommandExecutions = new Map<string, number>();
 const inFlightTicketCreates = new Map<string, number>();
-const ticketSlaAlertState = new Map<string, number>();
 const recentModerationLogEvents = new Map<string, number>();
 const INSTANCE_LOCK_PATH = path.join(
     os.tmpdir(),
@@ -359,10 +356,6 @@ function pruneInMemoryRuntimeState(now = Date.now()): void {
 
     for (const [entryKey, ts] of inFlightTicketCreates.entries()) {
         if (now - ts > TICKET_CREATE_LOCK_MAX_AGE_MS) inFlightTicketCreates.delete(entryKey);
-    }
-
-    for (const [entryKey, ts] of ticketSlaAlertState.entries()) {
-        if (now - ts > TICKET_SLA_ALERT_RETENTION_MS) ticketSlaAlertState.delete(entryKey);
     }
 
     for (const [entryKey, ts] of recentModerationLogEvents.entries()) {
@@ -2736,25 +2729,6 @@ function getTicketSlaState(
     return stateGetTicketSlaState(ticket, now, thresholds);
 }
 
-function ticketSlaAlertKey(ticketId: number, level: "fr_warn" | "fr_breach" | "res_warn" | "res_breach"): string {
-    return `${ticketId}:${level}`;
-}
-
-function shouldEmitTicketSlaAlert(ticketId: number, level: "fr_warn" | "fr_breach" | "res_warn" | "res_breach", now = Date.now()): boolean {
-    for (const [key, ts] of ticketSlaAlertState.entries()) {
-        if (now - ts > TICKET_SLA_ALERT_RETENTION_MS) ticketSlaAlertState.delete(key);
-    }
-
-    const key = ticketSlaAlertKey(ticketId, level);
-    const last = ticketSlaAlertState.get(key) || 0;
-    // Avoid repeating the same alert type for a ticket too frequently.
-    if (last && now - last < 6 * 60 * 60 * 1000) {
-        return false;
-    }
-    ticketSlaAlertState.set(key, now);
-    return true;
-}
-
 function setTicketPanelMessageId(channelId: string, panelMessageId: string): void {
     stateSetTicketPanelMessageId(ticketStore.tickets, channelId, panelMessageId, saveTicketStore);
 }
@@ -3209,28 +3183,6 @@ async function sendTicketLog(
         .setTimestamp(new Date())
         .addFields(fields), "FN Support Ticket Stream", "Ticket event feed");
     await channel.send({ embeds: [embed] }).catch(() => undefined);
-}
-
-async function sendTicketSlaAlert(
-    guild: Guild,
-    title: string,
-    lines: string[],
-    severity: "warn" | "error"
-): Promise<void> {
-    const cfg = ensureTicketConfig(guild.id);
-    const targetChannelId = cfg.logChannelId || HEALTH_REPORT_CHANNEL_ID || ensureGuildModeration(guild.id).modLogChannelId || "";
-    if (!targetChannelId) return;
-
-    const channel = await guild.channels.fetch(targetChannelId).catch(() => null);
-    if (!channel || !channel.isTextBased() || !("send" in channel)) return;
-
-    const embed = brandLiveEmbed(new EmbedBuilder()
-        .setColor(severity === "error" ? 0xef4444 : 0xf59e0b)
-        .setTitle(`${severity === "error" ? "🚨" : "⚠️"} ${title}`)
-        .setDescription(lines.join("\n"))
-        .setTimestamp(new Date()), "FN SLA Watchdog", "Priority SLA alert");
-
-    await channel.send({ content: `<@&${TICKET_HANDLER_ROLE_ID}>`, embeds: [embed], allowedMentions: { parse: ["roles"] } }).catch(() => undefined);
 }
 
 function requireGuild(interaction: ChatInputCommandInteraction): string | null {
@@ -6932,7 +6884,6 @@ function playBlackjack(userId: string, bet: number, style: string): string {
 type MagicSlotSymbol = "WAND" | "POTION" | "DRAGON" | "SPELLBOOK" | "CRYSTAL" | "BONUS";
 type MagicPatternKind = "straight" | "zigzag";
 
-const MAGIC_SLOT_BASE_SYMBOLS: Exclude<MagicSlotSymbol, "BONUS">[] = ["WAND", "POTION", "DRAGON", "SPELLBOOK", "CRYSTAL"];
 const MAGIC_SLOT_BONUS_CHANCE = 0.1;
 const MAGIC_SLOT_REELS = 6;
 const MAGIC_SLOT_ROWS = 3;
