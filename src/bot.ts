@@ -3053,6 +3053,13 @@ async function submitFormalUserReport(input: {
     });
 
     await sendFormalUserReportLog(input.guild, entry);
+    await sendModLog(input.guild.id, `Formal Report Filed #${entry.id}`, [
+        { name: "Reporter", value: `<@${entry.reporterId}>`, inline: true },
+        { name: "Target", value: `<@${entry.targetUserId}>`, inline: true },
+        { name: "Status", value: entry.status.toUpperCase(), inline: true },
+        { name: "Summary", value: entry.summary || "No summary provided.", inline: false },
+        { name: "Evidence", value: entry.evidence || "Not provided", inline: false }
+    ]);
 
     const totalReportsForTarget = getGuildUserReports(input.guild.id)
         .filter(report => report.targetUserId === input.targetUser.id)
@@ -3127,6 +3134,13 @@ async function resolveFormalUserReport(input: {
     saveModerationStore();
 
     await sendFormalUserReportResolutionLog(input.guild, entry);
+    await sendModLog(input.guild.id, `Formal Report Resolved #${entry.id}`, [
+        { name: "Resolved By", value: `<@${input.actorId}>`, inline: true },
+        { name: "Target", value: `<@${entry.targetUserId}>`, inline: true },
+        { name: "Disposition", value: input.action, inline: true },
+        { name: "Reason", value: input.reason || "No reason provided.", inline: false },
+        { name: "Remaining Open Reports On User", value: `${(cfg.reports || []).filter(report => report.targetUserId === input.targetUserId && report.status === "open").length}`, inline: true }
+    ]);
 
     const remainingOpenForTarget = (cfg.reports || []).filter(report => report.targetUserId === input.targetUserId && report.status === "open").length;
     appendAuditEvent("report_resolve", {
@@ -4399,7 +4413,7 @@ function helpPageGames() {
         .setTitle("🪖 War Games Command")
         .setDescription("High-risk tactical casino simulations powered by FN Token$ from raids and live operations rewards.")
         .addFields(
-            { name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/slots` — 8-lane reward machine\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" },
+            { name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/slots` — Magic Slots (6 reels, straight + zig-zag wins)\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" },
             { name: "Rules of Engagement", value: "• Stake is committed before each round.\n\n• Result boards use mission colors: WIN=green, LOSS=red, PUSH=yellow.\n\n• Action buttons allow replay, bet scaling, and mode rotation." }
         );
 }
@@ -6509,7 +6523,7 @@ function getCasinoOddsSnapshot(gameKey: Exclude<GameStatKey, "raid">): string {
     if (gameKey === "roulette") return "Number call is highest variance (36.00x base), color/parity offers steadier hit rates (2.00x base).";
     if (gameKey === "blackjack") return "Safe style lowers bust risk, aggressive style raises upside volatility.";
     if (gameKey === "crash") return "Lower targets cash more often, higher targets spike multiplier but fail more often.";
-    if (gameKey === "slots") return "More lines raise hit frequency but increase total wager per spin.";
+    if (gameKey === "slots") return "Magic Slots pays on 2+ symbol streaks across 6 reels with stronger straight-line payouts.";
     if (gameKey === "coinflip") return "Pure 50/50 call before lucky modifier influence.";
     if (gameKey === "baccarat") return "Tie has the largest payout but lowest consistency; player/banker are steadier.";
     if (gameKey === "hilo") return "Large card-distance wins pay more; close outcomes are safer but lower yield.";
@@ -6961,15 +6975,31 @@ function playBlackjack(userId: string, bet: number, style: string): string {
     });
 }
 
-function spinSlotSymbol(): string {
-    const table: Array<{ symbol: string; weight: number }> = [
-        { symbol: "🍒", weight: 28 },
-        { symbol: "🍋", weight: 23 },
-        { symbol: "🔔", weight: 16 },
-        { symbol: "🍀", weight: 13 },
-        { symbol: "💎", weight: 10 },
-        { symbol: "🪖", weight: 7 },
-        { symbol: "7️⃣", weight: 3 }
+type MagicSlotSymbol = "WAND" | "POTION" | "DRAGON" | "SPELLBOOK" | "CRYSTAL" | "BONUS";
+type MagicPatternKind = "straight" | "zigzag";
+
+const MAGIC_SLOT_BASE_SYMBOLS: Exclude<MagicSlotSymbol, "BONUS">[] = ["WAND", "POTION", "DRAGON", "SPELLBOOK", "CRYSTAL"];
+const MAGIC_SLOT_BONUS_CHANCE = 0.1;
+const MAGIC_SLOT_REELS = 6;
+const MAGIC_SLOT_ROWS = 3;
+const MAGIC_SLOT_PATTERNS: Array<{ name: string; kind: MagicPatternKind; path: number[] }> = [
+    { name: "Arcane Top", kind: "straight", path: [0, 0, 0, 0, 0, 0] },
+    { name: "Arcane Middle", kind: "straight", path: [1, 1, 1, 1, 1, 1] },
+    { name: "Arcane Bottom", kind: "straight", path: [2, 2, 2, 2, 2, 2] },
+    { name: "Lightning Weave", kind: "zigzag", path: [0, 1, 0, 1, 0, 1] },
+    { name: "Dragon Weave", kind: "zigzag", path: [2, 1, 2, 1, 2, 1] },
+    { name: "Mystic V", kind: "zigzag", path: [0, 1, 2, 1, 0, 1] },
+    { name: "Mystic Invert", kind: "zigzag", path: [2, 1, 0, 1, 2, 1] },
+    { name: "Crystal Rise", kind: "zigzag", path: [0, 0, 1, 1, 2, 2] }
+];
+
+function spinMagicSlotBaseSymbol(): Exclude<MagicSlotSymbol, "BONUS"> {
+    const table: Array<{ symbol: Exclude<MagicSlotSymbol, "BONUS">; weight: number }> = [
+        { symbol: "WAND", weight: 28 },
+        { symbol: "POTION", weight: 24 },
+        { symbol: "DRAGON", weight: 12 },
+        { symbol: "SPELLBOOK", weight: 20 },
+        { symbol: "CRYSTAL", weight: 16 }
     ];
     const total = table.reduce((sum, entry) => sum + entry.weight, 0);
     let roll = Math.random() * total;
@@ -6977,22 +7007,90 @@ function spinSlotSymbol(): string {
         roll -= entry.weight;
         if (roll <= 0) return entry.symbol;
     }
-    return "🍒";
+    return "WAND";
 }
 
-function slotLineMultiplier(a: string, b: string, c: string): number {
-    if (a === b && b === c) {
-        if (a === "7️⃣") return 10;
-        if (a === "🪖") return 7;
-        if (a === "💎") return 5;
-        if (a === "🍀") return 3.2;
-        if (a === "🔔") return 2.5;
-        return 2;
+function spinMagicSlotSymbol(): MagicSlotSymbol {
+    if (Math.random() < MAGIC_SLOT_BONUS_CHANCE) return "BONUS";
+    return spinMagicSlotBaseSymbol();
+}
+
+function getMagicSlotSymbolBoost(symbol: Exclude<MagicSlotSymbol, "BONUS">): number {
+    if (symbol === "DRAGON") return 1.5;
+    if (symbol === "CRYSTAL") return 1.35;
+    if (symbol === "SPELLBOOK") return 1.25;
+    if (symbol === "POTION") return 1.1;
+    return 1;
+}
+
+function scoreMagicPattern(symbols: MagicSlotSymbol[], kind: MagicPatternKind): {
+    hit: boolean;
+    streak: number;
+    anchor: Exclude<MagicSlotSymbol, "BONUS"> | null;
+    bonusHits: number;
+    multiplier: number;
+    rule: string;
+} {
+    let anchor: Exclude<MagicSlotSymbol, "BONUS"> | null = null;
+    let streak = 0;
+    let bonusHits = 0;
+
+    for (const symbol of symbols) {
+        if (symbol === "BONUS") {
+            streak += 1;
+            bonusHits += 1;
+            continue;
+        }
+
+        if (!anchor) {
+            anchor = symbol;
+            streak += 1;
+            continue;
+        }
+
+        if (symbol === anchor) {
+            streak += 1;
+            continue;
+        }
+
+        break;
     }
-    if (a === b || b === c || a === c) {
-        return 0.4;
+
+    if (!anchor || streak < 2) {
+        return {
+            hit: false,
+            streak,
+            anchor,
+            bonusHits,
+            multiplier: 0,
+            rule: "no_match"
+        };
     }
-    return 0;
+
+    let base = 0;
+    let rule = "2-identical";
+    if (streak >= 3) {
+        base = kind === "straight" ? 5 : 3;
+        rule = kind === "straight" ? "3-identical straight" : "3-identical zig-zag";
+    } else {
+        base = 2;
+    }
+
+    if (streak > 3) {
+        base += (streak - 3) * (kind === "straight" ? 1.25 : 1.0);
+        rule = `${rule} + streak bonus`;
+    }
+
+    const symbolBoost = getMagicSlotSymbolBoost(anchor);
+    const bonusBoost = bonusHits > 0 ? 1 + (bonusHits * 0.35) : 1;
+    return {
+        hit: true,
+        streak,
+        anchor,
+        bonusHits,
+        multiplier: base * symbolBoost * bonusBoost,
+        rule
+    };
 }
 
 function buildCrashMeter(target: number, crashPoint: number): string {
@@ -7019,49 +7117,49 @@ function playSlots(userId: string, bet: number, lines: number): string {
     const walletBefore = getTokens(userId);
     removeTokens(userId, totalBet);
 
-    const machineRows: string[][] = Array.from({ length: 8 }, () => [
-        spinSlotSymbol(),
-        spinSlotSymbol(),
-        spinSlotSymbol()
-    ]);
+    const machineGrid: MagicSlotSymbol[][] = Array.from({ length: MAGIC_SLOT_ROWS }, () =>
+        Array.from({ length: MAGIC_SLOT_REELS }, () => spinMagicSlotSymbol())
+    );
 
+    const activePatterns = MAGIC_SLOT_PATTERNS.slice(0, lines);
     let baseMultiplier = 0;
-    const lineWins: Array<{ row: number; symbols: string; multiplier: number }> = [];
-    const rowMultipliers: number[] = [];
-    for (let i = 0; i < lines; i++) {
-        const row = machineRows[i];
-        const [a, b, c] = row;
-        const lineMultiplier = slotLineMultiplier(a, b, c);
-        rowMultipliers[i] = lineMultiplier;
-        if (lineMultiplier > 0) {
-            baseMultiplier += lineMultiplier;
-            lineWins.push({ row: i + 1, symbols: `${a}${b}${c}`, multiplier: lineMultiplier });
-        }
+    let totalBonusHits = 0;
+    const lineWins: Array<{ pattern: string; symbols: string; multiplier: number; rule: string; streak: number; bonusHits: number }> = [];
+
+    for (const pattern of activePatterns) {
+        const lineSymbols = pattern.path.map((rowIndex, reelIndex) => machineGrid[rowIndex]?.[reelIndex] || "WAND");
+        const scored = scoreMagicPattern(lineSymbols, pattern.kind);
+        if (!scored.hit || scored.multiplier <= 0) continue;
+        baseMultiplier += scored.multiplier;
+        totalBonusHits += scored.bonusHits;
+        lineWins.push({
+            pattern: pattern.name,
+            symbols: lineSymbols.join(" | "),
+            multiplier: scored.multiplier,
+            rule: scored.rule,
+            streak: scored.streak,
+            bonusHits: scored.bonusHits
+        });
     }
 
     const lucky = rollLuckyMultiplier();
     const totalMultiplier = Math.max(0, baseMultiplier) * lucky.multiplier;
-    const bonusPayout = totalMultiplier > 0 ? Math.max(1, Math.floor(bet * totalMultiplier)) : 0;
-    const payout = bonusPayout > 0 ? totalBet + bonusPayout : 0;
+    const profit = totalMultiplier > 0 ? Math.max(1, Math.floor(bet * totalMultiplier)) : 0;
+    const payout = profit > 0 ? totalBet + profit : 0;
     if (payout > 0) addTokens(userId, payout);
     recordGameResult(userId, "slots", payout > 0 ? "win" : "loss", totalBet, payout);
 
-    const boardRows = machineRows.map((row, idx) => {
-        const isActive = idx < lines;
-        const rowMultiplier = rowMultipliers[idx] ?? 0;
-        const marker = isActive ? (rowMultiplier > 0 ? "◆" : "•") : "·";
-        const resultTag = isActive && rowMultiplier > 0 ? `  ${rowMultiplier.toFixed(2)}x line hit` : "";
-        return `${marker} L${idx + 1}  ${row[0]} ${row[1]} ${row[2]}${resultTag}`;
-    });
+    const boardRows = machineGrid.map((row, idx) => `R${idx + 1}  ${row.join(" | ")}`);
     const winningLines = lineWins.length
-        ? lineWins.map(win => `L${win.row}: ${win.symbols} -> ${win.multiplier.toFixed(2)}x`).join("\n")
+        ? lineWins.map(win => `${win.pattern}: ${win.symbols} -> ${win.multiplier.toFixed(2)}x (${win.rule}, streak ${win.streak}, bonus ${win.bonusHits})`).join("\n")
         : "None";
+    const activePatternText = activePatterns.map((pattern, idx) => `${idx + 1}. ${pattern.name} (${pattern.kind})`).join("\n");
 
     return formatCasinoResult({
         userId,
         gameKey: "slots",
         gameIcon: "🎰",
-        gameName: "Slots",
+        gameName: "Magic Slots",
         outcome: payout > 0 ? "win" : "loss",
         bet: totalBet,
         payout,
@@ -7071,11 +7169,14 @@ function playSlots(userId: string, bet: number, lines: number): string {
         details: [
             { label: "Bet Per Line", value: formatTokenAmount(bet) },
             { label: "Active Lines", value: `${lines}/8` },
+            { label: "Reels x Rows", value: `${MAGIC_SLOT_REELS} x ${MAGIC_SLOT_ROWS}` },
             { label: "Base Multiplier", value: `${baseMultiplier.toFixed(2)}x` },
+            { label: "BONUS Hits", value: `${totalBonusHits}` },
             { label: "Winning Lines", value: String(lineWins.length) }
         ],
         sections: [
             { title: "Machine Grid", value: boardRows.join("\n") },
+            { title: "Active Patterns", value: activePatternText },
             { title: "Line Hits", value: winningLines }
         ],
         actionMeta: { bet, arg: String(lines) }
