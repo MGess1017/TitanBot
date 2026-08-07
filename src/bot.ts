@@ -3318,6 +3318,18 @@ async function runGuildXpRoleSyncJob(guild: Guild, sourceChannelId: string | nul
     return { processed, synced, skipped };
 }
 
+async function syncXpRolesForUserInGuild(guild: Guild, userId: string, xp: number): Promise<void> {
+    const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
+    if (!member) return;
+
+    await syncMemberXpRoles(member, xp);
+    // Retry once with a forced fetch to avoid cache/race misses at threshold crossings.
+    const refreshed = await guild.members.fetch(userId).catch(() => null);
+    if (refreshed) {
+        await syncMemberXpRoles(refreshed, xp);
+    }
+}
+
 function getPrimaryGuild(): Guild | null {
     return DISCORD_GUILD_ID
         ? client.guilds.cache.get(DISCORD_GUILD_ID) || null
@@ -10009,6 +10021,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     },
     useitem: async interaction => {
         trackRaidCommandUsage("useitem");
+        const xpBefore = ensureUser(interaction.user.id).xp;
         const hadExplicitItem = Boolean(interaction.options.getString("item"));
         let item = interaction.options.getString("item");
         const quantity = interaction.options.getInteger("quantity") || 1;
@@ -10054,6 +10067,12 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             recordConsumableTelemetry(item, useQty, !hadExplicitItem, true);
             return `${res.error}\n\nOwned usable items:\n${formatOwnedUsableItemsForPrompt(interaction.user.id)}`;
         }
+
+        const xpAfter = ensureUser(interaction.user.id).xp;
+        if (interaction.guild && xpAfter > xpBefore) {
+            await syncXpRolesForUserInGuild(interaction.guild, interaction.user.id, xpAfter);
+        }
+
         recordConsumableTelemetry(item, useQty, !hadExplicitItem, false);
         const resultText = res.result || `Used ${useQty}x ${itemDef.name}.`;
         return buildConsumableUsePayload({
@@ -11280,15 +11299,7 @@ client.on("messageCreate", async message => {
             attachmentCount: message.attachments.size
         });
         if (message.guild) {
-            const member = message.member ?? await message.guild.members.fetch(message.author.id).catch(() => null);
-            if (member) {
-                await syncMemberXpRoles(member, nextXp);
-                // Retry once with a forced fetch to avoid cache/race misses right at threshold crossings.
-                const refreshed = await message.guild.members.fetch(message.author.id).catch(() => null);
-                if (refreshed) {
-                    await syncMemberXpRoles(refreshed, nextXp);
-                }
-            }
+            await syncXpRolesForUserInGuild(message.guild, message.author.id, nextXp);
         }
     }
 
