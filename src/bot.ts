@@ -7526,7 +7526,7 @@ function buildWelcomePayload(guildName: string) {
         .setTitle("Welcome to FN Tarkov")
         .addFields({
             name: "Discord Invite",
-            value: "https://discord.gg/dnj5KmDyx"
+            value: "https://discord.gg/fnt"
         }), "Welcome Desk", `${guildName} welcome page`);
 
     return { embed: embed.toJSON() };
