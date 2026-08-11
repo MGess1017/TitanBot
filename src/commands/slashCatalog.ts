@@ -317,7 +317,7 @@ export function buildSlashCommands(input: {
                 ))
             .addIntegerOption(o => o.setName("page").setDescription("Result page number").setRequired(false))
             .addIntegerOption(o => o.setName("page_size").setDescription("Results per page (5-20)").setRequired(false)),
-        new SlashCommandBuilder().setName("magicslots").setDescription("Alias for Magic Slots: 6 reels, wizard symbols, and zig-zag paylines")
+        new SlashCommandBuilder().setName("magicslots").setDescription("Play Magic Slots: 6 reels, enchanted symbols, and ultra bonus spin chances")
             .addIntegerOption(o => o.setName("bet").setDescription("Single spin bet").setRequired(true)),
         new SlashCommandBuilder().setName("ticketworkload").setDescription("Admin: handler workload and SLA risk distribution")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
