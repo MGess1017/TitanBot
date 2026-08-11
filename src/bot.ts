@@ -6659,6 +6659,7 @@ function formatMagicSlotsResult(options: {
     scaledMultiplier: number;
     ultraBonusMode: boolean;
     totalBonusSymbols: number;
+    scatterMultiplier: number;
 }): string {
     const outcomePayload = getCasinoOutcomePayload(options.outcome);
     const net = options.payout - options.bet;
@@ -6695,7 +6696,8 @@ function formatMagicSlotsResult(options: {
                     `Net: ${formatNetAmount(net)}`,
                     `Bank: ${formatTokenAmount(options.walletAfter)}`,
                     `Lines: ${options.winningLines.length}/${options.totalHits}`,
-                    `Bonus: ${options.totalBonusHits}  |  Jackpot: ${options.jackpotRows}`
+                    `Bonus: ${options.totalBonusHits}  |  Jackpot: ${options.jackpotRows}`,
+                    `Scatter: ${options.scatterMultiplier > 0 ? `${options.scatterMultiplier.toFixed(2)}x` : "-"}`
                 ].join("\n"),
                 inline: false
             },
@@ -6969,6 +6971,7 @@ const MAGIC_SLOT_REELS = 6;
 const MAGIC_SLOT_ROWS = 6;
 const MAGIC_SLOT_RETURN_SCALE = 0.25;
 const MAGIC_SLOT_MAX_PAID_PATTERNS = 3;
+const MAGIC_SLOT_ULTRA_MAX_PAID_PATTERNS = 4;
 const MAGIC_SLOT_BONUS_ROW_JACKPOT_MULTIPLIER = 220;
 const MAGIC_SLOT_ULTRA_BONUS_ROW_JACKPOT_MULTIPLIER = 1500;
 const MAGIC_SLOT_ZIGZAG_PAYOUT_FACTOR = 0.88;
@@ -7067,6 +7070,14 @@ function detectUltraBonusWinSpin(grid: MagicSlotSymbol[][], preliminaryWins: Arr
     const totalBonusSymbols = grid.flat().filter(symbol => symbol === "BONUS").length;
     const bonusAssistedPremiumLine = preliminaryWins.some(win => win.streak >= 4 && win.bonusHits >= 1);
     return totalBonusSymbols >= 3 && bonusAssistedPremiumLine;
+}
+
+function getMagicSlotScatterMultiplier(totalBonusSymbols: number): number {
+    if (totalBonusSymbols >= 6) return 7.0;
+    if (totalBonusSymbols === 5) return 2.4;
+    if (totalBonusSymbols === 4) return 0.9;
+    if (totalBonusSymbols === 3) return 0.35;
+    return 0;
 }
 
 function scoreMagicPattern(symbols: MagicSlotSymbol[], kind: MagicPatternKind): {
@@ -7223,13 +7234,15 @@ function playSlots(userId: string, bet: number): string {
         });
     }
 
+    const paidLineLimit = ultraBonusMode ? MAGIC_SLOT_ULTRA_MAX_PAID_PATTERNS : MAGIC_SLOT_MAX_PAID_PATTERNS;
     const paidWins = [...lineWins]
         .sort((a, b) => b.multiplier - a.multiplier)
-        .slice(0, MAGIC_SLOT_MAX_PAID_PATTERNS);
+        .slice(0, paidLineLimit);
     const baseMultiplier = paidWins.reduce((sum, win) => sum + win.multiplier, 0);
     const totalBonusHits = paidWins.reduce((sum, win) => sum + win.bonusHits, 0);
+    const scatterMultiplier = getMagicSlotScatterMultiplier(totalBonusSymbols);
 
-    const totalMultiplier = Math.max(0, baseMultiplier);
+    const totalMultiplier = Math.max(0, baseMultiplier + scatterMultiplier);
     const scaledMultiplier = totalMultiplier * MAGIC_SLOT_RETURN_SCALE;
     const payout = totalMultiplier > 0 ? Math.max(1, Math.floor(totalBet * scaledMultiplier)) : 0;
     if (payout > 0) addTokens(userId, payout);
@@ -7260,7 +7273,8 @@ function playSlots(userId: string, bet: number): string {
         jackpotRows,
         scaledMultiplier,
         ultraBonusMode,
-        totalBonusSymbols
+        totalBonusSymbols,
+        scatterMultiplier
     });
 }
 
