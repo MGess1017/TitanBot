@@ -50,11 +50,11 @@ const ticketEnhancements_1 = require("./services/ticketEnhancements");
 const economy_1 = require("./game/economy");
 const catalog_1 = require("./game/catalog");
 const bossHearts_1 = require("./game/bossHearts");
+const bossPortraits_1 = require("./game/bossPortraits");
 const payloads_1 = require("./game/payloads");
 const raid_1 = require("./game/raid");
 const RaidDomain = __importStar(require("./raid/domain"));
 const RaidRuntime = __importStar(require("./raid/runtime"));
-const ticketOps_1 = require("./services/ticketOps");
 const ticketTranscript_1 = require("./services/ticketTranscript");
 const ticketCommands_1 = require("./commands/ticketCommands");
 const moderationCommands_1 = require("./commands/moderationCommands");
@@ -91,12 +91,14 @@ const RAID_COOLDOWN_MS = 5 * 1000;
 const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
 const WEEKLY_BALANCE_REPORT_MS = 7 * 24 * 60 * 60 * 1000;
 const HEALTH_WATCHDOG_INTERVAL_MS = 10 * 60 * 1000;
+const UNCLAIMED_TICKET_AUTO_CLOSE_MS = 30 * 60 * 1000;
 const BACKUP_STALE_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
 const PREFIX = "$";
 const MIN_BET = 1;
 const MIN_RAID_BET = 10;
 const MOD_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/moderation.json");
 const TRADE_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/trades.json");
+const GIVEAWAY_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/giveaways.json");
 const XP_ROLE_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/xp-roles.json");
 const POINTS_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/points.json");
 const POINTS_BACKUP_FILE = `${POINTS_DATA_FILE}.bak`;
@@ -108,13 +110,21 @@ const TICKET_TRANSCRIPT_DIR = path_1.default.resolve(__dirname, "../src/data/tic
 const DEFAULT_TICKET_HANDLER_ROLE_ID = "1506184638207361145";
 const DEFAULT_TICKET_DEFAULT_CATEGORY_ID = "1523411322430296228";
 const DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID = "1506119505720377434";
+const DEFAULT_REPORT_PANEL_CHANNEL_ID = DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
+const DEFAULT_GIVEAWAY_CHANNEL_ID = "1535059013912363008";
+const DEFAULT_REPORT_ADMIN_PANEL_CHANNEL_ID = "1535132577059307583";
+const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
-const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1527571592320651285";
+const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1536822643414536333";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
 const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
 const TICKET_DEFAULT_CATEGORY_ID = process.env.TICKET_DEFAULT_CATEGORY_ID || DEFAULT_TICKET_DEFAULT_CATEGORY_ID;
 const PERMANENT_TICKET_PANEL_CHANNEL_ID = process.env.PERMANENT_TICKET_PANEL_CHANNEL_ID || DEFAULT_PERMANENT_TICKET_PANEL_CHANNEL_ID;
+const REPORT_PANEL_CHANNEL_ID = process.env.REPORT_PANEL_CHANNEL_ID || DEFAULT_REPORT_PANEL_CHANNEL_ID;
+const GIVEAWAY_CHANNEL_ID = process.env.GIVEAWAY_CHANNEL_ID || DEFAULT_GIVEAWAY_CHANNEL_ID;
+const REPORT_ADMIN_PANEL_CHANNEL_ID = process.env.REPORT_ADMIN_PANEL_CHANNEL_ID || DEFAULT_REPORT_ADMIN_PANEL_CHANNEL_ID;
+const REPORT_LOG_CHANNEL_ID = process.env.REPORT_LOG_CHANNEL_ID || DEFAULT_REPORT_LOG_CHANNEL_ID;
 const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID || DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID;
 const WELCOME_PANEL_CHANNEL_ID = process.env.WELCOME_PANEL_CHANNEL_ID || DEFAULT_WELCOME_PANEL_CHANNEL_ID;
 const MOD_LOG_CHANNEL_ID = process.env.MOD_LOG_CHANNEL_ID || DEFAULT_MOD_LOG_CHANNEL_ID;
@@ -125,15 +135,26 @@ const OPS_ALERT_COOLDOWN_MS = 60 * 1000;
 const COMMAND_IDEMPOTENCY_WINDOW_MS = Math.max(0, Number(process.env.COMMAND_IDEMPOTENCY_WINDOW_MS || 15000));
 const COMMAND_RATE_LIMIT_WINDOW_MS = 1500;
 const CASINO_ACTION_RATE_LIMIT_WINDOW_MS = 1200;
+const IN_MEMORY_STATE_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
+const OPS_ALERT_RETENTION_MS = Math.max(15 * 60 * 1000, OPS_ALERT_COOLDOWN_MS * 4);
+const TICKET_CREATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
+const MOD_LOG_EVENT_RETENTION_MS = 2 * 60 * 1000;
+const CLOSED_TRADE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_CLOSED_TRADES = 2000;
+const CLOSED_GIVEAWAY_RETENTION_MS = 60 * 24 * 60 * 60 * 1000;
+const MAX_CLOSED_GIVEAWAYS = 1000;
 const opsAlertLastSent = new Map();
 const recentCommandExecutions = new Map();
 const inFlightTicketCreates = new Map();
-const ticketSlaAlertState = new Map();
 const recentModerationLogEvents = new Map();
 const INSTANCE_LOCK_PATH = path_1.default.join(node_os_1.default.tmpdir(), `titan-raid-bot.${node_crypto_1.default.createHash("sha1").update(String(process.env.DISCORD_TOKEN || "no-token")).digest("hex").slice(0, 12)}.lock`);
 let hasInstanceLock = false;
 function shouldSendOpsAlert(key) {
     const now = Date.now();
+    for (const [entryKey, ts] of opsAlertLastSent.entries()) {
+        if (now - ts > OPS_ALERT_RETENTION_MS)
+            opsAlertLastSent.delete(entryKey);
+    }
     const last = opsAlertLastSent.get(key) || 0;
     if (now - last < OPS_ALERT_COOLDOWN_MS)
         return false;
@@ -250,14 +271,34 @@ function updateBotPresence() {
     });
 }
 function tryAcquireTicketCreateLock(guildId, ownerId) {
+    const now = Date.now();
+    for (const [entryKey, ts] of inFlightTicketCreates.entries()) {
+        if (now - ts > TICKET_CREATE_LOCK_MAX_AGE_MS)
+            inFlightTicketCreates.delete(entryKey);
+    }
     const key = `${guildId}:${ownerId}`;
     if (inFlightTicketCreates.has(key))
         return false;
-    inFlightTicketCreates.set(key, Date.now());
+    inFlightTicketCreates.set(key, now);
     return true;
 }
 function releaseTicketCreateLock(guildId, ownerId) {
     inFlightTicketCreates.delete(`${guildId}:${ownerId}`);
+}
+function pruneInMemoryRuntimeState(now = Date.now()) {
+    pruneRecentCommandExecutions(now);
+    for (const [entryKey, ts] of inFlightTicketCreates.entries()) {
+        if (now - ts > TICKET_CREATE_LOCK_MAX_AGE_MS)
+            inFlightTicketCreates.delete(entryKey);
+    }
+    for (const [entryKey, ts] of recentModerationLogEvents.entries()) {
+        if (now - ts > MOD_LOG_EVENT_RETENTION_MS)
+            recentModerationLogEvents.delete(entryKey);
+    }
+    for (const [entryKey, ts] of opsAlertLastSent.entries()) {
+        if (now - ts > OPS_ALERT_RETENTION_MS)
+            opsAlertLastSent.delete(entryKey);
+    }
 }
 function isProcessAlive(pid) {
     if (!Number.isFinite(pid) || pid <= 0)
@@ -841,8 +882,9 @@ function rememberModerationLog(action, guildId, userId) {
 }
 function shouldSkipRecentModerationLog(action, guildId, userId, windowMs = 15000) {
     const now = Date.now();
+    const retentionWindow = Math.max(windowMs, MOD_LOG_EVENT_RETENTION_MS);
     for (const [key, ts] of recentModerationLogEvents.entries()) {
-        if (now - ts > windowMs)
+        if (now - ts > retentionWindow)
             recentModerationLogEvents.delete(key);
     }
     const key = `${action}:${guildId}:${userId}`;
@@ -1151,6 +1193,7 @@ function checkpointState(reason) {
     try {
         (0, utils_1.savePoints)();
         saveTradeStore();
+        saveGiveawayStore();
         saveModerationStore();
         saveTicketStore();
         saveBalanceTelemetry();
@@ -1165,14 +1208,306 @@ function readTradeStore() {
     return readJsonWithBackup(TRADE_DATA_FILE, raw => {
         const candidate = raw;
         if (candidate && Array.isArray(candidate.offers) && typeof candidate.nextId === "number") {
-            return { nextId: Math.max(1, candidate.nextId), offers: candidate.offers };
+            const offers = normalizeTradeOffers(candidate.offers);
+            return { nextId: Math.max(1, candidate.nextId), offers };
         }
         return null;
     }, { nextId: 1, offers: [] });
 }
+function normalizeTradeOffers(rawOffers, now = Date.now()) {
+    const openOffers = [];
+    const recentClosedOffers = [];
+    for (const raw of rawOffers) {
+        if (!raw || typeof raw !== "object")
+            continue;
+        const row = raw;
+        if (typeof row.id !== "number" || !Number.isFinite(row.id))
+            continue;
+        if (typeof row.guildId !== "string" || typeof row.fromUserId !== "string" || typeof row.toUserId !== "string")
+            continue;
+        if (typeof row.offerItemId !== "string" || typeof row.requestItemId !== "string")
+            continue;
+        if (typeof row.offerQty !== "number" || typeof row.requestQty !== "number")
+            continue;
+        const status = row.status === "accepted" || row.status === "declined" || row.status === "cancelled"
+            ? row.status
+            : "open";
+        const createdAt = typeof row.createdAt === "number" && Number.isFinite(row.createdAt) ? row.createdAt : now;
+        const updatedAt = typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : createdAt;
+        const offer = {
+            id: Math.max(1, Math.floor(row.id)),
+            guildId: row.guildId,
+            fromUserId: row.fromUserId,
+            toUserId: row.toUserId,
+            offerItemId: row.offerItemId,
+            offerQty: Math.max(1, Math.floor(row.offerQty)),
+            requestItemId: row.requestItemId,
+            requestQty: Math.max(1, Math.floor(row.requestQty)),
+            status,
+            createdAt,
+            updatedAt
+        };
+        if (status === "open") {
+            openOffers.push(offer);
+            continue;
+        }
+        if (now - updatedAt <= CLOSED_TRADE_RETENTION_MS) {
+            recentClosedOffers.push(offer);
+        }
+    }
+    recentClosedOffers.sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id);
+    const trimmedClosed = recentClosedOffers.slice(0, MAX_CLOSED_TRADES);
+    return [...openOffers, ...trimmedClosed];
+}
+function pruneTradeOffers(now = Date.now()) {
+    const normalized = normalizeTradeOffers(tradeStore.offers, now);
+    if (normalized.length !== tradeStore.offers.length) {
+        tradeStore.offers = normalized;
+    }
+}
 const tradeStore = readTradeStore();
 function saveTradeStore() {
+    pruneTradeOffers();
     writeJsonAtomic(TRADE_DATA_FILE, tradeStore);
+}
+function normalizeGiveawayStore(raw) {
+    const candidate = raw;
+    if (!candidate || !Array.isArray(candidate.giveaways) || typeof candidate.nextId !== "number")
+        return null;
+    const giveaways = candidate.giveaways
+        .filter(row => Boolean(row && typeof row === "object"))
+        .map(row => {
+        const entry = row;
+        const status = entry.status === "ended" || entry.status === "cancelled" ? entry.status : "active";
+        const rewardKind = entry.rewardKind === "item" ? "item" : "generic";
+        return {
+            id: Math.max(1, Math.floor(Number(row.id) || 0)),
+            guildId: String(entry.guildId || ""),
+            channelId: String(entry.channelId || ""),
+            messageId: entry.messageId ? String(entry.messageId) : null,
+            hostId: String(entry.hostId || ""),
+            prize: String(entry.prize || "Giveaway"),
+            description: String(entry.description || ""),
+            rewardKind,
+            rewardItemId: entry.rewardItemId ? String(entry.rewardItemId) : null,
+            rewardQty: Math.max(1, Math.floor(Number(entry.rewardQty) || 1)),
+            winnerCount: Math.max(1, Math.floor(Number(entry.winnerCount) || 1)),
+            roleRequiredId: entry.roleRequiredId ? String(entry.roleRequiredId) : null,
+            createdAt: Math.max(0, Math.floor(Number(entry.createdAt) || Date.now())),
+            endAt: Math.max(0, Math.floor(Number(entry.endAt) || Date.now())),
+            updatedAt: Math.max(0, Math.floor(Number(entry.updatedAt) || Date.now())),
+            status,
+            entries: Array.from(new Set(Array.isArray(entry.entries) ? entry.entries.map(value => String(value)) : [])),
+            winners: Array.from(new Set(Array.isArray(entry.winners) ? entry.winners.map(value => String(value)) : [])),
+            endedAt: typeof entry.endedAt === "number" ? entry.endedAt : null
+        };
+    })
+        .filter(entry => entry.id > 0 && entry.guildId && entry.channelId && entry.hostId);
+    return { nextId: Math.max(1, Math.floor(candidate.nextId)), giveaways };
+}
+const giveawayStore = readJsonWithBackup(GIVEAWAY_DATA_FILE, normalizeGiveawayStore, { nextId: 1, giveaways: [] });
+function pruneGiveaways(now = Date.now()) {
+    const active = giveawayStore.giveaways.filter(entry => entry.status === "active");
+    const closed = giveawayStore.giveaways
+        .filter(entry => entry.status !== "active")
+        .filter(entry => {
+        const closedAt = entry.endedAt || entry.updatedAt || entry.endAt;
+        return now - closedAt <= CLOSED_GIVEAWAY_RETENTION_MS;
+    })
+        .sort((a, b) => (b.endedAt || b.updatedAt || b.endAt) - (a.endedAt || a.updatedAt || a.endAt))
+        .slice(0, MAX_CLOSED_GIVEAWAYS);
+    giveawayStore.giveaways = [...active, ...closed];
+}
+function saveGiveawayStore() {
+    pruneGiveaways();
+    writeJsonAtomic(GIVEAWAY_DATA_FILE, giveawayStore);
+}
+function getGiveawayById(id) {
+    return giveawayStore.giveaways.find(entry => entry.id === id) || null;
+}
+function formatGiveawayDuration(ms) {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (days > 0)
+        return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0)
+        return `${hours}h ${minutes}m`;
+    return `${minutes}m ${seconds % 60}s`;
+}
+function shuffleUserIds(ids) {
+    const values = [...ids];
+    for (let i = values.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [values[i], values[j]] = [values[j], values[i]];
+    }
+    return values;
+}
+function pickGiveawayWinners(giveaway) {
+    return shuffleUserIds(giveaway.entries).slice(0, Math.max(1, giveaway.winnerCount));
+}
+function buildGiveawayEmbed(giveaway, now = Date.now()) {
+    const remainingMs = Math.max(0, giveaway.endAt - now);
+    const winnersText = giveaway.winners.length ? giveaway.winners.map(id => `<@${id}>`).join(", ") : "Pending draw";
+    const rewardDetail = giveaway.rewardKind === "item" && giveaway.rewardItemId
+        ? `${catalog_1.ITEM_DEFS[giveaway.rewardItemId]?.name || giveaway.rewardItemId} x${giveaway.rewardQty}`
+        : giveaway.prize;
+    return new discord_js_1.EmbedBuilder()
+        .setColor(giveaway.status === "active" ? 0xf59e0b : 0x22c55e)
+        .setTitle(`🎉 ${giveaway.prize}`)
+        .setDescription(giveaway.description || "Press the button below to enter before the timer ends.")
+        .addFields({ name: "Giveaway ID", value: `#${giveaway.id}`, inline: true }, { name: "Hosted By", value: `<@${giveaway.hostId}>`, inline: true }, { name: "Status", value: giveaway.status.toUpperCase(), inline: true }, { name: "Winners", value: `${giveaway.winnerCount}`, inline: true }, { name: "Entries", value: `${giveaway.entries.length}`, inline: true }, { name: "Reward", value: rewardDetail, inline: false }, { name: "Role Requirement", value: giveaway.roleRequiredId ? `<@&${giveaway.roleRequiredId}>` : "None", inline: true }, { name: giveaway.status === "active" ? "Ends" : "Ended", value: giveaway.status === "active" ? `<t:${Math.floor(giveaway.endAt / 1000)}:R>\n<t:${Math.floor(giveaway.endAt / 1000)}:F>` : (giveaway.endedAt ? `<t:${Math.floor(giveaway.endedAt / 1000)}:R>` : "Ended"), inline: false }, { name: "Current Winners", value: winnersText, inline: false })
+        .setFooter({ text: giveaway.status === "active" ? "Press Enter Giveaway below to participate." : "Giveaway closed." })
+        .setTimestamp(new Date(giveaway.endAt));
+}
+function buildGiveawayActionRow(giveaway) {
+    return new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(`${GIVEAWAY_IDS.enterPrefix}:${giveaway.id}`)
+        .setLabel(giveaway.status === "active" ? "Enter Giveaway" : "Giveaway Closed")
+        .setEmoji("🎉")
+        .setStyle(giveaway.status === "active" ? discord_js_1.ButtonStyle.Success : discord_js_1.ButtonStyle.Secondary)
+        .setDisabled(giveaway.status !== "active"));
+}
+async function sendGiveawayLog(guildId, title, fields) {
+    const state = ensureGuildModeration(guildId);
+    const targetChannelId = state.modLogChannelId || MOD_LOG_CHANNEL_ID || ACTIVITY_CHANNEL_ID || HEALTH_REPORT_CHANNEL_ID;
+    if (!targetChannelId)
+        return;
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild)
+        return;
+    const channel = guild.channels.cache.get(targetChannelId) || await guild.channels.fetch(targetChannelId).catch(() => null);
+    if (!channel || !channel.isTextBased())
+        return;
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle(`🎉 ${title}`)
+        .addFields(fields), "FN Giveaway Desk", "Giveaway live feed");
+    await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => undefined);
+}
+async function syncGiveawayMessage(giveaway) {
+    if (!giveaway.messageId)
+        return;
+    const guild = client.guilds.cache.get(giveaway.guildId) || await client.guilds.fetch(giveaway.guildId).catch(() => null);
+    if (!guild)
+        return;
+    const channel = guild.channels.cache.get(giveaway.channelId) || await guild.channels.fetch(giveaway.channelId).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+        return;
+    const message = await channel.messages.fetch(giveaway.messageId).catch(() => null);
+    if (!message)
+        return;
+    await message.edit({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)] }).catch(() => undefined);
+}
+async function createAndPostGiveaway(input) {
+    const giveaway = {
+        id: giveawayStore.nextId++,
+        guildId: input.guild.id,
+        channelId: input.channel.id,
+        messageId: null,
+        hostId: input.hostId,
+        prize: input.prize,
+        description: input.description,
+        rewardKind: input.rewardKind,
+        rewardItemId: input.rewardItemId || null,
+        rewardQty: Math.max(1, input.rewardQty || 1),
+        winnerCount: input.winnerCount,
+        roleRequiredId: input.roleRequiredId,
+        createdAt: Date.now(),
+        endAt: Date.now() + input.durationMs,
+        updatedAt: Date.now(),
+        status: "active",
+        entries: [],
+        winners: [],
+        endedAt: null
+    };
+    giveawayStore.giveaways.push(giveaway);
+    saveGiveawayStore();
+    const allowedMentions = {
+        parse: input.mentionEveryone ? ["everyone"] : [],
+        users: input.mentionUserIds || [],
+        roles: input.mentionRoleIds || []
+    };
+    const sent = await input.channel.send({ content: input.announcementContent || undefined, embeds: [buildGiveawayEmbed(giveaway)], components: [buildGiveawayActionRow(giveaway)], allowedMentions }).catch(() => null);
+    if (!sent) {
+        giveawayStore.giveaways = giveawayStore.giveaways.filter(entry => entry.id !== giveaway.id);
+        saveGiveawayStore();
+        return null;
+    }
+    giveaway.messageId = sent.id;
+    giveaway.updatedAt = Date.now();
+    saveGiveawayStore();
+    return giveaway;
+}
+async function resolveConfiguredGiveawayChannel(guild) {
+    if (!GIVEAWAY_CHANNEL_ID)
+        return null;
+    const channel = guild.channels.cache.get(GIVEAWAY_CHANNEL_ID) || await guild.channels.fetch(GIVEAWAY_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+        return null;
+    return channel;
+}
+function buildGiveawayAnnouncement(input) {
+    const mentions = [
+        input.pingEveryone ? "@everyone" : null,
+        input.mentionRoleId ? `<@&${input.mentionRoleId}>` : null,
+        input.mentionUserId ? `<@${input.mentionUserId}>` : null
+    ].filter(Boolean);
+    return [
+        mentions.join(" ").trim() || null,
+        `A new giveaway is now live: **${input.prize}**`
+    ].filter(Boolean).join("\n");
+}
+async function finalizeGiveaway(giveaway, reason = "timer") {
+    if (giveaway.status !== "active" && reason !== "reroll")
+        return;
+    if (reason !== "reroll") {
+        giveaway.status = "ended";
+        giveaway.endedAt = Date.now();
+    }
+    giveaway.winners = giveaway.entries.length ? pickGiveawayWinners(giveaway) : [];
+    if (giveaway.rewardKind === "item" && giveaway.rewardItemId) {
+        for (const winnerId of giveaway.winners) {
+            (0, utils_1.addInventoryItem)(winnerId, giveaway.rewardItemId, giveaway.rewardQty);
+        }
+    }
+    giveaway.updatedAt = Date.now();
+    saveGiveawayStore();
+    await syncGiveawayMessage(giveaway);
+    const guild = client.guilds.cache.get(giveaway.guildId) || await client.guilds.fetch(giveaway.guildId).catch(() => null);
+    const channel = guild ? (guild.channels.cache.get(giveaway.channelId) || await guild.channels.fetch(giveaway.channelId).catch(() => null)) : null;
+    if (channel && channel.isTextBased()) {
+        const content = giveaway.winners.length
+            ? `🎉 Giveaway #${giveaway.id} ended! Winner${giveaway.winners.length === 1 ? "" : "s"}: ${giveaway.winners.map(id => `<@${id}>`).join(", ")} | Prize: **${giveaway.prize}**`
+            : `Giveaway #${giveaway.id} ended with no valid entrants for **${giveaway.prize}**.`;
+        await channel.send({ content, allowedMentions: { users: giveaway.winners, parse: [] } }).catch(() => undefined);
+    }
+    appendAuditEvent(reason === "reroll" ? "giveaway_reroll" : "giveaway_end", {
+        guildId: giveaway.guildId,
+        giveawayId: giveaway.id,
+        channelId: giveaway.channelId,
+        winnerIds: giveaway.winners,
+        prize: giveaway.prize,
+        reason
+    });
+    await sendGiveawayLog(giveaway.guildId, reason === "reroll" ? `Giveaway #${giveaway.id} Rerolled` : `Giveaway #${giveaway.id} Ended`, [
+        { name: "Prize", value: giveaway.prize, inline: false },
+        { name: "Winners", value: giveaway.winners.length ? giveaway.winners.map(id => `<@${id}>`).join(", ") : "No valid entrants", inline: false },
+        { name: "Entries", value: `${giveaway.entries.length}`, inline: true }
+    ]);
+}
+async function processDueGiveaways(now = Date.now()) {
+    const due = giveawayStore.giveaways.filter(giveaway => giveaway.status === "active" && giveaway.endAt <= now);
+    for (const giveaway of due) {
+        await finalizeGiveaway(giveaway, "timer");
+    }
+}
+async function refreshActiveGiveawayEmbeds(now = Date.now()) {
+    const active = giveawayStore.giveaways.filter(giveaway => giveaway.status === "active" && giveaway.endAt > now);
+    for (const giveaway of active) {
+        await syncGiveawayMessage(giveaway);
+    }
 }
 function createTradeOffer(input) {
     const offer = {
@@ -1375,6 +1710,15 @@ function ensureTicketConfig(guildId) {
 function findOpenTicketByOwner(guildId, ownerId) {
     return (0, ticketState_1.findOpenTicketByOwner)(ticketStore.tickets, guildId, ownerId);
 }
+function getTicketCaseBucket(categoryOrReason) {
+    return (0, ticketEnhancements_1.classifyTicketCategory)(categoryOrReason || "general") === "report" ? "report" : "support";
+}
+function findOpenTicketByOwnerInBucket(guildId, ownerId, bucket) {
+    return ticketStore.tickets.find(ticket => ticket.guildId === guildId
+        && ticket.ownerId === ownerId
+        && (normalizeTicketStatus(ticket.status) === "open" || normalizeTicketStatus(ticket.status) === "claimed")
+        && getTicketCaseBucket(ticket.category || ticket.reason) === bucket) || null;
+}
 function findOpenTicketByChannel(channelId) {
     return (0, ticketState_1.findOpenTicketByChannel)(ticketStore.tickets, channelId);
 }
@@ -1386,13 +1730,6 @@ function findArchivedTicketByChannel(channelId) {
 }
 function findTicketById(ticketId) {
     return ticketStore.tickets.find(ticket => ticket.id === ticketId) || null;
-}
-function getTicketSearchIndex(ticket) {
-    return (0, ticketEnhancements_1.extractSearchableTicketText)({
-        reason: ticket.reason,
-        category: ticket.category,
-        notes: ticket.internalNotes || []
-    });
 }
 function buildTicketSlaThresholds(ticket) {
     const policy = ticket.slaPolicy || (0, ticketEnhancements_1.getTicketSlaPolicy)(ticket.category || "general", ticket.priority);
@@ -1512,6 +1849,131 @@ function buildTicketIntakeModal() {
         .setCustomId(TICKET_IDS.intakeModal)
         .setTitle("Smart Ticket Intake")
         .addComponents(new discord_js_1.ActionRowBuilder().addComponents(summaryInput), new discord_js_1.ActionRowBuilder().addComponents(categoryInput), new discord_js_1.ActionRowBuilder().addComponents(detailsInput), new discord_js_1.ActionRowBuilder().addComponents(platformInput), new discord_js_1.ActionRowBuilder().addComponents(evidenceInput));
+}
+function buildAdminReportIntakeModal() {
+    const targetInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(REPORT_IDS.adminTarget)
+        .setLabel("Target User ID or Mention")
+        .setStyle(discord_js_1.TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(80)
+        .setPlaceholder("123456789012345678 or <@123...>");
+    const summaryInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(REPORT_IDS.adminSummary)
+        .setLabel("Report Summary")
+        .setStyle(discord_js_1.TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(120)
+        .setPlaceholder("Cheating, harassment, scam, abuse, etc.");
+    const detailsInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(REPORT_IDS.adminDetails)
+        .setLabel("Detailed Context")
+        .setStyle(discord_js_1.TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(900)
+        .setPlaceholder("Optional incident details, timeline, and context.");
+    const evidenceInput = new discord_js_1.TextInputBuilder()
+        .setCustomId(REPORT_IDS.adminEvidence)
+        .setLabel("Evidence Links")
+        .setStyle(discord_js_1.TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(500)
+        .setPlaceholder("Optional screenshots, clips, logs, links.");
+    return new discord_js_1.ModalBuilder()
+        .setCustomId(REPORT_IDS.adminModal)
+        .setTitle("Admin Report Intake")
+        .addComponents(new discord_js_1.ActionRowBuilder().addComponents(targetInput), new discord_js_1.ActionRowBuilder().addComponents(summaryInput), new discord_js_1.ActionRowBuilder().addComponents(detailsInput), new discord_js_1.ActionRowBuilder().addComponents(evidenceInput));
+}
+function buildRaidItemGiveawayModal() {
+    return new discord_js_1.ModalBuilder()
+        .setCustomId(GIVEAWAY_IDS.raidItemModal)
+        .setTitle("Raid Item Giveaway")
+        .addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidItemId).setLabel("Raid Item ID").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(80).setPlaceholder("mythic_crate, fn_coin, reactor_blade")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidItemQty).setLabel("Quantity Per Winner").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(10).setPlaceholder("1")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidDuration).setLabel("Duration").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(20).setPlaceholder("30m, 6h, 2d")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidWinners).setLabel("Winner Count").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(10).setPlaceholder("1")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidDescription).setLabel("Description").setStyle(discord_js_1.TextInputStyle.Paragraph).setRequired(false).setMaxLength(400).setPlaceholder("Optional context or event blurb")));
+}
+function buildAdminReportPanelPayload(guildName) {
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x0ea5e9)
+        .setTitle("🛡️ Admin Report Panel")
+        .setDescription([
+        "Administrator-only formal report intake panel.",
+        "",
+        "Use this to file tracked reports against players.",
+        `All submitted reports are automatically logged to <#${REPORT_LOG_CHANNEL_ID}>.`
+    ].join("\n"))
+        .addFields({ name: "Scope", value: "Reports against players only. Support requests must use the support ticket panel.", inline: false }, { name: "Access", value: "Admins only", inline: true }, { name: "Server", value: guildName, inline: true }), "FN Admin Report Control", `${guildName} admin report panel`);
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(REPORT_IDS.adminOpen)
+        .setLabel("File User Report")
+        .setEmoji("🚨")
+        .setStyle(discord_js_1.ButtonStyle.Danger));
+    return { embed: embed.toJSON(), components: [row.toJSON()] };
+}
+async function upsertAdminReportPanelInChannel(guild, channelId) {
+    const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+        return { ok: false, error: "Configured admin report panel channel is missing or not a text channel." };
+    }
+    const payload = buildAdminReportPanelPayload(guild.name);
+    const embed = payload.embed;
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(REPORT_IDS.adminOpen)
+        .setLabel("File User Report")
+        .setEmoji("🚨")
+        .setStyle(discord_js_1.ButtonStyle.Danger));
+    const storedMessageId = getGuildPanelMessageId(guild.id, "reportAdmin");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) {
+            return { ok: true, action: "updated" };
+        }
+        setGuildPanelMessageId(guild.id, "reportAdmin", null);
+    }
+    let candidateId = null;
+    const duplicateIds = [];
+    let beforeId;
+    for (let i = 0; i < 8; i++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+        if (!batch || !batch.size)
+            break;
+        const candidates = batch.filter(message => message.author.id === (client.user?.id || "")
+            && (message.embeds[0]?.title === "🛡️ Admin Report Panel"
+                || message.embeds[0]?.footer?.text?.includes("admin report panel")));
+        const candidate = candidates.first();
+        if (candidate) {
+            candidateId = candidate.id;
+            for (const duplicate of candidates.values()) {
+                if (duplicate.id !== candidate.id)
+                    duplicateIds.push(duplicate.id);
+            }
+            break;
+        }
+        const last = batch.last();
+        beforeId = last?.id;
+        if (!beforeId)
+            break;
+    }
+    if (candidateId) {
+        const candidate = await channel.messages.fetch(candidateId).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+        if (!edited) {
+            return { ok: false, error: "Failed to refresh admin report panel message. Check bot permissions for this channel." };
+        }
+        setGuildPanelMessageId(guild.id, "reportAdmin", candidateId);
+        for (const duplicateId of duplicateIds) {
+            if (duplicateId === candidateId)
+                continue;
+            const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);
+            await duplicate?.delete().catch(() => undefined);
+        }
+        return { ok: true, action: "updated" };
+    }
+    const sent = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+    if (!sent) {
+        return { ok: false, error: "Failed to post admin report panel message. Check bot permissions for this channel." };
+    }
+    setGuildPanelMessageId(guild.id, "reportAdmin", sent.id);
+    return { ok: true, action: "posted" };
 }
 function buildTicketCsatButtons(ticketId) {
     return new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:1`).setLabel("1").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:2`).setLabel("2").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:3`).setLabel("3").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:4`).setLabel("4").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(`${TICKET_IDS.csatPrefix}:${ticketId}:5`).setLabel("5").setStyle(discord_js_1.ButtonStyle.Success));
@@ -1693,19 +2155,6 @@ function reopenTicketByChannel(channelId, reopenedById, reopenReason) {
 function getTicketSlaState(ticket, now = Date.now(), thresholds) {
     return (0, ticketState_1.getTicketSlaState)(ticket, now, thresholds);
 }
-function ticketSlaAlertKey(ticketId, level) {
-    return `${ticketId}:${level}`;
-}
-function shouldEmitTicketSlaAlert(ticketId, level, now = Date.now()) {
-    const key = ticketSlaAlertKey(ticketId, level);
-    const last = ticketSlaAlertState.get(key) || 0;
-    // Avoid repeating the same alert type for a ticket too frequently.
-    if (last && now - last < 6 * 60 * 60 * 1000) {
-        return false;
-    }
-    ticketSlaAlertState.set(key, now);
-    return true;
-}
 function setTicketPanelMessageId(channelId, panelMessageId) {
     (0, ticketState_1.setTicketPanelMessageId)(ticketStore.tickets, channelId, panelMessageId, saveTicketStore);
 }
@@ -1843,7 +2292,10 @@ function ensureGuildModeration(guildId) {
             modLogChannelId: MOD_LOG_CHANNEL_ID || null,
             lockdownChannelId: null,
             nextCaseId: 1,
-            warnings: {}
+            nextReportId: 1,
+            reports: [],
+            warnings: {},
+            panelMessageIds: {}
         };
         saveModerationStore();
     }
@@ -1854,11 +2306,164 @@ function ensureGuildModeration(guildId) {
         g.lockdownChannelId = null;
     if (g.nextCaseId === undefined || g.nextCaseId < 1)
         g.nextCaseId = 1;
+    if (g.nextReportId === undefined || g.nextReportId < 1)
+        g.nextReportId = 1;
+    if (!Array.isArray(g.reports))
+        g.reports = [];
     if (!g.warnings || typeof g.warnings !== "object")
         g.warnings = {};
+    if (!g.panelMessageIds || typeof g.panelMessageIds !== "object")
+        g.panelMessageIds = {};
     moderationStore.guilds[guildId] = g;
     saveModerationStore();
     return moderationStore.guilds[guildId];
+}
+function getGuildPanelMessageId(guildId, panel) {
+    const cfg = ensureGuildModeration(guildId);
+    const value = cfg.panelMessageIds?.[panel];
+    return value ? String(value) : null;
+}
+function setGuildPanelMessageId(guildId, panel, messageId) {
+    const cfg = ensureGuildModeration(guildId);
+    if (!cfg.panelMessageIds)
+        cfg.panelMessageIds = {};
+    cfg.panelMessageIds[panel] = messageId;
+    saveModerationStore();
+}
+function getGuildUserReports(guildId) {
+    return ensureGuildModeration(guildId).reports || [];
+}
+function createGuildUserReport(input) {
+    const cfg = ensureGuildModeration(input.guildId);
+    const entry = {
+        id: cfg.nextReportId || 1,
+        reporterId: input.reporterId,
+        targetUserId: input.targetUserId,
+        targetTag: input.targetTag,
+        summary: input.summary.slice(0, 180),
+        details: input.details.slice(0, 900),
+        evidence: input.evidence ? input.evidence.slice(0, 500) : null,
+        status: "open",
+        createdAt: Date.now(),
+        resolvedAt: null,
+        resolvedById: null,
+        resolutionNote: null
+    };
+    cfg.nextReportId = (cfg.nextReportId || 1) + 1;
+    if (!cfg.reports)
+        cfg.reports = [];
+    cfg.reports.push(entry);
+    saveModerationStore();
+    return entry;
+}
+async function sendFormalUserReportLog(guild, entry) {
+    const channel = guild.channels.cache.get(REPORT_LOG_CHANNEL_ID) || await guild.channels.fetch(REPORT_LOG_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+        return;
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0xb91c1c)
+        .setTitle(`Report #${entry.id} Filed`)
+        .addFields({ name: "Target", value: `<@${entry.targetUserId}> (${entry.targetTag})`, inline: false }, { name: "Reporter", value: `<@${entry.reporterId}>`, inline: true }, { name: "Status", value: entry.status.toUpperCase(), inline: true }, { name: "Summary", value: entry.summary || "No summary provided.", inline: false }, { name: "Details", value: entry.details || "No details provided.", inline: false }, { name: "Evidence", value: entry.evidence || "Not provided", inline: false })
+        .setTimestamp(new Date(entry.createdAt)), "FN Admin Report Ledger", `${guild.name} report log`);
+    await channel.send({ embeds: [embed.toJSON()], allowedMentions: { parse: [] } }).catch(() => undefined);
+}
+function parseUserIdFromReportTarget(raw) {
+    const trimmed = raw.trim();
+    const mentionMatch = trimmed.match(/^<@!?(\d{17,21})>$/);
+    if (mentionMatch)
+        return mentionMatch[1];
+    if (/^\d{17,21}$/.test(trimmed))
+        return trimmed;
+    return null;
+}
+async function submitFormalUserReport(input) {
+    const entry = createGuildUserReport({
+        guildId: input.guild.id,
+        reporterId: input.reporterId,
+        targetUserId: input.targetUser.id,
+        targetTag: input.targetUser.tag || input.targetUser.username,
+        summary: input.summary,
+        details: input.details,
+        evidence: input.evidence
+    });
+    await sendFormalUserReportLog(input.guild, entry);
+    await sendModLog(input.guild.id, `Formal Report Filed #${entry.id}`, [
+        { name: "Reporter", value: `<@${entry.reporterId}>`, inline: true },
+        { name: "Target", value: `<@${entry.targetUserId}>`, inline: true },
+        { name: "Status", value: entry.status.toUpperCase(), inline: true },
+        { name: "Summary", value: entry.summary || "No summary provided.", inline: false },
+        { name: "Evidence", value: entry.evidence || "Not provided", inline: false }
+    ]);
+    const totalReportsForTarget = getGuildUserReports(input.guild.id)
+        .filter(report => report.targetUserId === input.targetUser.id)
+        .length;
+    const flagged = totalReportsForTarget >= 10;
+    appendAuditEvent("report_intake_submitted", {
+        guildId: input.guild.id,
+        reportId: entry.id,
+        reporterId: input.reporterId,
+        targetUserId: input.targetUser.id,
+        summary: entry.summary,
+        evidenceProvided: Boolean(input.evidence),
+        totalReportsForTarget,
+        flagged
+    });
+    return { entry, totalReportsForTarget, flagged };
+}
+async function sendFormalUserReportResolutionLog(guild, entry) {
+    const channel = guild.channels.cache.get(REPORT_LOG_CHANNEL_ID) || await guild.channels.fetch(REPORT_LOG_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+        return;
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x16a34a)
+        .setTitle(`Report #${entry.id} Resolved`)
+        .addFields({ name: "Target", value: `<@${entry.targetUserId}> (${entry.targetTag})`, inline: false }, { name: "Reporter", value: `<@${entry.reporterId}>`, inline: true }, { name: "Resolved By", value: entry.resolvedById ? `<@${entry.resolvedById}>` : "Unknown", inline: true }, { name: "Disposition", value: entry.resolutionNote || "No note provided.", inline: false }, { name: "Summary", value: entry.summary || "No summary provided.", inline: false })
+        .setTimestamp(new Date(entry.resolvedAt || Date.now())), "FN Admin Report Ledger", `${guild.name} report resolution`);
+    await channel.send({ embeds: [embed.toJSON()], allowedMentions: { parse: [] } }).catch(() => undefined);
+}
+async function resolveFormalUserReport(input) {
+    const cfg = ensureGuildModeration(input.guild.id);
+    const reports = cfg.reports || [];
+    const openForTarget = reports
+        .filter(report => report.targetUserId === input.targetUserId && report.status === "open")
+        .sort((a, b) => b.createdAt - a.createdAt);
+    if (!openForTarget.length) {
+        return { ok: false, error: "No open reports exist for that user." };
+    }
+    let entry;
+    if (input.reportId && input.reportId > 0) {
+        entry = openForTarget.find(report => report.id === input.reportId);
+        if (!entry) {
+            return { ok: false, error: "That report ID is not an open report for this user." };
+        }
+    }
+    else {
+        entry = openForTarget[0];
+    }
+    entry.status = "resolved";
+    entry.resolvedAt = Date.now();
+    entry.resolvedById = input.actorId;
+    entry.resolutionNote = `[${input.action}] ${input.reason}`.slice(0, 300);
+    saveModerationStore();
+    await sendFormalUserReportResolutionLog(input.guild, entry);
+    await sendModLog(input.guild.id, `Formal Report Resolved #${entry.id}`, [
+        { name: "Resolved By", value: `<@${input.actorId}>`, inline: true },
+        { name: "Target", value: `<@${entry.targetUserId}>`, inline: true },
+        { name: "Disposition", value: input.action, inline: true },
+        { name: "Reason", value: input.reason || "No reason provided.", inline: false },
+        { name: "Remaining Open Reports On User", value: `${(cfg.reports || []).filter(report => report.targetUserId === input.targetUserId && report.status === "open").length}`, inline: true }
+    ]);
+    const remainingOpenForTarget = (cfg.reports || []).filter(report => report.targetUserId === input.targetUserId && report.status === "open").length;
+    appendAuditEvent("report_resolve", {
+        guildId: input.guild.id,
+        reportId: entry.id,
+        resolverId: input.actorId,
+        targetUserId: input.targetUserId,
+        action: input.action,
+        reason: input.reason,
+        remainingOpenForTarget
+    });
+    return { ok: true, entry, remainingOpenForTarget };
 }
 function parseDurationMs(raw) {
     const match = raw.trim().toLowerCase().match(/^(\d+)(s|m|h|d)$/);
@@ -1910,21 +2515,6 @@ async function sendTicketLog(guildId, title, fields) {
         .setTimestamp(new Date())
         .addFields(fields), "FN Support Ticket Stream", "Ticket event feed");
     await channel.send({ embeds: [embed] }).catch(() => undefined);
-}
-async function sendTicketSlaAlert(guild, title, lines, severity) {
-    const cfg = ensureTicketConfig(guild.id);
-    const targetChannelId = cfg.logChannelId || HEALTH_REPORT_CHANNEL_ID || ensureGuildModeration(guild.id).modLogChannelId || "";
-    if (!targetChannelId)
-        return;
-    const channel = await guild.channels.fetch(targetChannelId).catch(() => null);
-    if (!channel || !channel.isTextBased() || !("send" in channel))
-        return;
-    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
-        .setColor(severity === "error" ? 0xef4444 : 0xf59e0b)
-        .setTitle(`${severity === "error" ? "🚨" : "⚠️"} ${title}`)
-        .setDescription(lines.join("\n"))
-        .setTimestamp(new Date()), "FN SLA Watchdog", "Priority SLA alert");
-    await channel.send({ content: `<@&${TICKET_HANDLER_ROLE_ID}>`, embeds: [embed], allowedMentions: { parse: ["roles"] } }).catch(() => undefined);
 }
 function requireGuild(interaction) {
     if (!interaction.guild)
@@ -2057,6 +2647,25 @@ const TICKET_IDS = {
     intakePlatform: "ticket_intake_platform",
     intakeEvidence: "ticket_intake_evidence",
     csatPrefix: "ticket_csat"
+};
+const REPORT_IDS = {
+    open: "report_open",
+    adminOpen: "report_admin_open",
+    adminModal: "report_admin_modal",
+    adminTarget: "report_admin_target",
+    adminSummary: "report_admin_summary",
+    adminDetails: "report_admin_details",
+    adminEvidence: "report_admin_evidence"
+};
+const GIVEAWAY_IDS = {
+    enterPrefix: "giveaway_enter",
+    raidPanelOpen: "giveaway_raid_item_open",
+    raidItemModal: "giveaway_raid_item_modal",
+    raidItemId: "giveaway_raid_item_id",
+    raidItemQty: "giveaway_raid_item_qty",
+    raidDuration: "giveaway_raid_duration",
+    raidWinners: "giveaway_raid_winners",
+    raidDescription: "giveaway_raid_description"
 };
 const SELL_UI_IDS = {
     menu: "sell_item_picker",
@@ -2244,6 +2853,17 @@ async function runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId) {
         skipped
     });
     return { processed, synced, skipped };
+}
+async function syncXpRolesForUserInGuild(guild, userId, xp) {
+    const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
+    if (!member)
+        return;
+    await syncMemberXpRoles(member, xp);
+    // Retry once with a forced fetch to avoid cache/race misses at threshold crossings.
+    const refreshed = await guild.members.fetch(userId).catch(() => null);
+    if (refreshed) {
+        await syncMemberXpRoles(refreshed, xp);
+    }
 }
 function getPrimaryGuild() {
     return DISCORD_GUILD_ID
@@ -2572,6 +3192,7 @@ function buildRaidUnlockBroadcastEmbed(input) {
         .setColor(0xf59e0b)
         .setTitle("🌟 Premium Unlock Broadcast")
         .setDescription(`${user.username} completed a standout raid operation on **${result.mapLabel || "Unknown AO"}**.`)
+        .setThumbnail(result.bossImageUrl || ARMY_ICON_URL)
         .addFields({
         name: "Operator",
         value: `<@${user.id}>`,
@@ -2665,44 +3286,20 @@ async function runTicketSlaWatchdog(guild, reason) {
     const activeTickets = ticketStore.tickets.filter(t => t.guildId === guild.id &&
         (normalizeTicketStatus(t.status) === "open" || normalizeTicketStatus(t.status) === "claimed" || normalizeTicketStatus(t.status) === "archived"));
     for (const ticket of activeTickets) {
-        const thresholds = buildTicketSlaThresholds(ticket);
-        const sla = (0, ticketOps_1.getTicketSlaEscalationState)(ticket, now, thresholds);
         const status = normalizeTicketStatus(ticket.status);
-        if (sla.firstResponseWarn && shouldEmitTicketSlaAlert(ticket.id, "fr_warn", now)) {
-            await sendTicketSlaAlert(guild, `⏱️ Ticket #${ticket.id} First Response Warning`, [
-                `Channel: <#${ticket.channelId}>`,
-                `Owner: <@${ticket.ownerId}>`,
-                `State: ${status}/${ticket.workflowStatus}`,
-                `No first response yet after ${Math.round(thresholds.firstResponseWarnMs / 60000)} minutes.`
-            ], "warn");
-            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "fr_warn", reason });
-        }
-        if (sla.firstResponseBreach && shouldEmitTicketSlaAlert(ticket.id, "fr_breach", now)) {
-            await sendTicketSlaAlert(guild, `🚨 Ticket #${ticket.id} First Response Breach`, [
-                `Channel: <#${ticket.channelId}>`,
-                `Owner: <@${ticket.ownerId}>`,
-                `State: ${status}/${ticket.workflowStatus}`,
-                `No first response recorded after ${Math.round(thresholds.firstResponseBreachMs / 60000)} minutes.`
-            ], "error");
-            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "fr_breach", reason });
-        }
-        if (sla.resolveWarn && shouldEmitTicketSlaAlert(ticket.id, "res_warn", now)) {
-            await sendTicketSlaAlert(guild, `⚠️ Ticket #${ticket.id} Resolution Warning`, [
-                `Channel: <#${ticket.channelId}>`,
-                `Owner: <@${ticket.ownerId}>`,
-                `State: ${status}/${ticket.workflowStatus}`,
-                `Ticket is older than ${Math.round(thresholds.resolveWarnMs / 3600000)} hours and still unresolved.`
-            ], "warn");
-            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "res_warn", reason });
-        }
-        if (sla.resolveBreach && shouldEmitTicketSlaAlert(ticket.id, "res_breach", now)) {
-            await sendTicketSlaAlert(guild, `🚨 Ticket #${ticket.id} Resolution Breach`, [
-                `Channel: <#${ticket.channelId}>`,
-                `Owner: <@${ticket.ownerId}>`,
-                `State: ${status}/${ticket.workflowStatus}`,
-                `Ticket exceeded ${Math.round(thresholds.resolveBreachMs / 3600000)} hour resolution target.`
-            ], "error");
-            appendAuditEvent("ticket_sla_alert", { guildId: guild.id, ticketId: ticket.id, level: "res_breach", reason });
+        // SLA alerts are disabled. Instead, auto-close stale unclaimed tickets.
+        if (status === "open" && !ticket.claimedById && now - ticket.createdAt >= UNCLAIMED_TICKET_AUTO_CLOSE_MS) {
+            const closedById = guild.members.me?.id || guild.ownerId;
+            await closeTicketChannel(guild, ticket.channelId, closedById, "Auto-closed: ticket was not claimed within 30 minutes.");
+            appendAuditEvent("ticket_auto_close_unclaimed", {
+                guildId: guild.id,
+                ticketId: ticket.id,
+                channelId: ticket.channelId,
+                ownerId: ticket.ownerId,
+                ageMinutes: Math.floor((now - ticket.createdAt) / 60000),
+                thresholdMinutes: Math.floor(UNCLAIMED_TICKET_AUTO_CLOSE_MS / 60000),
+                reason
+            });
         }
     }
 }
@@ -2868,7 +3465,7 @@ function helpPageGames() {
         .setColor(0x00ffea)
         .setTitle("🪖 War Games Command")
         .setDescription("High-risk tactical casino simulations powered by FN Token$ from raids and live operations rewards.")
-        .addFields({ name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/slots` — 8-lane reward machine\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" }, { name: "Rules of Engagement", value: "• Stake is committed before each round.\n\n• Result boards use mission colors: WIN=green, LOSS=red, PUSH=yellow.\n\n• Action buttons allow replay, bet scaling, and mode rotation." });
+        .addFields({ name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/slots` — Magic Slots (6 reels, straight + zig-zag wins)\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" }, { name: "Rules of Engagement", value: "• Stake is committed before each round.\n\n• Result boards use mission colors: WIN=green, LOSS=red, PUSH=yellow.\n\n• Action buttons allow replay, bet scaling, and mode rotation." });
 }
 function helpPageBank() {
     return new discord_js_1.EmbedBuilder()
@@ -2929,7 +3526,6 @@ function resolveCommandTheme(commandName) {
         "ticketconfig",
         "tickets",
         "ticketanalytics",
-        "ticketsearch",
         "ticketworkload",
         "ticketnote",
         "tickettimeline",
@@ -3803,6 +4399,14 @@ function getRaidGearAutocompleteOptions(userId, kind, focusedRaw) {
         .slice(0, 25)
         .map(entry => ({ name: entry.label, value: entry.id }));
 }
+function getCatalogItemAutocompleteOptions(userId, focusedRaw) {
+    return getInventoryAutocompleteOptions({
+        userId,
+        focusedRaw,
+        includeUnowned: true,
+        sortByOwned: true
+    });
+}
 const OPENABLE_CRATE_IDS = ["common_crate", "rare_crate", "epic_crate", "tactical_crate", "mythic_crate"];
 const CRATE_OPEN_PRIORITY = ["mythic_crate", "tactical_crate", "epic_crate", "rare_crate", "common_crate"];
 const USEITEM_PRIORITY = ["scav_beacon", "combat_stim", "field_ration", "repair_kit"];
@@ -4249,6 +4853,36 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
             }
         }
     }
+    let pmcHpMax = 0;
+    let pmcHpRemaining = 0;
+    let bossHpMax = 0;
+    let bossHpRemaining = 0;
+    if (bossSpawned) {
+        const pmcPool = 500
+            + Math.round(Math.min(260, pmcLevelBeforeRaid * 0.02))
+            + Math.round(Math.max(0, gearBonus.defenseBoost) * 340);
+        const bossPool = Math.round((520 + mapDifficultyIndex * 45)
+            * (boss?.ferocity || 1)
+            * (1 + mapCfg.bossRaidPressure * 0.35));
+        let pmcRemainingPct = 0;
+        let bossRemainingPct = 1;
+        if (!success) {
+            pmcRemainingPct = Math.max(0.04, Math.min(0.32, 0.11 + gearBonus.defenseBoost * 0.7 + finalSuccessChance * 0.08));
+            bossRemainingPct = Math.max(0.62, Math.min(1, 0.82 + (1 - finalSuccessChance) * 0.14));
+        }
+        else if (bossDefeated) {
+            pmcRemainingPct = Math.max(0.14, Math.min(0.9, 0.28 + bossKillChance * 0.42 + gearBonus.defenseBoost * 0.5));
+            bossRemainingPct = 0;
+        }
+        else {
+            pmcRemainingPct = Math.max(0.06, Math.min(0.54, 0.12 + bossKillChance * 0.24 + gearBonus.defenseBoost * 0.4));
+            bossRemainingPct = Math.max(0.1, Math.min(0.88, 0.22 + (1 - bossKillChance) * 0.52));
+        }
+        pmcHpMax = Math.max(120, pmcPool);
+        bossHpMax = Math.max(180, bossPool);
+        pmcHpRemaining = Math.max(0, Math.min(pmcHpMax, Math.round(pmcHpMax * pmcRemainingPct)));
+        bossHpRemaining = Math.max(0, Math.min(bossHpMax, Math.round(bossHpMax * bossRemainingPct)));
+    }
     const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar });
     for (const drop of loot) {
         (0, utils_1.addInventoryItem)(userId, drop.id, drop.qty);
@@ -4342,6 +4976,11 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         bossFerocity: boss?.ferocity,
         bossBonusXp,
         bossKillChance: Math.round(bossKillChance * 100),
+        bossImageUrl: bossSpawned ? (0, bossPortraits_1.getBossPortraitUrl)(boss?.name || mapCfg.bossName, boss?.title) || undefined : undefined,
+        pmcHpMax: bossSpawned ? pmcHpMax : undefined,
+        pmcHpRemaining: bossSpawned ? pmcHpRemaining : undefined,
+        bossHpMax: bossSpawned ? bossHpMax : undefined,
+        bossHpRemaining: bossSpawned ? bossHpRemaining : undefined,
         bossHeartUnlockedName,
         pmcTierUnlockedLabel: pmcTierUnlocked?.label,
         pmcTierUnlockedBadge: pmcTierUnlocked?.badge,
@@ -4432,6 +5071,7 @@ function buildBossRosterPayload() {
         inline: false
     });
     for (const boss of RAID_BOSS_ROSTER) {
+        const portraitUrl = (0, bossPortraits_1.getBossPortraitUrl)(boss.name, boss.title);
         embed.addFields({
             name: `${boss.name} (${boss.title})`,
             value: [
@@ -4440,7 +5080,8 @@ function buildBossRosterPayload() {
                 `Ferocity: ${boss.ferocity.toFixed(2)} | Success Penalty: ${(boss.successPenalty * 100).toFixed(1)}% | Kill Penalty: ${(boss.killPenalty * 100).toFixed(1)}%`,
                 `Boss XP: ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} | Tokens: ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} | Rare Drop: ${(boss.rareDropChance * 100).toFixed(1)}%`,
                 `Drops: Wpn ${boss.weaponDrops.join(", ")} | Arm ${boss.armorDrops.join(", ")}`,
-                `Map Rotation: ${formatBossRotationShares(boss)}`
+                `Map Rotation: ${formatBossRotationShares(boss)}`,
+                `Portrait: ${portraitUrl ? `[View](${portraitUrl})` : "Unavailable"}`
             ].join("\n"),
             inline: false
         });
@@ -4674,7 +5315,7 @@ function getCasinoOddsSnapshot(gameKey) {
     if (gameKey === "crash")
         return "Lower targets cash more often, higher targets spike multiplier but fail more often.";
     if (gameKey === "slots")
-        return "More lines raise hit frequency but increase total wager per spin.";
+        return "Magic Slots uses regular-casino reel odds, with ultra jackpots unlocked only on Ultra Bonus Win Spins.";
     if (gameKey === "coinflip")
         return "Pure 50/50 call before lucky modifier influence.";
     if (gameKey === "baccarat")
@@ -4735,7 +5376,7 @@ function defaultCasinoArgForGame(gameKey) {
     if (gameKey === "crash")
         return "1.50";
     if (gameKey === "slots")
-        return "3";
+        return "single";
     if (gameKey === "coinflip")
         return "heads";
     if (gameKey === "baccarat")
@@ -4862,6 +5503,72 @@ function formatCasinoResult(options) {
         });
     }
     return JSON.stringify(payload);
+}
+function magicSlotSymbolEmoji(symbol) {
+    if (symbol === "WAND")
+        return "🪄";
+    if (symbol === "POTION")
+        return "🧪";
+    if (symbol === "DRAGON")
+        return "🐉";
+    if (symbol === "SPELLBOOK")
+        return "📘";
+    if (symbol === "CRYSTAL")
+        return "🔮";
+    return "✨";
+}
+function formatMagicSlotsResult(options) {
+    const outcomePayload = getCasinoOutcomePayload(options.outcome);
+    const net = options.payout - options.bet;
+    const winSummary = options.winningLines.length
+        ? options.winningLines
+            .slice(0, 4)
+            .map(win => `• ${win.pattern}: ${win.emojiLine} -> ${win.multiplier.toFixed(2)}x (${win.rule})`)
+            .join("\n")
+        : "No winning paths this spin.";
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(outcomePayload.color)
+        .setTitle(`🎰 Magic Slots • ${outcomePayload.label}`)
+        .setDescription("Single-bet rune board spin. Straight rows and zig-zag paths are auto-scored.")
+        .addFields({
+        name: "Spin",
+        value: [
+            `Bet: ${formatTokenAmount(options.bet)}`,
+            `Payout: ${formatTokenAmount(options.payout)}`,
+            `Net: ${formatNetAmount(net)}`,
+            `Wallet: ${formatTokenAmount(options.walletBefore)} -> ${formatTokenAmount(options.walletAfter)}`,
+            `Lucky: ${options.luckyLabel}`,
+            `Effective Return: ${options.scaledMultiplier.toFixed(2)}x`,
+            `Bonus Hits: ${options.totalBonusHits}`,
+            `Base Multiplier: ${options.baseMultiplier.toFixed(2)}x`,
+            `Paid Paths: ${options.winningLines.length}/${options.totalHits}`,
+            `Bonus-Row Jackpot Hits: ${options.jackpotRows}`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "Machine",
+        value: `\`\`\`\n${options.boardRows.join("\n")}\n\`\`\``,
+        inline: false
+    }, {
+        name: "Winning Paths",
+        value: winSummary,
+        inline: false
+    }, {
+        name: "Legend",
+        value: "🪄 Wand  🧪 Potion  🐉 Dragon  📘 Spellbook  🔮 Crystal  ✨ Bonus",
+        inline: false
+    })
+        .setFooter({ text: buildCasinoSessionLine(options.userId) })
+        .setTimestamp(new Date());
+    return JSON.stringify({
+        embed: embed.toJSON(),
+        components: buildCasinoActionComponents({
+            userId: options.userId,
+            gameKey: "slots",
+            bet: Math.max(1, Math.floor(options.bet)),
+            arg: "single"
+        })
+    });
 }
 function playDice(userId, bet, choice) {
     const betError = validateCasinoBet(userId, bet);
@@ -5106,16 +5813,86 @@ function playBlackjack(userId, bet, style) {
         actionMeta: { bet, arg: style }
     });
 }
-function spinSlotSymbol() {
-    const table = [
-        { symbol: "🍒", weight: 28 },
-        { symbol: "🍋", weight: 23 },
-        { symbol: "🔔", weight: 16 },
-        { symbol: "🍀", weight: 13 },
-        { symbol: "💎", weight: 10 },
-        { symbol: "🪖", weight: 7 },
-        { symbol: "7️⃣", weight: 3 }
-    ];
+const MAGIC_SLOT_REELS = 6;
+const MAGIC_SLOT_ROWS = 6;
+const MAGIC_SLOT_RETURN_SCALE = 0.25;
+const MAGIC_SLOT_MAX_PAID_PATTERNS = 3;
+const MAGIC_SLOT_BONUS_ROW_JACKPOT_MULTIPLIER = 220;
+const MAGIC_SLOT_ULTRA_BONUS_ROW_JACKPOT_MULTIPLIER = 1500;
+const MAGIC_SLOT_ZIGZAG_PAYOUT_FACTOR = 0.88;
+const MAGIC_SLOT_PAYTABLE = {
+    WAND: { 3: 0.28, 4: 0.9, 5: 2.8, 6: 7 },
+    POTION: { 3: 0.36, 4: 1.2, 5: 3.8, 6: 9.5 },
+    SPELLBOOK: { 3: 0.48, 4: 1.7, 5: 5.6, 6: 13.5 },
+    CRYSTAL: { 3: 0.72, 4: 2.6, 5: 8.9, 6: 22 },
+    DRAGON: { 3: 1.2, 4: 4.8, 5: 17, 6: 68 }
+};
+const MAGIC_SLOT_REEL_TABLES = [
+    [
+        { symbol: "WAND", weight: 40 },
+        { symbol: "POTION", weight: 30 },
+        { symbol: "SPELLBOOK", weight: 20 },
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 4 },
+        { symbol: "BONUS", weight: 0.9 }
+    ],
+    [
+        { symbol: "WAND", weight: 38 },
+        { symbol: "POTION", weight: 31 },
+        { symbol: "SPELLBOOK", weight: 19 },
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 4 },
+        { symbol: "BONUS", weight: 0.95 }
+    ],
+    [
+        { symbol: "WAND", weight: 36 },
+        { symbol: "POTION", weight: 31 },
+        { symbol: "SPELLBOOK", weight: 20 },
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 5 },
+        { symbol: "BONUS", weight: 1.05 }
+    ],
+    [
+        { symbol: "WAND", weight: 36 },
+        { symbol: "POTION", weight: 30 },
+        { symbol: "SPELLBOOK", weight: 20 },
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 5 },
+        { symbol: "BONUS", weight: 1.05 }
+    ],
+    [
+        { symbol: "WAND", weight: 37 },
+        { symbol: "POTION", weight: 30 },
+        { symbol: "SPELLBOOK", weight: 19 },
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 5 },
+        { symbol: "BONUS", weight: 0.95 }
+    ],
+    [
+        { symbol: "WAND", weight: 39 },
+        { symbol: "POTION", weight: 29 },
+        { symbol: "SPELLBOOK", weight: 19 },
+        { symbol: "CRYSTAL", weight: 10 },
+        { symbol: "DRAGON", weight: 4 },
+        { symbol: "BONUS", weight: 0.9 }
+    ]
+];
+const MAGIC_SLOT_PATTERNS = [
+    { name: "Runic Row 1", kind: "straight", path: [0, 0, 0, 0, 0, 0] },
+    { name: "Runic Row 2", kind: "straight", path: [1, 1, 1, 1, 1, 1] },
+    { name: "Runic Row 3", kind: "straight", path: [2, 2, 2, 2, 2, 2] },
+    { name: "Runic Row 4", kind: "straight", path: [3, 3, 3, 3, 3, 3] },
+    { name: "Runic Row 5", kind: "straight", path: [4, 4, 4, 4, 4, 4] },
+    { name: "Runic Row 6", kind: "straight", path: [5, 5, 5, 5, 5, 5] },
+    { name: "Storm Weave 1", kind: "zigzag", path: [0, 1, 0, 1, 0, 1] },
+    { name: "Storm Weave 2", kind: "zigzag", path: [1, 2, 1, 2, 1, 2] },
+    { name: "Storm Weave 3", kind: "zigzag", path: [2, 3, 2, 3, 2, 3] },
+    { name: "Storm Weave 4", kind: "zigzag", path: [3, 4, 3, 4, 3, 4] },
+    { name: "Storm Weave 5", kind: "zigzag", path: [4, 5, 4, 5, 4, 5] },
+    { name: "Arcane Crown", kind: "zigzag", path: [0, 1, 2, 1, 0, 1] }
+];
+function spinMagicSlotSymbol(reelIndex) {
+    const table = MAGIC_SLOT_REEL_TABLES[reelIndex] || MAGIC_SLOT_REEL_TABLES[0];
     const total = table.reduce((sum, entry) => sum + entry.weight, 0);
     let roll = Math.random() * total;
     for (const entry of table) {
@@ -5123,26 +5900,85 @@ function spinSlotSymbol() {
         if (roll <= 0)
             return entry.symbol;
     }
-    return "🍒";
+    return "POTION";
 }
-function slotLineMultiplier(a, b, c) {
-    if (a === b && b === c) {
-        if (a === "7️⃣")
-            return 10;
-        if (a === "🪖")
-            return 7;
-        if (a === "💎")
-            return 5;
-        if (a === "🍀")
-            return 3.2;
-        if (a === "🔔")
-            return 2.5;
-        return 2;
+function getMagicSlotSymbolBoost(symbol) {
+    if (symbol === "DRAGON")
+        return 1.06;
+    if (symbol === "CRYSTAL")
+        return 1.04;
+    if (symbol === "SPELLBOOK")
+        return 1.02;
+    if (symbol === "POTION")
+        return 1.01;
+    return 1;
+}
+function detectUltraBonusWinSpin(grid, preliminaryWins) {
+    const totalBonusSymbols = grid.flat().filter(symbol => symbol === "BONUS").length;
+    const bonusAssistedPremiumLine = preliminaryWins.some(win => win.streak >= 4 && win.bonusHits >= 1);
+    return totalBonusSymbols >= 3 && bonusAssistedPremiumLine;
+}
+function scoreMagicPattern(symbols, kind) {
+    const allBonus = symbols.every(symbol => symbol === "BONUS");
+    if (allBonus) {
+        return {
+            hit: true,
+            streak: MAGIC_SLOT_REELS,
+            anchor: null,
+            bonusHits: MAGIC_SLOT_REELS,
+            multiplier: MAGIC_SLOT_BONUS_ROW_JACKPOT_MULTIPLIER,
+            rule: "full-bonus jackpot row",
+            jackpot: true
+        };
     }
-    if (a === b || b === c || a === c) {
-        return 0.4;
+    let anchor = null;
+    let streak = 0;
+    let bonusHits = 0;
+    for (const symbol of symbols) {
+        if (symbol === "BONUS") {
+            streak += 1;
+            bonusHits += 1;
+            continue;
+        }
+        if (!anchor) {
+            anchor = symbol;
+            streak += 1;
+            continue;
+        }
+        if (symbol === anchor) {
+            streak += 1;
+            continue;
+        }
+        break;
     }
-    return 0;
+    if (!anchor || streak < 3) {
+        return {
+            hit: false,
+            streak,
+            anchor,
+            bonusHits,
+            multiplier: 0,
+            rule: "no_match",
+            jackpot: false
+        };
+    }
+    const payoutKey = Math.min(6, Math.max(3, streak));
+    let base = MAGIC_SLOT_PAYTABLE[anchor][payoutKey];
+    let rule = `${payoutKey}-${anchor.toLowerCase()} ${kind}`;
+    if (kind === "zigzag") {
+        base *= MAGIC_SLOT_ZIGZAG_PAYOUT_FACTOR;
+    }
+    const symbolBoost = getMagicSlotSymbolBoost(anchor);
+    const bonusBoost = bonusHits > 0 ? 1 + (bonusHits * 0.06) : 1;
+    return {
+        hit: true,
+        streak,
+        anchor,
+        bonusHits,
+        multiplier: base * symbolBoost * bonusBoost,
+        rule,
+        jackpot: false
+    };
 }
 function buildCrashMeter(target, crashPoint) {
     const max = 10;
@@ -5162,72 +5998,94 @@ function buildCrashMeter(target, crashPoint) {
     }
     return `[${cells.join("")}]`;
 }
-function playSlots(userId, bet, lines) {
-    if (lines < 1 || lines > 8)
-        return "Lines must be between 1 and 8.";
-    const totalBet = bet * lines;
+function playSlots(userId, bet) {
+    const totalBet = bet;
     const betError = validateCasinoBet(userId, totalBet);
     if (betError)
         return betError;
     const walletBefore = (0, utils_1.getTokens)(userId);
     (0, utils_1.removeTokens)(userId, totalBet);
-    const machineRows = Array.from({ length: 8 }, () => [
-        spinSlotSymbol(),
-        spinSlotSymbol(),
-        spinSlotSymbol()
-    ]);
-    let baseMultiplier = 0;
-    const lineWins = [];
-    const rowMultipliers = [];
-    for (let i = 0; i < lines; i++) {
-        const row = machineRows[i];
-        const [a, b, c] = row;
-        const lineMultiplier = slotLineMultiplier(a, b, c);
-        rowMultipliers[i] = lineMultiplier;
-        if (lineMultiplier > 0) {
-            baseMultiplier += lineMultiplier;
-            lineWins.push({ row: i + 1, symbols: `${a}${b}${c}`, multiplier: lineMultiplier });
-        }
+    const machineGrid = Array.from({ length: MAGIC_SLOT_ROWS }, () => Array.from({ length: MAGIC_SLOT_REELS }, (_, reelIndex) => spinMagicSlotSymbol(reelIndex)));
+    const activePatterns = MAGIC_SLOT_PATTERNS;
+    const preliminaryWins = [];
+    for (const pattern of activePatterns) {
+        const lineSymbols = pattern.path.map((rowIndex, reelIndex) => machineGrid[rowIndex]?.[reelIndex] || "WAND");
+        const scored = scoreMagicPattern(lineSymbols, pattern.kind);
+        if (!scored.hit || scored.multiplier <= 0)
+            continue;
+        preliminaryWins.push({ streak: scored.streak, bonusHits: scored.bonusHits });
     }
-    const lucky = rollLuckyMultiplier();
-    const totalMultiplier = Math.max(0, baseMultiplier) * lucky.multiplier;
-    const bonusPayout = totalMultiplier > 0 ? Math.max(1, Math.floor(bet * totalMultiplier)) : 0;
-    const payout = bonusPayout > 0 ? totalBet + bonusPayout : 0;
+    const ultraBonusMode = detectUltraBonusWinSpin(machineGrid, preliminaryWins);
+    const lineWins = [];
+    let jackpotRows = 0;
+    for (const pattern of activePatterns) {
+        const lineSymbols = pattern.path.map((rowIndex, reelIndex) => machineGrid[rowIndex]?.[reelIndex] || "WAND");
+        const scored = scoreMagicPattern(lineSymbols, pattern.kind);
+        if (!scored.hit || scored.multiplier <= 0)
+            continue;
+        let effectiveMultiplier = scored.multiplier;
+        let effectiveRule = scored.rule;
+        if (scored.jackpot && ultraBonusMode) {
+            effectiveMultiplier = MAGIC_SLOT_ULTRA_BONUS_ROW_JACKPOT_MULTIPLIER;
+            effectiveRule = "ultra bonus jackpot row";
+            jackpotRows += 1;
+        }
+        else if (scored.jackpot) {
+            jackpotRows += 1;
+        }
+        else if (ultraBonusMode) {
+            if (scored.anchor === "DRAGON" && scored.streak >= 6 && scored.bonusHits >= 1) {
+                effectiveMultiplier = pattern.kind === "straight" ? 320 : 250;
+                effectiveRule = pattern.kind === "straight" ? "ultra dragon line" : "ultra dragon weave";
+            }
+            else if (scored.anchor === "CRYSTAL" && scored.streak >= 6 && scored.bonusHits >= 1) {
+                effectiveMultiplier = pattern.kind === "straight" ? 110 : 82;
+                effectiveRule = pattern.kind === "straight" ? "ultra prism line" : "ultra prism weave";
+            }
+        }
+        lineWins.push({
+            pattern: pattern.name,
+            symbols: lineSymbols.join(" | "),
+            multiplier: effectiveMultiplier,
+            rule: effectiveRule,
+            streak: scored.streak,
+            bonusHits: scored.bonusHits
+        });
+    }
+    const paidWins = [...lineWins]
+        .sort((a, b) => b.multiplier - a.multiplier)
+        .slice(0, MAGIC_SLOT_MAX_PAID_PATTERNS);
+    const baseMultiplier = paidWins.reduce((sum, win) => sum + win.multiplier, 0);
+    const totalBonusHits = paidWins.reduce((sum, win) => sum + win.bonusHits, 0);
+    const totalMultiplier = Math.max(0, baseMultiplier);
+    const scaledMultiplier = totalMultiplier * MAGIC_SLOT_RETURN_SCALE;
+    const payout = totalMultiplier > 0 ? Math.max(1, Math.floor(totalBet * scaledMultiplier)) : 0;
     if (payout > 0)
         (0, utils_1.addTokens)(userId, payout);
-    (0, utils_1.recordGameResult)(userId, "slots", payout > 0 ? "win" : "loss", totalBet, payout);
-    const boardRows = machineRows.map((row, idx) => {
-        const isActive = idx < lines;
-        const rowMultiplier = rowMultipliers[idx] ?? 0;
-        const marker = isActive ? (rowMultiplier > 0 ? "◆" : "•") : "·";
-        const resultTag = isActive && rowMultiplier > 0 ? `  ${rowMultiplier.toFixed(2)}x line hit` : "";
-        return `${marker} L${idx + 1}  ${row[0]} ${row[1]} ${row[2]}${resultTag}`;
-    });
-    const winningLines = lineWins.length
-        ? lineWins.map(win => `L${win.row}: ${win.symbols} -> ${win.multiplier.toFixed(2)}x`).join("\n")
-        : "None";
-    return formatCasinoResult({
+    const outcome = payout > totalBet ? "win" : payout === totalBet ? "push" : "loss";
+    (0, utils_1.recordGameResult)(userId, "slots", outcome, totalBet, payout);
+    const boardRows = machineGrid.map((row, idx) => `R${idx + 1} ${row.map(symbol => `[${magicSlotSymbolEmoji(symbol)}]`).join("")}`);
+    const winningEmojiLines = paidWins.map(win => ({
+        pattern: win.pattern,
+        emojiLine: win.symbols.split(" | ").map(symbol => magicSlotSymbolEmoji(symbol)).join(" "),
+        multiplier: win.multiplier,
+        rule: win.rule
+    }));
+    return formatMagicSlotsResult({
         userId,
-        gameKey: "slots",
-        gameIcon: "🎰",
-        gameName: "Slots",
-        outcome: payout > 0 ? "win" : "loss",
+        outcome,
         bet: totalBet,
         payout,
         walletBefore,
         walletAfter: (0, utils_1.getTokens)(userId),
-        luckyLabel: lucky.label,
-        details: [
-            { label: "Bet Per Line", value: formatTokenAmount(bet) },
-            { label: "Active Lines", value: `${lines}/8` },
-            { label: "Base Multiplier", value: `${baseMultiplier.toFixed(2)}x` },
-            { label: "Winning Lines", value: String(lineWins.length) }
-        ],
-        sections: [
-            { title: "Machine Grid", value: boardRows.join("\n") },
-            { title: "Line Hits", value: winningLines }
-        ],
-        actionMeta: { bet, arg: String(lines) }
+        luckyLabel: ultraBonusMode ? "Ultra Bonus Win Spin (3+ BONUS + bonus-assisted premium line)" : "Standard reel profile",
+        boardRows,
+        winningLines: winningEmojiLines,
+        baseMultiplier,
+        totalBonusHits,
+        totalHits: lineWins.length,
+        jackpotRows,
+        scaledMultiplier
     });
 }
 function playCoinflip(userId, bet, side) {
@@ -5593,8 +6451,7 @@ async function runCasinoQuickAction(input) {
         return { gameKey: resolvedGame, payload: await playCrash(input.userId, effectiveBet, Number.isFinite(target) ? target : 1.5) };
     }
     if (resolvedGame === "slots") {
-        const lines = Math.max(1, Math.min(8, Number.parseInt(arg || "3", 10) || 3));
-        return { gameKey: resolvedGame, payload: playSlots(input.userId, effectiveBet, lines) };
+        return { gameKey: resolvedGame, payload: playSlots(input.userId, effectiveBet) };
     }
     if (resolvedGame === "coinflip")
         return { gameKey: resolvedGame, payload: playCoinflip(input.userId, effectiveBet, arg || "heads") };
@@ -5618,7 +6475,7 @@ function buildTicketPanelPayload(guildName) {
         .addFields({
         name: "🧭 Desk Purpose",
         value: [
-            "Private support lane for reports, appeals, account help, and operations issues.",
+            "Private support lane for account help, billing, appeals, and operations issues.",
             "",
             "Built for clean tracking from open to final resolution."
         ].join("\n")
@@ -5664,8 +6521,8 @@ function buildTicketPanelPayload(guildName) {
         ].join("\n")
     }, {
         name: "⚖️ Rules",
-        value: "One open ticket per user. Spam or abuse may trigger moderation actions."
-    }), "FN Support Front Desk", `${guildName} support panel`);
+        value: "One active support ticket per user. Spam or abuse may trigger moderation actions."
+    }), "FN Support Desk", `${guildName} support panel`);
     const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
         .setCustomId(TICKET_IDS.open)
         .setLabel("Open Support Ticket")
@@ -5677,11 +6534,35 @@ function buildTicketPanelPayload(guildName) {
         isTicketPanel: true
     };
 }
+function buildRaidItemGiveawayPanelPayload(guildName) {
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle("🎁 Titan Raid Item Giveaway Desk")
+        .setDescription([
+        `Create auto-awarded raid item giveaways for **${guildName}** using the full raid item catalog.`,
+        "",
+        "This panel is admin-facing and creates giveaways where winners automatically receive the configured raid item in inventory."
+    ].join("\n"))
+        .addFields({ name: "Modes", value: "• `/giveaway` for any freeform prize\n• `/itemgiveaway` for slash-driven raid item rewards\n• Button below for quick raid-item creation", inline: false }, { name: "Auto Reward", value: "Raid-item giveaways automatically deliver the selected item to each winner when the giveaway ends.", inline: false }), "Titan Giveaway Control", `${guildName} raid item giveaway panel`);
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(GIVEAWAY_IDS.raidPanelOpen)
+        .setLabel("Create Raid Item Giveaway")
+        .setEmoji("🎁")
+        .setStyle(discord_js_1.ButtonStyle.Primary));
+    return { embed: embed.toJSON(), components: [row.toJSON()] };
+}
 function messageHasTicketOpenButton(message) {
     const rows = Array.isArray(message?.components) ? message.components : [];
     return rows.some((row) => {
         const components = Array.isArray(row?.components) ? row.components : [];
         return components.some((component) => component?.customId === TICKET_IDS.open);
+    });
+}
+function messageHasReportOpenButton(message) {
+    const rows = Array.isArray(message?.components) ? message.components : [];
+    return rows.some((row) => {
+        const components = Array.isArray(row?.components) ? row.components : [];
+        return components.some((component) => component?.customId === REPORT_IDS.open);
     });
 }
 async function upsertTicketPanelInChannel(guild, channelId) {
@@ -5749,50 +6630,62 @@ async function ensurePermanentTicketPanelForGuild(guild) {
         console.warn(`Permanent ticket panel upsert skipped for guild ${guild.id}: ${result.error}`);
     }
 }
+async function removeLegacyReportPanelForGuild(guild) {
+    if (!REPORT_PANEL_CHANNEL_ID)
+        return;
+    const channel = guild.channels.cache.get(REPORT_PANEL_CHANNEL_ID) || await guild.channels.fetch(REPORT_PANEL_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+        return;
+    const storedReportPanelId = getGuildPanelMessageId(guild.id, "report");
+    if (storedReportPanelId) {
+        const stored = await channel.messages.fetch(storedReportPanelId).catch(() => null);
+        await stored?.delete().catch(() => undefined);
+        setGuildPanelMessageId(guild.id, "report", null);
+    }
+    let beforeId;
+    for (let i = 0; i < 6; i++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+        if (!batch || !batch.size)
+            break;
+        const legacy = batch.filter(message => message.author.id === (client.user?.id || "")
+            && (message.embeds[0]?.title === "🚨 FN Report Desk" || messageHasReportOpenButton(message)));
+        for (const message of legacy.values()) {
+            await message.delete().catch(() => undefined);
+        }
+        const last = batch.last();
+        beforeId = last?.id;
+        if (!beforeId)
+            break;
+    }
+}
+async function ensureAdminReportPanelForGuild(guild) {
+    if (!REPORT_ADMIN_PANEL_CHANNEL_ID)
+        return;
+    const result = await upsertAdminReportPanelInChannel(guild, REPORT_ADMIN_PANEL_CHANNEL_ID);
+    if (result.ok) {
+        appendAuditEvent("admin_report_panel_upsert", {
+            guildId: guild.id,
+            channelId: REPORT_ADMIN_PANEL_CHANNEL_ID,
+            action: result.action
+        });
+    }
+    else {
+        appendAuditEvent("admin_report_panel_upsert_failed", {
+            guildId: guild.id,
+            channelId: REPORT_ADMIN_PANEL_CHANNEL_ID,
+            error: result.error
+        });
+        console.warn(`Admin report panel upsert skipped for guild ${guild.id}: ${result.error}`);
+    }
+}
 function buildWelcomePayload(guildName) {
     const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
-        .setColor(0xf59e0b)
-        .setTitle(`🌤️ Welcome to ${guildName}`)
-        .setDescription([
-        `Glad you're here. **${guildName}** is meant to stay active, sharp, and easy to navigate without burying people in fluff.`,
-        "",
-        "Read the rules below once, respect staff calls when they are made, and keep your time here clean so the server stays useful for everyone.",
-        "",
-        "✨ **Quick read. Straight expectations. No guesswork.**"
-    ].join("\n"))
-        .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f31f.png")
-        .setImage("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f6e1.png")
+        .setColor(0x3b82f6)
+        .setTitle("Welcome to FN Tarkov")
         .addFields({
-        name: "🧭 Server Tone",
-        value: [
-            "Be civil, be direct, and do not turn routine moderation into a debate stage.",
-            "",
-            "Staff decisions are operational calls first. If you want leniency, give staff a reason to trust your behavior."
-        ].join("\n")
-    }, {
-        name: "⛔ Hard Bans",
-        value: [
-            "**Disrespect toward Owners** or building up warnings/reports past a reasonable limit can lead straight to removal.",
-            "",
-            "**Owners and Admins hold final say** and may ban for any reason they judge necessary for the server.",
-            "",
-            "📝 **All bans are appealable one time only.**"
-        ].join("\n")
-    }, {
-        name: "🚪 Kicks",
-        value: [
-            "Kicks happen when you clearly push an admin too far for obvious reasons and staff decide the behavior needs to stop immediately.",
-            "",
-            "**Owners/Admins hold the authority to kick or ban who they please.**"
-        ].join("\n")
-    }, {
-        name: "📌 What To Remember",
-        value: [
-            "• Respect the people running the server.",
-            "• Do not stack warnings, reports, or avoidable friction.",
-            "• Appeals are limited, so do not waste the one chance you get."
-        ].join("\n")
-    }), "Welcome Desk", `${guildName} rules board`);
+        name: "Discord Invite",
+        value: "https://discord.gg/fnt"
+    }), "Welcome Desk", `${guildName} welcome page`);
     return { embed: embed.toJSON() };
 }
 async function upsertWelcomePanelInChannel(guild, channelId) {
@@ -5803,18 +6696,33 @@ async function upsertWelcomePanelInChannel(guild, channelId) {
     }
     const payload = buildWelcomePayload(guild.name);
     const embed = payload.embed;
+    const storedMessageId = getGuildPanelMessageId(guild.id, "welcome");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) {
+            return { ok: true, action: "updated" };
+        }
+        setGuildPanelMessageId(guild.id, "welcome", null);
+    }
     let candidateId = null;
+    const duplicateIds = [];
     let beforeId;
-    const expectedTitle = `🌤️ Welcome to ${guild.name}`;
-    for (let i = 0; i < 5; i++) {
+    const expectedTitle = "Welcome to FN Tarkov";
+    for (let i = 0; i < 10; i++) {
         const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
         if (!batch || !batch.size)
             break;
-        const candidate = batch.find(message => message.author.id === (client.user?.id || "")
+        const candidates = batch.filter(message => message.author.id === (client.user?.id || "")
             && (message.embeds[0]?.title === expectedTitle
-                || message.embeds[0]?.footer?.text?.includes("rules board")));
+                || message.embeds[0]?.footer?.text?.includes("welcome page")));
+        const candidate = candidates.first();
         if (candidate) {
             candidateId = candidate.id;
+            for (const duplicate of candidates.values()) {
+                if (duplicate.id !== candidate.id)
+                    duplicateIds.push(duplicate.id);
+            }
             break;
         }
         const last = batch.last();
@@ -5828,12 +6736,20 @@ async function upsertWelcomePanelInChannel(guild, channelId) {
         if (!edited) {
             return { ok: false, error: "Failed to refresh welcome panel message. Check bot permissions for this channel." };
         }
+        setGuildPanelMessageId(guild.id, "welcome", candidateId);
+        for (const duplicateId of duplicateIds) {
+            if (duplicateId === candidateId)
+                continue;
+            const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);
+            await duplicate?.delete().catch(() => undefined);
+        }
         return { ok: true, action: "updated" };
     }
     const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
     if (!sent) {
         return { ok: false, error: "Failed to post welcome panel message. Check bot permissions for this channel." };
     }
+    setGuildPanelMessageId(guild.id, "welcome", sent.id);
     return { ok: true, action: "posted" };
 }
 async function ensureWelcomePanelForGuild(guild) {
@@ -5863,55 +6779,50 @@ function buildBotFeatureBriefPayload(guildName) {
         .setDescription([
         `Titan Bot is the primary operations and progression system for **${guildName}**.`,
         "",
-        "It combines persistent raid gameplay, economy progression, moderation controls, and support workflows in one service.",
+        "Use the command menu below to flip through live command pages and read what each bot area does.",
         "",
-        "Use this message as the official reference for capabilities, command entry points, and support flow."
+        "This post is the public command reference for new members, returning players, and staff."
     ].join("\n"))
         .addFields({
-        name: "🧭 Core Scope",
+        name: "🧭 What This Bot Covers",
         value: [
-            "• Persistent raid progression with profile state that carries across sessions.",
-            "• Economy and inventory systems for long-term member engagement.",
-            "• Moderation and support tooling for daily server operations."
+            "• Raid progression and PMC profiles",
+            "• Economy, inventory, crates, and trading",
+            "• Giveaways, moderation, support, and report tooling"
         ].join("\n")
     }, {
-        name: "⚔️ Member Journey",
+        name: "📚 Browse Command Pages",
         value: [
-            "• `/quickstart` to onboard.",
-            "• `/pmc` and `/raid` to run progression loops.",
-            "• `/inventory` and `/shop` to manage resources and upgrades."
+            "• Mission Brief",
+            "• XP Ops",
+            "• Raid Ops",
+            "• Supply Crates",
+            "• Training Grounds",
+            "• Bank and Trade",
+            "• Moderation Desk"
         ].join("\n")
     }, {
-        name: "🛡️ Operations Layer",
+        name: "🚀 Fast Start",
         value: [
-            "• Role-gated moderation commands: warn, timeout, kick, ban, unban, and purge.",
-            "• Ticket lifecycle support from open to resolve with audit visibility.",
-            "• Runtime telemetry and health checks for safer maintenance."
+            "• `/quickstart` — guided onboarding",
+            "• `/help` — direct personal help menu",
+            "• `/ticket` — support request",
+            "• `/reportintake` — submit a report"
         ].join("\n")
     }, {
-        name: "🚀 High-Use Commands",
+        name: "🔔 Public Guide Rules",
         value: [
-            "• `/help` — command directory",
-            "• `/quickstart` — guided setup",
-            "• `/pmc` `/raid` `/inventory` `/ticket`"
-        ].join("\n")
-    }, {
-        name: "🧩 Panel Template",
-        value: [
-            "**Title:** About Titan Bot",
-            "**Sections:** Core Scope | Member Journey | Operations Layer | High-Use Commands",
-            "**CTA:** Start with `/help` and `/quickstart`",
-            "**Support:** Use `/ticket` for account, bug, or moderation requests"
-        ].join("\n")
-    }, {
-        name: "🔔 Governance Note",
-        value: [
-            "This panel is auto-maintained by Titan Bot. Keep this channel readable and use command replies/tickets for support."
+            "• Click the menu to change pages",
+            "• Keep this channel readable; don’t reply with support requests here",
+            "• Use tickets, reports, or commands for action paths"
         ].join("\n")
     }), `${guildName} About Titan Bot`, "About Titan Bot • Official Reference Panel");
     return {
         embed: embed.toJSON(),
-        isBotFeatureBrief: true
+        components: helpDropdown("general").map(row => row.toJSON()),
+        isBotFeatureBrief: true,
+        withHelpNav: true,
+        helpPage: "general"
     };
 }
 async function upsertBotFeatureBriefInChannel(guild, channelId) {
@@ -5922,18 +6833,34 @@ async function upsertBotFeatureBriefInChannel(guild, channelId) {
     }
     const payload = buildBotFeatureBriefPayload(guild.name);
     const embed = payload.embed;
+    const components = Array.isArray(payload.components) ? payload.components : [];
+    const storedMessageId = getGuildPanelMessageId(guild.id, "featureBrief");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) {
+            return { ok: true, action: "updated" };
+        }
+        setGuildPanelMessageId(guild.id, "featureBrief", null);
+    }
     let candidateId = null;
+    const duplicateIds = [];
     let beforeId;
     const expectedPrefix = `🛰️ ${guild.name} • About Titan Bot`;
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
         const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
         if (!batch || !batch.size)
             break;
-        const candidate = batch.find(message => message.author.id === (client.user?.id || "")
+        const candidates = batch.filter(message => message.author.id === (client.user?.id || "")
             && (message.embeds[0]?.title === expectedPrefix
                 || message.embeds[0]?.footer?.text?.includes("About Titan Bot")));
+        const candidate = candidates.first();
         if (candidate) {
             candidateId = candidate.id;
+            for (const duplicate of candidates.values()) {
+                if (duplicate.id !== candidate.id)
+                    duplicateIds.push(duplicate.id);
+            }
             break;
         }
         const last = batch.last();
@@ -5943,16 +6870,24 @@ async function upsertBotFeatureBriefInChannel(guild, channelId) {
     }
     if (candidateId) {
         const candidate = await channel.messages.fetch(candidateId).catch(() => null);
-        const edited = await candidate?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
         if (!edited) {
             return { ok: false, error: "Failed to refresh bot feature brief message. Check bot permissions for this channel." };
         }
+        setGuildPanelMessageId(guild.id, "featureBrief", candidateId);
+        for (const duplicateId of duplicateIds) {
+            if (duplicateId === candidateId)
+                continue;
+            const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);
+            await duplicate?.delete().catch(() => undefined);
+        }
         return { ok: true, action: "updated" };
     }
-    const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+    const sent = await channel.send({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
     if (!sent) {
         return { ok: false, error: "Failed to post bot feature brief message. Check bot permissions for this channel." };
     }
+    setGuildPanelMessageId(guild.id, "featureBrief", sent.id);
     return { ok: true, action: "posted" };
 }
 async function ensureBotFeatureBriefForGuild(guild) {
@@ -5997,6 +6932,19 @@ async function findOwnerActiveTicketChannels(guild, owner) {
     matches.sort((a, b) => a.localeCompare(b));
     return matches;
 }
+async function findOwnerActiveTicketChannelsInBucket(guild, owner, bucket) {
+    const activeChannelIds = await findOwnerActiveTicketChannels(guild, owner);
+    const matches = [];
+    for (const channelId of activeChannelIds) {
+        const tracked = await ensureTrackedTicketByChannelId(guild, channelId, owner.id).catch(() => null);
+        if (!tracked)
+            continue;
+        if (getTicketCaseBucket(tracked.category || tracked.reason) === bucket) {
+            matches.push(channelId);
+        }
+    }
+    return matches.sort((a, b) => a.localeCompare(b));
+}
 async function removeTicketStoreEntryByChannelId(channelId) {
     const idx = ticketStore.tickets.findIndex(t => t.channelId === channelId);
     if (idx >= 0) {
@@ -6004,8 +6952,8 @@ async function removeTicketStoreEntryByChannelId(channelId) {
         saveTicketStore();
     }
 }
-async function reconcileOwnerTicketDuplicates(guild, owner, canonicalChannelId) {
-    const active = await findOwnerActiveTicketChannels(guild, owner);
+async function reconcileOwnerTicketDuplicates(guild, owner, canonicalChannelId, bucket) {
+    const active = await findOwnerActiveTicketChannelsInBucket(guild, owner, bucket);
     const duplicates = active.filter(channelId => channelId !== canonicalChannelId);
     if (!duplicates.length)
         return;
@@ -6029,6 +6977,7 @@ async function reconcileOwnerTicketDuplicates(guild, owner, canonicalChannelId) 
 }
 async function createTicketChannel(guild, ownerId, reason, priority = "normal", bypassDeflection = false) {
     recordTicketCreateAttempt();
+    const requestedBucket = getTicketCaseBucket(reason);
     if (!tryAcquireTicketCreateLock(guild.id, ownerId)) {
         recordTicketCreateFailure("in_flight_lock");
         return { error: "Ticket creation is already in progress for your account. Please wait a moment and try again." };
@@ -6045,7 +6994,7 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
         await pruneInaccessibleOwnerTicketRecords(guild);
         // Self-heal stale owner records caused by manual/deleted/inaccessible channels so /ticket works immediately.
         // Iterate until we either find a valid active ticket or no owner-open tickets remain.
-        let existing = findOpenTicketByOwner(guild.id, ownerId);
+        let existing = findOpenTicketByOwnerInBucket(guild.id, ownerId, requestedBucket);
         let prunedAny = false;
         while (existing) {
             const stale = existing;
@@ -6061,7 +7010,7 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
             }
             const idx = ticketStore.tickets.findIndex(t => t.id === stale.id);
             if (idx < 0) {
-                existing = findOpenTicketByOwner(guild.id, ownerId);
+                existing = findOpenTicketByOwnerInBucket(guild.id, ownerId, requestedBucket);
                 continue;
             }
             ticketStore.tickets.splice(idx, 1);
@@ -6073,26 +7022,30 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
                 channelId: stale.channelId,
                 reason: "Missing/inaccessible channel during create"
             });
-            existing = findOpenTicketByOwner(guild.id, ownerId);
+            existing = findOpenTicketByOwnerInBucket(guild.id, ownerId, requestedBucket);
         }
         if (prunedAny) {
             saveTicketStore();
         }
         if (existing) {
             recordTicketCreateFailure("existing_open_ticket_record");
-            return { error: `You already have an open ticket: <#${existing.channelId}>` };
+            return { error: requestedBucket === "report"
+                    ? `You already have an open report case: <#${existing.channelId}>`
+                    : `You already have an open support ticket: <#${existing.channelId}>` };
         }
         const owner = await guild.members.fetch(ownerId).catch(() => null);
         if (!owner) {
             recordTicketCreateFailure("owner_fetch_failed");
             return { error: "Unable to resolve your member record." };
         }
-        const ownerActiveChannels = await findOwnerActiveTicketChannels(guild, owner);
+        const ownerActiveChannels = await findOwnerActiveTicketChannelsInBucket(guild, owner, requestedBucket);
         if (ownerActiveChannels.length > 0) {
             const canonical = ownerActiveChannels[0];
             await ensureTrackedTicketByChannelId(guild, canonical, owner.id);
             recordTicketCreateFailure("existing_open_ticket_channel");
-            return { error: `You already have an open ticket: <#${canonical}>` };
+            return { error: requestedBucket === "report"
+                    ? `You already have an open report case: <#${canonical}>`
+                    : `You already have an open support ticket: <#${canonical}>` };
         }
         const cfg = ensureTicketConfig(guild.id);
         const configuredOrDefaultCategoryId = cfg.categoryId || TICKET_DEFAULT_CATEGORY_ID;
@@ -6119,7 +7072,7 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
             return { error: "Failed to create ticket channel." };
         }
         // Cross-process safety: if multiple instances raced and created channels, keep only one owner-active channel.
-        const ownerChannelsAfterCreate = await findOwnerActiveTicketChannels(guild, owner);
+        const ownerChannelsAfterCreate = await findOwnerActiveTicketChannelsInBucket(guild, owner, requestedBucket);
         if (ownerChannelsAfterCreate.length > 1) {
             const canonical = ownerChannelsAfterCreate[0];
             if (canonical !== created.id) {
@@ -6127,7 +7080,9 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
                 await removeTicketStoreEntryByChannelId(created.id);
                 await ensureTrackedTicketByChannelId(guild, canonical, owner.id);
                 recordTicketCreateFailure("dedupe_race_duplicate_channel");
-                return { error: `You already have an open ticket: <#${canonical}>` };
+                return { error: requestedBucket === "report"
+                        ? `You already have an open report case: <#${canonical}>`
+                        : `You already have an open support ticket: <#${canonical}>` };
             }
         }
         const ticket = createTicketEntry(guild.id, owner.id, created.id, reason, priority);
@@ -6164,7 +7119,7 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
             { name: "Reason", value: reason || "No reason provided" }
         ]);
         await autoRouteTicket(guild, ticket);
-        await reconcileOwnerTicketDuplicates(guild, owner, created.id);
+        await reconcileOwnerTicketDuplicates(guild, owner, created.id, requestedBucket);
         return { channelId: created.id, ticketId: ticket.id };
     }
     finally {
@@ -6419,9 +7374,6 @@ const commandHandlers = {
     help: async (interaction) => {
         return JSON.stringify(await buildHelpPayload("general", interaction.guild));
     },
-    quickstart: async (interaction) => {
-        return JSON.stringify({ embed: buildQuickstartEmbed(interaction.user).toJSON() });
-    },
     xproles: async (interaction) => {
         const lines = await resolveXpRoleLines(interaction.guild);
         const sections = buildThemedRoleSections(lines);
@@ -6466,33 +7418,7 @@ const commandHandlers = {
         const memory = process.memoryUsage();
         return (0, health_1.buildStatusLines)(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())).join("\n");
     },
-    testupdate: async () => "Updated",
-    findbots: async (interaction) => {
-        const guildError = requireGuild(interaction);
-        if (guildError)
-            return guildError;
-        const guild = interaction.guild;
-        await guild.members.fetch().catch(() => undefined);
-        const botMembers = guild.members.cache.filter(member => member.user.bot);
-        if (!botMembers.size) {
-            return "No bot accounts found in this server.";
-        }
-        const selfId = client.user?.id;
-        const lines = botMembers
-            .map(member => {
-            const marker = member.id === selfId ? "(this bot)" : "";
-            return `- ${member.user.tag} | ID: ${member.id} ${marker}`.trim();
-        })
-            .sort((a, b) => a.localeCompare(b));
-        return [
-            `Bots in ${guild.name}:`,
-            ...lines,
-            "",
-            "Remove the extra app in Server Settings -> Members (or Integrations), then keep only the line marked (this bot)."
-        ].join("\n");
-    },
     balance: async (interaction) => (0, coreCommands_1.handleCoreCommand)("balance", interaction),
-    token: async (interaction) => (0, coreCommands_1.handleCoreCommand)("token", interaction),
     bank: async (interaction) => (0, coreCommands_1.handleCoreCommand)("bank", interaction),
     deposit: async (interaction) => {
         const amount = interaction.options.getInteger("amount", true);
@@ -6820,6 +7746,7 @@ const commandHandlers = {
         if (!guild)
             return "This command can only be used in a server.";
         const fix = interaction.options.getBoolean("fix") || false;
+        const restartAfter = interaction.options.getBoolean("restart") || false;
         const roleReport = await collectRoleSanityReport(guild);
         const ticketReport = await collectTicketSanityReport(guild);
         const issueCount = roleReport.missing.length
@@ -6837,6 +7764,9 @@ const commandHandlers = {
                 `Role remediation: ${roleFix.started ? "started" : `skipped (${roleFix.reason || "unknown"})`}`,
                 `Ticket remediation: removed missing ${ticketFix.removedDeleted}, removed inaccessible ${ticketFix.removedInaccessible}, deduped ${ticketFix.deduped}, panel backfill ${ticketFix.panelBackfilled}`
             ];
+        }
+        if (restartAfter) {
+            remediationLines.push("Restart: scheduled after incident response is sent.");
         }
         const embed = new discord_js_1.EmbedBuilder()
             .setColor(issueCount > 0 ? 0xf59e0b : 0x22c55e)
@@ -6876,6 +7806,7 @@ const commandHandlers = {
             userId: interaction.user.id,
             issueCount,
             fixRequested: fix,
+            restartRequested: restartAfter,
             roleMissing: roleReport.missing.length,
             roleHierarchyBlocked: roleReport.hierarchyBlocked.length,
             roleMultiTierMembers: roleReport.multiTierMembers,
@@ -6884,6 +7815,11 @@ const commandHandlers = {
             ticketPanelMissing: ticketReport.panelMissing,
             ticketSlaBreaches: ticketReport.slaBreaches
         });
+        if (restartAfter) {
+            setTimeout(() => {
+                requestManagedRestart("incident_command", interaction.user.id);
+            }, 2500).unref();
+        }
         return JSON.stringify({ embed: embed.toJSON() });
     },
     xpverify: async (interaction) => {
@@ -7135,6 +8071,70 @@ const commandHandlers = {
     ticket: async (interaction) => {
         return await ticketCommandHandlers.ticket(interaction);
     },
+    reportintake: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const target = interaction.options.getUser("user", true);
+        const summary = interaction.options.getString("summary", true).trim();
+        const details = (interaction.options.getString("details") || "").trim();
+        const evidence = (interaction.options.getString("evidence") || "").trim() || null;
+        const result = await submitFormalUserReport({
+            guild,
+            reporterId: interaction.user.id,
+            targetUser: target,
+            summary,
+            details,
+            evidence
+        });
+        return JSON.stringify({
+            embed: new discord_js_1.EmbedBuilder()
+                .setColor(result.flagged ? 0xdc2626 : 0x0ea5e9)
+                .setTitle("🚨 Formal User Report Filed")
+                .addFields({ name: "Report ID", value: `#${result.entry.id}`, inline: true }, { name: "Target", value: `<@${target.id}>`, inline: true }, { name: "Reporter", value: `<@${interaction.user.id}>`, inline: true }, { name: "Summary", value: result.entry.summary, inline: false }, { name: "Evidence", value: evidence || "Not provided", inline: false }, { name: "Total Reports On User", value: `${result.totalReportsForTarget}${result.flagged ? " 🚩" : ""}`, inline: true }, { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true })
+                .setTimestamp(new Date())
+                .toJSON(),
+            ephemeral: true
+        });
+    },
+    reportprofile: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const target = interaction.options.getUser("user", true);
+        const member = await guild.members.fetch(target.id).catch(() => null);
+        const reports = getGuildUserReports(guild.id)
+            .filter(report => report.targetUserId === target.id)
+            .sort((a, b) => b.createdAt - a.createdAt);
+        const flagged = reports.length >= 10;
+        const recent = reports.slice(0, 8).map(report => {
+            const state = report.status === "resolved" ? "resolved" : "open";
+            return `#${report.id} [${state}] by <@${report.reporterId}> | ${report.summary.slice(0, 80)} | <t:${Math.floor(report.createdAt / 1000)}:R>`;
+        });
+        appendAuditEvent("report_profile_view", {
+            guildId: guild.id,
+            actorId: interaction.user.id,
+            targetUserId: target.id,
+            totalReports: reports.length,
+            flagged
+        });
+        return JSON.stringify({
+            embed: new discord_js_1.EmbedBuilder()
+                .setColor(flagged ? 0xdc2626 : 0x0ea5e9)
+                .setTitle(`Report Profile: ${target.username}`)
+                .addFields({ name: "Discord User", value: `<@${target.id}>`, inline: true }, { name: "User ID", value: target.id, inline: true }, { name: "Account Created", value: `<t:${Math.floor(target.createdTimestamp / 1000)}:F>`, inline: true }, { name: "Joined Server", value: member?.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:F>` : "Unknown", inline: true }, { name: "Reports Filed Against User", value: `${reports.length}`, inline: true }, { name: "Risk Flag", value: flagged ? "🚩 Flagged (10+ reports)" : "No flag", inline: true }, { name: "Recent Reports", value: recent.length ? recent.join("\n") : "No reports filed against this user.", inline: false })
+                .setFooter({ text: `Report logs channel: ${REPORT_LOG_CHANNEL_ID}` })
+                .setTimestamp(new Date())
+                .toJSON(),
+            ephemeral: true
+        });
+    },
     ticketintake: async () => {
         return "Ticket intake modal is ready. Run /ticketintake again if you did not receive the popup.";
     },
@@ -7162,9 +8162,6 @@ const commandHandlers = {
     ticketassign: async (interaction) => {
         return await ticketCommandHandlers.ticketassign(interaction);
     },
-    ticketassgin: async (interaction) => {
-        return await ticketCommandHandlers.ticketassgin(interaction);
-    },
     ticketstatus: async (interaction) => {
         return await ticketCommandHandlers.ticketstatus(interaction);
     },
@@ -7186,56 +8183,149 @@ const commandHandlers = {
     ticketanalytics: async (interaction) => {
         return await ticketCommandHandlers.ticketanalytics(interaction);
     },
-    ticketsearch: async (interaction) => {
+    reportqueue: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const openReports = getGuildUserReports(guild.id)
+            .filter(report => report.status === "open")
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 25);
+        if (!openReports.length)
+            return "No active formal reports right now.";
+        const lines = openReports.map(report => `#${report.id} target <@${report.targetUserId}> | reporter <@${report.reporterId}> | ${report.summary.slice(0, 90)} | <t:${Math.floor(report.createdAt / 1000)}:R>`);
+        appendAuditEvent("report_queue_view", {
+            guildId: guild.id,
+            actorId: interaction.user.id,
+            total: openReports.length,
+            source: "admin_report_ledger"
+        });
+        return ["🚨 Formal Report Queue", `Showing ${openReports.length} open report(s)`, "", ...lines].join("\n");
+    },
+    reportresolve: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const target = interaction.options.getUser("user", true);
+        const action = interaction.options.getString("action", true);
+        const reason = (interaction.options.getString("reason") || "Report review completed").trim();
+        const reportId = interaction.options.getInteger("report_id") || undefined;
+        const resolved = await resolveFormalUserReport({
+            guild,
+            actorId: interaction.user.id,
+            targetUserId: target.id,
+            action,
+            reason,
+            reportId
+        });
+        if (!resolved.ok)
+            return resolved.error;
+        return JSON.stringify({
+            embed: new discord_js_1.EmbedBuilder()
+                .setColor(0x16a34a)
+                .setTitle("✅ Report Closed")
+                .addFields({ name: "Report ID", value: `#${resolved.entry.id}`, inline: true }, { name: "Target", value: `<@${target.id}>`, inline: true }, { name: "Resolved By", value: `<@${interaction.user.id}>`, inline: true }, { name: "Disposition", value: action, inline: true }, { name: "Reason", value: reason, inline: false }, { name: "Remaining Open Reports On User", value: `${resolved.remainingOpenForTarget}`, inline: true }, { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true })
+                .setTimestamp(new Date())
+                .toJSON(),
+            ephemeral: true
+        });
+    },
+    reportanalytics: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const scoped = getGuildUserReports(guild.id);
+        const open = scoped.filter(report => report.status === "open").length;
+        const resolved = scoped.filter(report => report.status === "resolved").length;
+        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const createdLast7d = scoped.filter(report => report.createdAt >= sevenDaysAgo).length;
+        const resolvedLast7d = scoped.filter(report => report.status === "resolved" && (report.resolvedAt || 0) >= sevenDaysAgo).length;
+        const byTarget = new Map();
+        for (const report of scoped) {
+            byTarget.set(report.targetUserId, (byTarget.get(report.targetUserId) || 0) + 1);
+        }
+        const flaggedUsers = [...byTarget.values()].filter(count => count >= 10).length;
+        appendAuditEvent("report_analytics", {
+            guildId: guild.id,
+            userId: interaction.user.id,
+            total: scoped.length,
+            open,
+            resolved,
+            createdLast7d,
+            resolvedLast7d,
+            flaggedUsers
+        });
+        return JSON.stringify({
+            embed: new discord_js_1.EmbedBuilder()
+                .setColor(0xb91c1c)
+                .setTitle("🚨 Report Analytics")
+                .setDescription("Admin report ledger throughput and risk snapshot.")
+                .addFields({ name: "Case Totals", value: [`Total: ${scoped.length}`, `Open: ${open}`, `Resolved: ${resolved}`].join("\n"), inline: false }, { name: "7-Day Flow", value: [`Created: ${createdLast7d}`, `Resolved: ${resolvedLast7d}`].join("\n"), inline: true }, { name: "Risk", value: `Flagged users (10+ reports): ${flaggedUsers}`, inline: true }, { name: "Log Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: false })
+                .setTimestamp(new Date())
+                .toJSON()
+        });
+    },
+    reportsearch: async (interaction) => {
         const guildError = requireGuild(interaction);
         if (guildError)
             return guildError;
-        const member = interaction.member;
-        if (!member || !canManageTicketActions(member)) {
-            return "Only admins or the handler role can search ticket history.";
-        }
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
         const guild = interaction.guild;
         const owner = interaction.options.getUser("owner");
         const status = interaction.options.getString("status");
-        const category = interaction.options.getString("category");
         const query = (interaction.options.getString("query") || "").trim().toLowerCase();
         const page = Math.max(1, interaction.options.getInteger("page") || 1);
         const pageSize = Math.max(5, Math.min(20, interaction.options.getInteger("page_size") || 10));
-        let scoped = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id);
+        let scoped = getGuildUserReports(guild.id);
         if (owner) {
-            scoped = scoped.filter(ticket => ticket.ownerId === owner.id);
+            scoped = scoped.filter(report => report.reporterId === owner.id);
         }
-        if (status) {
-            scoped = scoped.filter(ticket => normalizeTicketStatus(ticket.status) === status);
-        }
-        if (category) {
-            scoped = scoped.filter(ticket => (0, ticketEnhancements_1.classifyTicketCategory)(ticket.category || ticket.reason) === category);
+        if (status && (status === "open" || status === "resolved")) {
+            scoped = scoped.filter(report => report.status === status);
         }
         if (query) {
-            scoped = scoped.filter(ticket => getTicketSearchIndex(ticket).includes(query));
+            scoped = scoped.filter(report => {
+                const haystack = [
+                    report.summary,
+                    report.details,
+                    report.evidence || "",
+                    report.targetTag,
+                    report.targetUserId,
+                    report.reporterId
+                ].join(" ").toLowerCase();
+                return haystack.includes(query);
+            });
         }
-        scoped = scoped.sort((a, b) => b.updatedAt - a.updatedAt);
+        scoped = scoped.sort((a, b) => b.createdAt - a.createdAt);
         const total = scoped.length;
         if (!total) {
-            return "No tickets matched your filters.";
+            return "No formal reports matched your filters.";
         }
         const totalPages = Math.max(1, Math.ceil(total / pageSize));
         const safePage = Math.min(page, totalPages);
         const start = (safePage - 1) * pageSize;
         const visible = scoped.slice(start, start + pageSize);
-        const lines = visible.map(ticket => {
-            const ownerRef = `<@${ticket.ownerId}>`;
-            const categoryLabel = (0, ticketEnhancements_1.classifyTicketCategory)(ticket.category || ticket.reason);
-            const noteCount = ticket.internalNotes?.length || 0;
-            return `#${ticket.id} [${ticket.status}|${ticket.workflowStatus}|${categoryLabel}|${ticket.priority}] <#${ticket.channelId}> | owner ${ownerRef} | notes ${noteCount} | updated <t:${Math.floor(ticket.updatedAt / 1000)}:R>`;
+        const lines = visible.map(report => {
+            const state = report.status === "resolved" ? "resolved" : "open";
+            return `#${report.id} [${state}] target <@${report.targetUserId}> | reporter <@${report.reporterId}> | ${report.summary.slice(0, 90)} | <t:${Math.floor(report.createdAt / 1000)}:R>`;
         });
-        appendAuditEvent("ticket_search", {
+        appendAuditEvent("report_search", {
             guildId: guild.id,
             actorId: interaction.user.id,
             filters: {
                 ownerId: owner?.id || null,
                 status: status || null,
-                category: category || null,
                 query: query || null,
                 page: safePage,
                 pageSize
@@ -7245,16 +8335,231 @@ const commandHandlers = {
         const filterSummary = [
             owner ? `owner=<@${owner.id}>` : null,
             status ? `status=${status}` : null,
-            category ? `category=${category}` : null,
             query ? `query=${query}` : null
         ].filter(Boolean).join(", ") || "none";
         return [
-            `🔎 Ticket Search Results`,
+            "🚨 Formal Report Search Results",
             `Filters: ${filterSummary}`,
             `Page ${safePage}/${totalPages} | Showing ${visible.length}/${total}`,
             "",
             ...lines
         ].join("\n");
+    },
+    giveaway: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const prize = interaction.options.getString("prize", true).slice(0, 200);
+        const durationRaw = interaction.options.getString("duration", true);
+        const durationMs = parseDurationMs(durationRaw);
+        if (!durationMs)
+            return "Invalid duration. Use values like 30m, 6h, or 2d.";
+        const winnerCount = Math.max(1, Math.min(20, interaction.options.getInteger("winners") || 1));
+        const description = (interaction.options.getString("description") || "").slice(0, 1000);
+        const roleRequired = interaction.options.getRole("role_required");
+        const mentionRole = interaction.options.getRole("mention_role");
+        const mentionUser = interaction.options.getUser("mention_user");
+        const pingEveryone = Boolean(interaction.options.getBoolean("ping_everyone"));
+        const channel = await resolveConfiguredGiveawayChannel(guild);
+        if (!channel)
+            return `Configured giveaway channel ${GIVEAWAY_CHANNEL_ID} is missing or not a text channel.`;
+        const giveaway = await createAndPostGiveaway({
+            guild,
+            channel,
+            hostId: interaction.user.id,
+            prize,
+            description,
+            durationMs,
+            winnerCount,
+            roleRequiredId: roleRequired ? roleRequired.id : null,
+            rewardKind: "generic",
+            announcementContent: buildGiveawayAnnouncement({ prize, mentionRoleId: mentionRole?.id || null, mentionUserId: mentionUser?.id || null, pingEveryone }),
+            mentionRoleIds: mentionRole ? [mentionRole.id] : [],
+            mentionUserIds: mentionUser ? [mentionUser.id] : [],
+            mentionEveryone: pingEveryone
+        });
+        if (!giveaway)
+            return "Failed to post giveaway message in the target channel.";
+        appendAuditEvent("giveaway_created", {
+            guildId: guild.id,
+            giveawayId: giveaway.id,
+            hostId: interaction.user.id,
+            channelId: channel.id,
+            prize,
+            durationMs,
+            winnerCount,
+            roleRequiredId: roleRequired?.id || null,
+            mentionRoleId: mentionRole?.id || null,
+            mentionUserId: mentionUser?.id || null,
+            pingEveryone
+        });
+        await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
+            { name: "Prize", value: prize, inline: false },
+            { name: "Reward Type", value: "Generic", inline: true },
+            { name: "Host", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Channel", value: `<#${channel.id}>`, inline: true },
+            { name: "Winners", value: `${winnerCount}`, inline: true },
+            { name: "Duration", value: durationRaw, inline: true },
+            { name: "Role Requirement", value: roleRequired ? `<@&${roleRequired.id}>` : "None", inline: true }
+        ]);
+        return JSON.stringify({ embed: new discord_js_1.EmbedBuilder().setColor(0xf59e0b).setTitle("🎉 Giveaway Created").setDescription(`Giveaway #${giveaway.id} is live in <#${channel.id}>.`).addFields({ name: "Prize", value: prize, inline: false }, { name: "Duration", value: durationRaw, inline: true }, { name: "Winners", value: `${winnerCount}`, inline: true }).toJSON() });
+    },
+    itemgiveaway: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const guild = interaction.guild;
+        if (!guild)
+            return "This command can only be used in a server.";
+        const itemId = interaction.options.getString("item", true).trim().toLowerCase();
+        const item = catalog_1.ITEM_DEFS[itemId];
+        if (!item)
+            return `Unknown raid item: ${itemId}`;
+        const quantity = Math.max(1, interaction.options.getInteger("quantity", true));
+        const durationRaw = interaction.options.getString("duration", true);
+        const durationMs = parseDurationMs(durationRaw);
+        if (!durationMs)
+            return "Invalid duration. Use values like 30m, 6h, or 2d.";
+        const winnerCount = Math.max(1, Math.min(20, interaction.options.getInteger("winners") || 1));
+        const description = (interaction.options.getString("description") || "").slice(0, 1000);
+        const title = (interaction.options.getString("title") || `${item.name} Giveaway`).slice(0, 200);
+        const roleRequired = interaction.options.getRole("role_required");
+        const mentionRole = interaction.options.getRole("mention_role");
+        const mentionUser = interaction.options.getUser("mention_user");
+        const pingEveryone = Boolean(interaction.options.getBoolean("ping_everyone"));
+        const channel = await resolveConfiguredGiveawayChannel(guild);
+        if (!channel)
+            return `Configured giveaway channel ${GIVEAWAY_CHANNEL_ID} is missing or not a text channel.`;
+        const giveaway = await createAndPostGiveaway({
+            guild,
+            channel,
+            hostId: interaction.user.id,
+            prize: title,
+            description,
+            durationMs,
+            winnerCount,
+            roleRequiredId: roleRequired ? roleRequired.id : null,
+            rewardKind: "item",
+            rewardItemId: itemId,
+            rewardQty: quantity,
+            announcementContent: buildGiveawayAnnouncement({ prize: title, mentionRoleId: mentionRole?.id || null, mentionUserId: mentionUser?.id || null, pingEveryone }),
+            mentionRoleIds: mentionRole ? [mentionRole.id] : [],
+            mentionUserIds: mentionUser ? [mentionUser.id] : [],
+            mentionEveryone: pingEveryone
+        });
+        if (!giveaway)
+            return "Failed to post raid item giveaway message in the target channel.";
+        appendAuditEvent("giveaway_item_created", {
+            guildId: guild.id,
+            giveawayId: giveaway.id,
+            hostId: interaction.user.id,
+            channelId: channel.id,
+            itemId,
+            quantity,
+            durationMs,
+            winnerCount,
+            roleRequiredId: roleRequired?.id || null,
+            mentionRoleId: mentionRole?.id || null,
+            mentionUserId: mentionUser?.id || null,
+            pingEveryone
+        });
+        await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
+            { name: "Prize", value: title, inline: false },
+            { name: "Reward Type", value: "Raid Item", inline: true },
+            { name: "Raid Item", value: `${item.name} (${itemId}) x${quantity}`, inline: false },
+            { name: "Host", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Channel", value: `<#${channel.id}>`, inline: true },
+            { name: "Winners", value: `${winnerCount}`, inline: true }
+        ]);
+        return JSON.stringify({ embed: new discord_js_1.EmbedBuilder().setColor(0xf59e0b).setTitle("🎁 Raid Item Giveaway Created").setDescription(`Giveaway #${giveaway.id} is live in <#${channel.id}>.`).addFields({ name: "Raid Item", value: `${item.name} x${quantity}`, inline: false }, { name: "Duration", value: durationRaw, inline: true }, { name: "Winners", value: `${winnerCount}`, inline: true }).toJSON() });
+    },
+    raidgiveawaypanel: async (interaction) => {
+        const guildError = requireGuild(interaction);
+        if (guildError)
+            return guildError;
+        if (!interaction.memberPermissions?.has(discord_js_1.PermissionFlagsBits.ManageChannels)) {
+            return "You need Manage Channels to post the raid item giveaway panel.";
+        }
+        if (!interaction.channel || !interaction.channel.isTextBased()) {
+            return "This command requires a text channel.";
+        }
+        if (!("send" in interaction.channel) || interaction.channel.type !== discord_js_1.ChannelType.GuildText) {
+            return "This command requires a standard text channel.";
+        }
+        const payload = buildRaidItemGiveawayPanelPayload(interaction.guild.name);
+        await interaction.channel.send({ embeds: [payload.embed], components: payload.components, allowedMentions: { parse: [] } }).catch(() => null);
+        return "✅ Raid item giveaway panel posted in this channel.";
+    },
+    giveawayedit: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const giveaway = getGiveawayById(interaction.options.getInteger("id", true));
+        if (!giveaway)
+            return "Giveaway not found.";
+        if (giveaway.status !== "active")
+            return "Only active giveaways can be edited.";
+        const raw = interaction.options.getString("duration", true).trim().toLowerCase();
+        const isNegative = raw.startsWith("-");
+        const durationMs = parseDurationMs(isNegative ? raw.slice(1) : raw);
+        if (!durationMs)
+            return "Invalid duration adjustment. Use values like 30m, 6h, 2d, or -15m.";
+        giveaway.endAt += isNegative ? -durationMs : durationMs;
+        giveaway.endAt = Math.max(Date.now() + 10000, giveaway.endAt);
+        giveaway.updatedAt = Date.now();
+        saveGiveawayStore();
+        await syncGiveawayMessage(giveaway);
+        appendAuditEvent("giveaway_edit", { guildId: giveaway.guildId, giveawayId: giveaway.id, actorId: interaction.user.id, adjustment: raw, endAt: giveaway.endAt });
+        await sendGiveawayLog(giveaway.guildId, `Giveaway #${giveaway.id} Updated`, [
+            { name: "Adjustment", value: raw, inline: true },
+            { name: "New End", value: `<t:${Math.floor(giveaway.endAt / 1000)}:F>`, inline: true }
+        ]);
+        return `Giveaway #${giveaway.id} now ends <t:${Math.floor(giveaway.endAt / 1000)}:R>.`;
+    },
+    giveawayend: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const giveaway = getGiveawayById(interaction.options.getInteger("id", true));
+        if (!giveaway)
+            return "Giveaway not found.";
+        if (giveaway.status !== "active")
+            return "Giveaway is already closed.";
+        await finalizeGiveaway(giveaway, "manual");
+        return `Giveaway #${giveaway.id} ended.`;
+    },
+    giveawayreroll: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const giveaway = getGiveawayById(interaction.options.getInteger("id", true));
+        if (!giveaway)
+            return "Giveaway not found.";
+        if (!giveaway.entries.length)
+            return "This giveaway has no entrants to reroll.";
+        await finalizeGiveaway(giveaway, "reroll");
+        return `Giveaway #${giveaway.id} rerolled.`;
+    },
+    giveawaylist: async (interaction) => {
+        const adminError = requireAdministrator(interaction);
+        if (adminError)
+            return adminError;
+        const scoped = giveawayStore.giveaways
+            .filter(entry => !interaction.guildId || entry.guildId === interaction.guildId)
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 15);
+        if (!scoped.length)
+            return "No giveaways found.";
+        return [
+            "🎉 Giveaways",
+            ...scoped.map(entry => `#${entry.id} [${entry.status}|${entry.rewardKind === "item" ? `item:${entry.rewardItemId || "unknown"}x${entry.rewardQty}` : "generic"}] ${entry.prize} | entries ${entry.entries.length} | winners ${entry.winnerCount} | end <t:${Math.floor(entry.endAt / 1000)}:R>`)
+        ].join("\n");
+    },
+    giveaways: async (interaction) => {
+        return await commandHandlers.giveawaylist(interaction);
     },
     ticketworkload: async (interaction) => {
         const adminError = requireAdministrator(interaction);
@@ -7624,6 +8929,7 @@ const commandHandlers = {
     },
     useitem: async (interaction) => {
         trackRaidCommandUsage("useitem");
+        const xpBefore = (0, utils_1.ensureUser)(interaction.user.id).xp;
         const hadExplicitItem = Boolean(interaction.options.getString("item"));
         let item = interaction.options.getString("item");
         const quantity = interaction.options.getInteger("quantity") || 1;
@@ -7664,6 +8970,10 @@ const commandHandlers = {
             recordConsumableTelemetry(item, useQty, !hadExplicitItem, true);
             return `${res.error}\n\nOwned usable items:\n${formatOwnedUsableItemsForPrompt(interaction.user.id)}`;
         }
+        const xpAfter = (0, utils_1.ensureUser)(interaction.user.id).xp;
+        if (interaction.guild && xpAfter > xpBefore) {
+            await syncXpRolesForUserInGuild(interaction.guild, interaction.user.id, xpAfter);
+        }
         recordConsumableTelemetry(item, useQty, !hadExplicitItem, false);
         const resultText = res.result || `Used ${useQty}x ${itemDef.name}.`;
         return (0, payloads_1.buildConsumableUsePayload)({
@@ -7696,8 +9006,11 @@ const commandHandlers = {
     },
     slots: async (interaction) => {
         const bet = interaction.options.getInteger("bet", true);
-        const lines = interaction.options.getInteger("lines", true);
-        return playSlots(interaction.user.id, bet, lines);
+        return playSlots(interaction.user.id, bet);
+    },
+    magicslots: async (interaction) => {
+        const bet = interaction.options.getInteger("bet", true);
+        return playSlots(interaction.user.id, bet);
     },
     coinflip: async (interaction) => {
         const bet = interaction.options.getInteger("bet", true);
@@ -7736,13 +9049,6 @@ const commandHandlers = {
             { name: "New Total", value: `${total}`, inline: true }
         ]);
         return `${user.username} now has ${total} Access Points.`;
-    },
-    pointsuser: async (interaction) => {
-        const adminError = requireAdministrator(interaction);
-        if (adminError)
-            return adminError;
-        const user = interaction.options.getUser("user", true);
-        return `${user.username} has ${(0, utils_1.getPoints)(user.id)} Access Points.`;
     },
     timeout: async (interaction) => {
         const adminError = requireAdministrator(interaction);
@@ -7893,6 +9199,10 @@ const commandHandlers = {
 };
 client.once("clientReady", async () => {
     console.log(`Logged in as ${client.user?.tag ?? "unknown-user"}`);
+    console.log(`[startup] Preparing to register ${slashCommands.length} guild slash commands.`);
+    if (slashCommands.length > 100) {
+        console.error(`[startup] Slash command count ${slashCommands.length} exceeds Discord guild limit (100). Some commands will not register.`);
+    }
     updateBotPresence();
     console.log(`[startup] ${(0, health_1.buildStartupSummary)(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {
@@ -7907,6 +9217,8 @@ client.once("clientReady", async () => {
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
             if (ENABLE_STARTUP_AUTOPANELS) {
+                await removeLegacyReportPanelForGuild(guild);
+                await ensureAdminReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
@@ -7924,6 +9236,8 @@ client.once("clientReady", async () => {
         for (const guild of client.guilds.cache.values()) {
             await guild.commands.set(slashCommands).catch(() => undefined);
             if (ENABLE_STARTUP_AUTOPANELS) {
+                await removeLegacyReportPanelForGuild(guild);
+                await ensureAdminReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
@@ -7987,6 +9301,9 @@ if (COMMAND_IDEMPOTENCY_WINDOW_MS > 0) {
     }, Math.max(5000, COMMAND_IDEMPOTENCY_WINDOW_MS)).unref();
 }
 setInterval(() => {
+    pruneInMemoryRuntimeState();
+}, IN_MEMORY_STATE_PRUNE_INTERVAL_MS).unref();
+setInterval(() => {
     void sendAutomatedHealthReport("interval_24h");
 }, DAILY_HEALTH_REPORT_MS).unref();
 setInterval(() => {
@@ -7995,6 +9312,12 @@ setInterval(() => {
 setInterval(() => {
     void sendAutomatedBalanceReport("interval_7d");
 }, WEEKLY_BALANCE_REPORT_MS).unref();
+setInterval(() => {
+    void processDueGiveaways();
+}, 15000).unref();
+setInterval(() => {
+    void refreshActiveGiveawayEmbeds();
+}, 60000).unref();
 setTimeout(() => {
     void sendAutomatedHealthReport("startup_warmup");
 }, 90000).unref();
@@ -8004,6 +9327,47 @@ setTimeout(() => {
 setTimeout(() => {
     void sendAutomatedBalanceReport("startup_warmup");
 }, 120000).unref();
+function requestManagedRestart(trigger, requestedByUserId = null) {
+    const pm2IdRaw = String(process.env.pm_id || "").trim();
+    const pm2Name = String(process.env.name || process.env.PM2_PROCESS_NAME || "").trim();
+    const restartTargets = [];
+    if (/^\d+$/.test(pm2IdRaw)) {
+        restartTargets.push(pm2IdRaw);
+    }
+    if (pm2Name) {
+        restartTargets.push(pm2Name);
+    }
+    for (const target of restartTargets) {
+        try {
+            (0, node_child_process_1.execSync)(`pm2 restart ${target}`, { stdio: "ignore" });
+            appendAuditEvent("process_restart_requested", {
+                trigger,
+                requestedByUserId,
+                strategy: "pm2_restart",
+                target
+            });
+            console.log(`[restart] Requested PM2 restart via target '${target}' from ${trigger}.`);
+            return;
+        }
+        catch (error) {
+            appendAuditEvent("process_restart_attempt_failed", {
+                trigger,
+                requestedByUserId,
+                strategy: "pm2_restart",
+                target,
+                error: error instanceof Error ? error.message : String(error)
+            });
+        }
+    }
+    // Fallback: crash-exit so supervisors configured to auto-restart on failures still recover.
+    appendAuditEvent("process_restart_fallback_exit", {
+        trigger,
+        requestedByUserId,
+        strategy: "exit_code_1"
+    });
+    console.warn(`[restart] PM2 restart target unavailable for ${trigger}; exiting with code 1.`);
+    setTimeout(() => process.exit(1), 100).unref();
+}
 process.on("SIGINT", () => {
     recordRuntimeShutdown("sigint");
     checkpointState("sigint");
@@ -8019,18 +9383,6 @@ process.on("SIGTERM", () => {
 process.on("beforeExit", () => {
     recordRuntimeShutdown("before_exit");
     checkpointState("before_exit");
-    releaseInstanceLock();
-});
-process.on("uncaughtException", error => {
-    recordRuntimeShutdown("uncaught_exception");
-    appendAuditEvent("uncaught_exception", { message: error.message, stack: error.stack });
-    checkpointState("uncaught_exception");
-    releaseInstanceLock();
-});
-process.on("unhandledRejection", reason => {
-    recordRuntimeShutdown("unhandled_rejection");
-    appendAuditEvent("unhandled_rejection", { reason: String(reason) });
-    checkpointState("unhandled_rejection");
     releaseInstanceLock();
 });
 client.on("interactionCreate", async (interaction) => {
@@ -8064,6 +9416,9 @@ client.on("interactionCreate", async (interaction) => {
         }
         else if (interaction.commandName === "sell" && focused.name === "item") {
             options = getSellItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
+        }
+        else if (interaction.commandName === "itemgiveaway" && focused.name === "item") {
+            options = getCatalogItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
         }
         else {
             return;
@@ -8109,6 +9464,121 @@ client.on("interactionCreate", async (interaction) => {
                 ])],
             flags: discord_js_1.MessageFlags.Ephemeral
         }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId === REPORT_IDS.adminModal) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Admin report intake can only be used in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member;
+        if (!member?.permissions.has(discord_js_1.PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: "Only administrators can file reports from this panel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const targetRaw = interaction.fields.getTextInputValue(REPORT_IDS.adminTarget) || "";
+        const targetId = parseUserIdFromReportTarget(targetRaw);
+        if (!targetId) {
+            await interaction.reply({ content: "Target must be a valid Discord user mention or user ID.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const targetUser = await client.users.fetch(targetId).catch(() => null);
+        if (!targetUser) {
+            await interaction.reply({ content: "Unable to fetch that user from Discord.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const summary = (interaction.fields.getTextInputValue(REPORT_IDS.adminSummary) || "").trim();
+        const details = (interaction.fields.getTextInputValue(REPORT_IDS.adminDetails) || "").trim();
+        const evidence = (interaction.fields.getTextInputValue(REPORT_IDS.adminEvidence) || "").trim() || null;
+        if (!summary) {
+            await interaction.reply({ content: "Report summary is required.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const result = await submitFormalUserReport({
+            guild,
+            reporterId: interaction.user.id,
+            targetUser,
+            summary,
+            details,
+            evidence
+        });
+        await interaction.reply({
+            embeds: [new discord_js_1.EmbedBuilder()
+                    .setColor(result.flagged ? 0xdc2626 : 0x0ea5e9)
+                    .setTitle("🚨 Formal User Report Filed")
+                    .addFields({ name: "Report ID", value: `#${result.entry.id}`, inline: true }, { name: "Target", value: `<@${targetUser.id}>`, inline: true }, { name: "Reporter", value: `<@${interaction.user.id}>`, inline: true }, { name: "Summary", value: result.entry.summary, inline: false }, { name: "Evidence", value: evidence || "Not provided", inline: false }, { name: "Total Reports On User", value: `${result.totalReportsForTarget}${result.flagged ? " 🚩" : ""}`, inline: true }, { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true })
+                    .setTimestamp(new Date())],
+            flags: discord_js_1.MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId === GIVEAWAY_IDS.raidItemModal) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Raid item giveaways can only be created in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member;
+        if (!member || !member.permissions.has(discord_js_1.PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: "Only administrators can create raid item giveaways.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const itemId = (interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidItemId) || "").trim().toLowerCase();
+        const item = catalog_1.ITEM_DEFS[itemId];
+        if (!item) {
+            await interaction.reply({ content: `Unknown raid item: ${itemId}`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const quantity = Math.max(1, Number.parseInt(interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidItemQty) || "1", 10) || 1);
+        const durationRaw = (interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidDuration) || "").trim();
+        const durationMs = parseDurationMs(durationRaw);
+        if (!durationMs) {
+            await interaction.reply({ content: "Invalid duration. Use values like 30m, 6h, or 2d.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const winnerCount = Math.max(1, Math.min(20, Number.parseInt(interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidWinners) || "1", 10) || 1));
+        const description = (interaction.fields.getTextInputValue(GIVEAWAY_IDS.raidDescription) || "").slice(0, 400);
+        const channel = interaction.channel;
+        if (!channel || channel.type !== discord_js_1.ChannelType.GuildText || !("send" in channel)) {
+            await interaction.reply({ content: "This panel must be used in a text channel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const giveaway = await createAndPostGiveaway({
+            guild,
+            channel,
+            hostId: interaction.user.id,
+            prize: `${item.name} Giveaway`,
+            description,
+            durationMs,
+            winnerCount,
+            roleRequiredId: null,
+            rewardKind: "item",
+            rewardItemId: itemId,
+            rewardQty: quantity
+        });
+        if (!giveaway) {
+            await interaction.reply({ content: "Failed to post the raid item giveaway.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        appendAuditEvent("giveaway_item_created", {
+            guildId: guild.id,
+            giveawayId: giveaway.id,
+            hostId: interaction.user.id,
+            channelId: channel.id,
+            itemId,
+            quantity,
+            durationMs,
+            winnerCount,
+            source: "panel"
+        });
+        await sendGiveawayLog(guild.id, `Giveaway #${giveaway.id} Created`, [
+            { name: "Raid Item", value: `${item.name} (${itemId}) x${quantity}`, inline: false },
+            { name: "Host", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "Channel", value: `<#${channel.id}>`, inline: true },
+            { name: "Winners", value: `${winnerCount}`, inline: true }
+        ]);
+        await interaction.reply({ content: `Raid item giveaway #${giveaway.id} is now live in <#${channel.id}>.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
     if (interaction.isButton() && interaction.customId.startsWith(`${TICKET_IDS.csatPrefix}:`)) {
@@ -8279,6 +9749,84 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.showModal(buildTicketIntakeModal()).catch(async () => {
             await interaction.reply({ content: "Unable to open intake modal right now.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
         });
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === REPORT_IDS.adminOpen) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Admin report panel can only be used in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member;
+        if (!member?.permissions.has(discord_js_1.PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: "Only administrators can file reports from this panel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(buildAdminReportIntakeModal()).catch(async () => {
+            await interaction.reply({ content: "Unable to open admin report intake modal right now.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === REPORT_IDS.open) {
+        await interaction.reply({ content: "Public report desk intake is disabled. Admins should use /reportintake or the admin report panel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === GIVEAWAY_IDS.raidPanelOpen) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Raid item giveaways can only be created in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const member = interaction.member;
+        if (!member || !member.permissions.has(discord_js_1.PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: "Only administrators can use this giveaway panel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(buildRaidItemGiveawayModal()).catch(async () => {
+            await interaction.reply({ content: "Unable to open the raid item giveaway modal right now.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(`${GIVEAWAY_IDS.enterPrefix}:`)) {
+        const giveawayId = Number.parseInt(interaction.customId.split(":")[1] || "0", 10);
+        const giveaway = getGiveawayById(giveawayId);
+        if (!giveaway) {
+            await interaction.reply({ content: "This giveaway no longer exists.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (giveaway.status !== "active" || giveaway.endAt <= Date.now()) {
+            if (giveaway.status === "active" && giveaway.endAt <= Date.now()) {
+                await finalizeGiveaway(giveaway, "timer");
+            }
+            await interaction.reply({ content: "This giveaway is already closed.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (!interaction.guild) {
+            await interaction.reply({ content: "Giveaways can only be entered in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (giveaway.roleRequiredId) {
+            const member = interaction.member ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+            if (!member?.roles.cache.has(giveaway.roleRequiredId)) {
+                await interaction.reply({ content: `You need <@&${giveaway.roleRequiredId}> to enter this giveaway.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+                return;
+            }
+        }
+        if (giveaway.entries.includes(interaction.user.id)) {
+            await interaction.reply({ content: `You are already entered in giveaway #${giveaway.id}.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        giveaway.entries.push(interaction.user.id);
+        giveaway.updatedAt = Date.now();
+        saveGiveawayStore();
+        await syncGiveawayMessage(giveaway);
+        appendAuditEvent("giveaway_enter", {
+            guildId: giveaway.guildId,
+            giveawayId: giveaway.id,
+            userId: interaction.user.id,
+            entryCount: giveaway.entries.length
+        });
+        await interaction.reply({ content: `You entered giveaway #${giveaway.id} for **${giveaway.prize}**.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
     if (interaction.isButton() && interaction.customId === TICKET_IDS.close) {
@@ -8558,15 +10106,7 @@ client.on("messageCreate", async (message) => {
             attachmentCount: message.attachments.size
         });
         if (message.guild) {
-            const member = message.member ?? await message.guild.members.fetch(message.author.id).catch(() => null);
-            if (member) {
-                await syncMemberXpRoles(member, nextXp);
-                // Retry once with a forced fetch to avoid cache/race misses right at threshold crossings.
-                const refreshed = await message.guild.members.fetch(message.author.id).catch(() => null);
-                if (refreshed) {
-                    await syncMemberXpRoles(refreshed, nextXp);
-                }
-            }
+            await syncXpRolesForUserInGuild(message.guild, message.author.id, nextXp);
         }
     }
     if (message.content.trim().toLowerCase() === `${PREFIX}ping`) {
@@ -8576,6 +10116,8 @@ client.on("messageCreate", async (message) => {
 process.on("unhandledRejection", reason => {
     console.error("Unhandled promise rejection:", reason);
     recordRuntimeShutdown("unhandled_rejection_late_handler");
+    appendAuditEvent("unhandled_rejection", { reason: toSafeString(reason) });
+    checkpointState("unhandled_rejection");
     postOpsAlert("error", "Unhandled promise rejection", {
         reason: toSafeString(reason)
     });
@@ -8584,6 +10126,8 @@ process.on("unhandledRejection", reason => {
 process.on("uncaughtException", error => {
     console.error("Uncaught exception:", error);
     recordRuntimeShutdown("uncaught_exception_late_handler");
+    appendAuditEvent("uncaught_exception", { message: error.message, stack: error.stack });
+    checkpointState("uncaught_exception");
     postOpsAlert("error", "Uncaught exception", {
         name: error.name,
         message: error.message
