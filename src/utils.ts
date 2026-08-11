@@ -41,7 +41,7 @@ export type UserState = {
     gameStats: Record<GameStatKey, GameStatEntry>;
 };
 
-export type GameStatKey = "raid" | "dice" | "roulette" | "blackjack" | "crash" | "slots" | "coinflip" | "baccarat" | "hilo" | "keno";
+export type GameStatKey = "raid" | "dice" | "roulette" | "blackjack" | "crash" | "magicslots" | "coinflip" | "baccarat" | "hilo" | "keno";
 
 export type GameStatEntry = {
     played: number;
@@ -59,7 +59,7 @@ export const GAME_STAT_KEYS: GameStatKey[] = [
     "roulette",
     "blackjack",
     "crash",
-    "slots",
+    "magicslots",
     "coinflip",
     "baccarat",
     "hilo",

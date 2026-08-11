@@ -3365,7 +3365,7 @@ const CASINO_GAME_ORDER: CasinoGameKey[] = [
     "roulette",
     "blackjack",
     "crash",
-    "slots",
+    "magicslots",
     "coinflip",
     "baccarat",
     "hilo",
@@ -4310,7 +4310,7 @@ function helpPageGames() {
         .setTitle("🪖 War Games Command")
         .setDescription("High-risk tactical casino simulations powered by FN Token$ from raids and live operations rewards.")
         .addFields(
-            { name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/slots` — Magic Slots (6 reels, straight + zig-zag wins)\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" },
+            { name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/magicslots` — enchanted reels, jackpot arcs, and bonus magic rounds\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" },
             { name: "Rules of Engagement", value: "• Stake is committed before each round.\n\n• Result boards use mission colors: WIN=green, LOSS=red, PUSH=yellow.\n\n• Action buttons allow replay, bet scaling, and mode rotation." }
         );
 }
@@ -4372,7 +4372,7 @@ type CommandTheme = {
 };
 
 const RAID_COMMAND_SET = new Set(["raid", "raidintel", "raidhistory", "bosses", "conditions", "gearintel", "loadout", "pmc"]);
-const GAME_COMMAND_SET = new Set(["dice", "roulette", "blackjack", "crash", "slots", "coinflip", "baccarat", "hilo", "keno"]);
+const GAME_COMMAND_SET = new Set(["dice", "roulette", "blackjack", "crash", "magicslots", "coinflip", "baccarat", "hilo", "keno"]);
 
 function resolveCommandTheme(commandName: string): CommandTheme {
     const cmd = commandName.toLowerCase();
@@ -4380,7 +4380,7 @@ function resolveCommandTheme(commandName: string): CommandTheme {
     const raidCommands = new Set(["raid", "raidintel", "raidhistory", "bosses", "conditions", "gearintel", "loadout", "pmc"]);
     const xpCommands = new Set(["xp", "xpstats", "xproles", "xprolesync", "leaderboard", "daily", "xpverify"]);
     const economyCommands = new Set(["balance", "token", "bank", "deposit", "withdraw", "transfer", "shop", "inventory", "buy", "sell", "opencrate", "useitem", "tradeoffer", "trades", "tradeaccept", "tradedecline"]);
-    const gameCommands = new Set(["dice", "roulette", "blackjack", "crash", "slots", "coinflip", "baccarat", "hilo", "keno"]);
+    const gameCommands = new Set(["dice", "roulette", "blackjack", "crash", "magicslots", "coinflip", "baccarat", "hilo", "keno"]);
     const moderationCommands = new Set(["warn", "warnings", "clearwarnings", "tempban", "purge", "points", "pointsuser", "addpoints", "addtoken", "timeout", "kick", "ban", "setmodlog", "modconfig", "xprolesync", "health", "rolesanity", "ticketsanity", "xpverify", "incident"]);
     const ticketCommands = new Set([
         "ticket",
@@ -6419,7 +6419,7 @@ function getCasinoOddsSnapshot(gameKey: Exclude<GameStatKey, "raid">): string {
     if (gameKey === "roulette") return "Number call is highest variance (36.00x base), color/parity offers steadier hit rates (2.00x base).";
     if (gameKey === "blackjack") return "Safe style lowers bust risk, aggressive style raises upside volatility.";
     if (gameKey === "crash") return "Lower targets cash more often, higher targets spike multiplier but fail more often.";
-    if (gameKey === "slots") return "Magic Slots uses regular-casino reel odds, with ultra jackpots unlocked only on Ultra Bonus Win Spins.";
+    if (gameKey === "magicslots") return "Magic Slots uses enchanted paylines, rare jackpot arcs, and bonus-round multipliers that can trigger at 2x, 5x, or 10x.";
     if (gameKey === "coinflip") return "Pure 50/50 call before lucky modifier influence.";
     if (gameKey === "baccarat") return "Tie has the largest payout but lowest consistency; player/banker are steadier.";
     if (gameKey === "hilo") return "Large card-distance wins pay more; close outcomes are safer but lower yield.";
@@ -6473,7 +6473,7 @@ function defaultCasinoArgForGame(gameKey: CasinoGameKey): string {
     if (gameKey === "roulette") return "red";
     if (gameKey === "blackjack") return "safe";
     if (gameKey === "crash") return "1.50";
-    if (gameKey === "slots") return "single";
+    if (gameKey === "magicslots") return "single";
     if (gameKey === "coinflip") return "heads";
     if (gameKey === "baccarat") return "player";
     if (gameKey === "hilo") return "higher";
@@ -6711,7 +6711,7 @@ function formatMagicSlotsResult(options: {
         embed: embed.toJSON(),
         components: buildCasinoActionComponents({
             userId: options.userId,
-            gameKey: "slots",
+            gameKey: "magicslots",
             bet: Math.max(1, Math.floor(options.bet)),
             arg: "single"
         })
@@ -7227,7 +7227,7 @@ function playSlots(userId: string, bet: number): string {
     const payout = totalMultiplier > 0 ? Math.max(1, Math.floor(totalBet * scaledMultiplier)) : 0;
     if (payout > 0) addTokens(userId, payout);
     const outcome: CasinoOutcome = payout > totalBet ? "win" : payout === totalBet ? "push" : "loss";
-    recordGameResult(userId, "slots", outcome, totalBet, payout);
+    recordGameResult(userId, "magicslots", outcome, totalBet, payout);
 
     const boardRows = machineGrid.map((row, idx) => `R${idx + 1} ${row.map(symbol => `[${magicSlotSymbolEmoji(symbol)}]`).join("")}`);
     const winningEmojiLines = paidWins.map(win => ({
@@ -7639,7 +7639,7 @@ async function runCasinoQuickAction(input: {
         const target = Number.parseFloat(arg || "1.50");
         return { gameKey: resolvedGame, payload: await playCrash(input.userId, effectiveBet, Number.isFinite(target) ? target : 1.5) };
     }
-    if (resolvedGame === "slots") {
+    if (resolvedGame === "magicslots") {
         return { gameKey: resolvedGame, payload: playSlots(input.userId, effectiveBet) };
     }
     if (resolvedGame === "coinflip") return { gameKey: resolvedGame, payload: playCoinflip(input.userId, effectiveBet, arg || "heads") };
@@ -10369,10 +10369,6 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const bet = interaction.options.getInteger("bet", true);
         const target = interaction.options.getNumber("target", true);
         return await playCrash(interaction.user.id, bet, target);
-    },
-    slots: async interaction => {
-        const bet = interaction.options.getInteger("bet", true);
-        return playSlots(interaction.user.id, bet);
     },
     magicslots: async interaction => {
         const bet = interaction.options.getInteger("bet", true);

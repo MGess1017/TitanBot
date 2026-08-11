@@ -157,8 +157,6 @@ export function buildSlashCommands(input: {
         new SlashCommandBuilder().setName("crash").setDescription("Play crash")
             .addIntegerOption(o => o.setName("bet").setDescription("Amount").setRequired(true))
             .addNumberOption(o => o.setName("target").setDescription("Multiplier (1.05-10.0)").setRequired(true)),
-        new SlashCommandBuilder().setName("slots").setDescription("Play Magic Slots: 6 reels, wizard symbols, and zig-zag paylines")
-            .addIntegerOption(o => o.setName("bet").setDescription("Single spin bet").setRequired(true)),
         new SlashCommandBuilder().setName("coinflip").setDescription("Classic coin flip with lucky multipliers")
             .addIntegerOption(o => o.setName("bet").setDescription("Amount").setRequired(true))
             .addStringOption(o => o.setName("side").setDescription("heads|tails").setRequired(true)
