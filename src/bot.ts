@@ -6642,6 +6642,43 @@ function magicSlotSymbolEmoji(symbol: MagicSlotSymbol): string {
     return "✨";
 }
 
+function getMagicSlotVibe(options: {
+    outcome: CasinoOutcome;
+    totalBonusHits: number;
+    jackpotRows: number;
+    scaledMultiplier: number;
+    luckyLabel: string;
+}): { title: string; headline: string; footer: string } {
+    const boosterText = options.totalBonusHits > 0 ? "the sigils are humming" : "the reels are murmuring";
+    const jackpotCue = options.jackpotRows > 0 ? "The chamber lights up, and the jackpot erupts in a burst of radiant arcana." : "";
+    if (options.outcome === "win") {
+        if (options.jackpotRows > 0) {
+            return {
+                title: "✨ FN Tarkov Magic Slots • JACKPOT",
+                headline: `The ritual detonates in brilliance. ${jackpotCue} The room leans forward as the spellfire cascades into your wallet.`,
+                footer: `Fate whisper: ${options.luckyLabel}`
+            };
+        }
+        return {
+            title: `🎰 FN Tarkov Magic Slots • WIN`,
+            headline: `A clean spellchain lands. ${boosterText}, and the table leans in as the payout blooms into a proper arcane haul.`,
+            footer: `Arcane payout: ${options.scaledMultiplier.toFixed(2)}x return`
+        };
+    }
+    if (options.outcome === "push") {
+        return {
+            title: "🟡 FN Tarkov Magic Slots • PUSH",
+            headline: `The enchanted board locks in place. Not a loss, just a pause in the omen as the runes rethink the next move.`,
+            footer: `The spell settles: ${options.luckyLabel}`
+        };
+    }
+    return {
+        title: "🔻 FN Tarkov Magic Slots • LOSS",
+        headline: `The reels sputter and the sigils dim. The table snarls, but the next spin is already whispering against the dark.`,
+        footer: `The wheel mutters: ${options.luckyLabel}`
+    };
+}
+
 function formatMagicSlotsResult(options: {
     userId: string;
     outcome: CasinoOutcome;
@@ -6657,6 +6694,8 @@ function formatMagicSlotsResult(options: {
     totalHits: number;
     jackpotRows: number;
     scaledMultiplier: number;
+    ultraBonusMode: boolean;
+    totalBonusSymbols: number;
 }): string {
     const outcomePayload = getCasinoOutcomePayload(options.outcome);
     const net = options.payout - options.bet;
@@ -6665,15 +6704,45 @@ function formatMagicSlotsResult(options: {
             .slice(0, 4)
             .map(win => `• ${win.pattern}: ${win.emojiLine} -> ${win.multiplier.toFixed(2)}x (${win.rule})`)
             .join("\n")
-        : "No winning paths this spin.";
+        : "• No magical matches this spin. The runes stay quiet.";
+    const vibe = getMagicSlotVibe({
+        outcome: options.outcome,
+        totalBonusHits: options.totalBonusHits,
+        jackpotRows: options.jackpotRows,
+        scaledMultiplier: options.scaledMultiplier,
+        luckyLabel: options.luckyLabel
+    });
+    const boardSeed = options.boardRows.join("|").split("").reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+    const heatScore = options.baseMultiplier + (options.totalHits * 0.65) + (options.totalBonusSymbols * 0.35);
+    const reelHeat = heatScore >= 7 ? "Overdrive" : heatScore >= 3.4 ? "Charged" : "Cold";
+    const pressure = options.totalBonusSymbols >= 5 ? "Unstable" : options.totalBonusSymbols >= 3 ? "Rising" : options.totalBonusSymbols >= 1 ? "Low" : "Dormant";
+    const overrunLines = Math.max(0, options.totalHits - options.winningLines.length);
+    const nearMissCue = options.outcome === "loss" && options.totalBonusSymbols >= 2
+        ? "Near miss: bonus pressure built but no payline lock."
+        : options.outcome === "push"
+            ? "Stall point: the board held your balance in neutral."
+            : options.outcome === "win" && overrunLines > 0
+                ? `Overflow: ${overrunLines} extra line${overrunLines === 1 ? "" : "s"} glowed but only top payouts were banked.`
+                : "No extra resonance detected.";
+    const spinScenes = [
+        "Runes flicker across the glass as the chamber primes.",
+        "The reel core hums, then snaps into sync.",
+        "Arcane dust spirals while the paylines ignite."
+    ];
+    const scene = spinScenes[boardSeed % spinScenes.length];
 
     const embed = new EmbedBuilder()
         .setColor(outcomePayload.color)
-        .setTitle(`🎰 Magic Slots • ${outcomePayload.label}`)
-        .setDescription("Single-bet rune board spin. Straight rows and zig-zag paths are auto-scored.")
+        .setTitle("FN Tarkov Magic Slots")
+        .setDescription(`${scene} ${vibe.headline}`)
         .addFields(
             {
-                name: "Spin",
+                name: "Result",
+                value: `${vibe.title}`,
+                inline: false
+            },
+            {
+                name: "Fate Ledger",
                 value: [
                     `Bet: ${formatTokenAmount(options.bet)}`,
                     `Payout: ${formatTokenAmount(options.payout)}`,
@@ -6689,22 +6758,32 @@ function formatMagicSlotsResult(options: {
                 inline: false
             },
             {
-                name: "Machine",
+                name: "Spin Atmosphere",
+                value: [
+                    `Mode: ${options.ultraBonusMode ? "Ultra Bonus Win Spin" : "Standard Reel Spin"}`,
+                    `Reel Heat: ${reelHeat}`,
+                    `Bonus Pressure: ${pressure} (${options.totalBonusSymbols} BONUS symbol${options.totalBonusSymbols === 1 ? "" : "s"})`,
+                    nearMissCue
+                ].join("\n"),
+                inline: false
+            },
+            {
+                name: "Arcane Reels",
                 value: `\`\`\`\n${options.boardRows.join("\n")}\n\`\`\``,
                 inline: false
             },
             {
-                name: "Winning Paths",
+                name: "Payline Ritual",
                 value: winSummary,
                 inline: false
             },
             {
-                name: "Legend",
+                name: "Sigil Index",
                 value: "🪄 Wand  🧪 Potion  🐉 Dragon  📘 Spellbook  🔮 Crystal  ✨ Bonus",
                 inline: false
             }
         )
-        .setFooter({ text: buildCasinoSessionLine(options.userId) })
+        .setFooter({ text: `${vibe.footer} • ${buildCasinoSessionLine(options.userId)}` })
         .setTimestamp(new Date());
 
     return JSON.stringify({
@@ -7169,6 +7248,7 @@ function playSlots(userId: string, bet: number): string {
     const machineGrid: MagicSlotSymbol[][] = Array.from({ length: MAGIC_SLOT_ROWS }, () =>
         Array.from({ length: MAGIC_SLOT_REELS }, (_, reelIndex) => spinMagicSlotSymbol(reelIndex))
     );
+    const totalBonusSymbols = machineGrid.flat().filter(symbol => symbol === "BONUS").length;
 
     const activePatterns = MAGIC_SLOT_PATTERNS;
     const preliminaryWins: Array<{ streak: number; bonusHits: number }> = [];
@@ -7251,7 +7331,9 @@ function playSlots(userId: string, bet: number): string {
         totalBonusHits,
         totalHits: lineWins.length,
         jackpotRows,
-        scaledMultiplier
+        scaledMultiplier,
+        ultraBonusMode,
+        totalBonusSymbols
     });
 }
 
