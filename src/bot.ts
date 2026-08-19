@@ -2808,6 +2808,12 @@ function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
         : (sla.resolveOverdue ? "BREACHED" : "On Track");
     const status = normalizeTicketStatus(ticket.status);
     const nextAction = getTicketNextActionHint(ticket);
+    const intake = parseTicketIntakeSnapshot(ticket.reason);
+    const intakeSummary = ticket.intakeSummary || intake.summary || "General support";
+    const intakeCategory = ticket.intakeCategory || intake.category || String(ticket.category || "general");
+    const intakeDetails = ticket.intakeDetails || intake.details || "No details provided.";
+    const intakePlatform = ticket.intakePlatform || intake.platform || "Not provided";
+    const intakeEvidence = ticket.intakeEvidence || intake.evidence || "No evidence provided";
 
     const statusLabel = `${status === "open" ? "🟢" : status === "claimed" ? "🛠️" : status === "archived" ? "🗂️" : "✅"} ${status.toUpperCase()}`;
     const workflowLabel = `${ticket.workflowStatus === "new" ? "🆕" : ticket.workflowStatus === "responded" ? "💬" : ticket.workflowStatus === "waiting_user" ? "⏳" : ticket.workflowStatus === "escalated" ? "🚨" : "✅"} ${ticket.workflowStatus}`;
@@ -2822,12 +2828,15 @@ function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
             { name: "🕒 Opened At", value: `<t:${Math.floor(ticket.createdAt / 1000)}:f>`, inline: true },
             { name: "📍 Ticket Thread", value: `<#${ticket.channelId}>`, inline: true },
             { name: "⚡ Priority Tier", value: priorityLabel, inline: true },
-            { name: "🏷️ Category", value: String(ticket.category || "general"), inline: true },
+            { name: "🏷️ Category", value: String(ticket.category || intakeCategory), inline: true },
             { name: "🧭 Workflow Lane", value: workflowLabel, inline: true },
             { name: "🛠️ Claim Lead", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed yet", inline: true },
             { name: "🎯 Assigned Specialist", value: ticket.assignedToId ? `<@${ticket.assignedToId}>` : "Unassigned", inline: true },
             { name: "📌 Lifecycle", value: statusLabel, inline: true },
-            { name: "📝 Case Brief", value: ticket.reason || "No reason provided", inline: false },
+            { name: "📝 Summary", value: intakeSummary.slice(0, 240), inline: false },
+            { name: "📄 Details", value: intakeDetails.slice(0, 700), inline: false },
+            { name: "🖥️ Platform / Order", value: intakePlatform === "Not provided" ? "Not provided" : intakePlatform.slice(0, 200), inline: false },
+            { name: "🔗 Evidence", value: intakeEvidence.slice(0, 700), inline: false },
             { name: "⏱️ SLA Clock", value: `• Policy: ${policy.name}\n• First response target: ${Math.round(policy.firstResponseMs / 60000)}m (${firstResponseStatus})\n• Resolution target: ${Math.round(policy.resolveMs / 3600000)}h (${resolveStatus})`, inline: false },
             { name: "🧬 Case Graph", value: `Parent: ${ticket.parentTicketId ? `#${ticket.parentTicketId}` : "none"} | Linked: ${ticket.linkedTicketId ? `#${ticket.linkedTicketId}` : "none"} | Merged Into: ${ticket.mergedIntoTicketId ? `#${ticket.mergedIntoTicketId}` : "none"}`, inline: false },
             { name: "➡️ Recommended Move", value: nextAction, inline: false },
@@ -8380,8 +8389,15 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
         recordTicketCreateFailure("ticket_store_save_conflict");
         return { error: "Ticket persistence conflict detected. Please retry in a moment." };
     }
+    const intake = parseTicketIntakeSnapshot(reason);
+    ticket.intakeSummary = intake.summary;
+    ticket.intakeCategory = intake.category;
+    ticket.intakeDetails = intake.details;
+    ticket.intakePlatform = intake.platform;
+    ticket.intakeOrderId = intake.orderId;
+    ticket.intakeEvidence = intake.evidence;
     applyTicketMetadata(ticket, reason);
-    appendAuditEvent("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason });
+    appendAuditEvent("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason, intake });
 
     const intro = buildTicketOpsEmbed(ticket);
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(

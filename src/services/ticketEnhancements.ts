@@ -180,6 +180,67 @@ export function shouldPurgeResolvedTicket(ticket: Pick<TicketLike, "status" | "r
     return now - ticket.resolvedAt > retentionDays * 24 * 60 * 60 * 1000;
 }
 
+export type TicketIntakeSnapshot = {
+    category: string;
+    summary: string;
+    details: string;
+    platform: string;
+    orderId: string;
+    evidence: string;
+};
+
+export function parseTicketIntakeSnapshot(reason: string): TicketIntakeSnapshot {
+    const text = String(reason || "");
+    const segments = text
+        .split(/\s*\|\s*/)
+        .map(part => part.trim())
+        .filter(Boolean);
+
+    const categorySegment = segments.find(part => /^\[[^\]]+\]$/.test(part));
+    const category = categorySegment ? categorySegment.replace(/^\[|\]$/g, "").trim() || "general" : "general";
+
+    let summary = "General support";
+    let details = "";
+    let platform = "";
+    let orderId = "";
+    let evidence = "";
+
+    for (const segment of segments) {
+        if (segment === categorySegment) continue;
+        if (!summary || summary === "General support") {
+            if (!/^Details:|^Platform:|^Order:|^Evidence:/.test(segment)) {
+                summary = segment.replace(/^[\s|:-]+/, "").trim() || "General support";
+            }
+        }
+        if (/^Details:/i.test(segment)) {
+            details = segment.replace(/^Details:\s*/i, "").trim();
+        } else if (/^Platform:/i.test(segment)) {
+            platform = segment.replace(/^Platform:\s*/i, "").trim();
+        } else if (/^Order:/i.test(segment)) {
+            orderId = segment.replace(/^Order:\s*/i, "").trim();
+        } else if (/^Evidence:/i.test(segment)) {
+            evidence = segment.replace(/^Evidence:\s*/i, "").trim();
+        }
+    }
+
+    if (!details) {
+        const detailsIndex = segments.findIndex(segment => /^Details:/i.test(segment));
+        if (detailsIndex >= 0) {
+            const raw = segments[detailsIndex].replace(/^Details:\s*/i, "").trim();
+            details = raw;
+        }
+    }
+
+    return {
+        category,
+        summary,
+        details,
+        platform,
+        orderId,
+        evidence
+    };
+}
+
 export function buildTicketIntakeReason(input: {
     category: string;
     summary: string;

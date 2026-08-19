@@ -22,6 +22,12 @@ export type TicketRecord = {
     ownerId: string;
     channelId: string;
     reason: string;
+    intakeSummary?: string;
+    intakeCategory?: string;
+    intakeDetails?: string;
+    intakePlatform?: string;
+    intakeEvidence?: string;
+    intakeOrderId?: string;
     status: TicketStatus;
     priority: TicketPriority;
     workflowStatus: TicketWorkflowStatus;

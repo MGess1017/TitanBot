@@ -5,6 +5,7 @@ import {
     findPotentialDuplicateTickets,
     getKbSuggestions,
     getTicketSlaPolicy,
+    parseTicketIntakeSnapshot,
     pickLeastLoadedAssignee,
     shouldPurgeResolvedTicket
 } from "../services/ticketEnhancements";
@@ -21,6 +22,12 @@ function runTicketEnhancementTests(): void {
         evidence: "https://img.example/1"
     });
     assert.equal(reason.includes("[bug]"), true);
+
+    const parsed = parseTicketIntakeSnapshot(reason);
+    assert.equal(parsed.summary, "Crash when opening inventory");
+    assert.equal(parsed.category, "bug");
+    assert.equal(parsed.platform, "PC");
+    assert.equal(parsed.evidence, "https://img.example/1");
 
     const kb = getKbSuggestions("account locked out");
     assert.equal(kb.length >= 2, true);
