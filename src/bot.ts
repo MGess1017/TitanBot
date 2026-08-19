@@ -10653,6 +10653,7 @@ client.once("clientReady", async () => {
         if (guild) {
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
+            await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await removeLegacyReportPanelForGuild(guild);
                 await ensureAdminReportPanelForGuild(guild);
@@ -10672,6 +10673,7 @@ client.once("clientReady", async () => {
     if (client.guilds.cache.size > 0) {
         for (const guild of client.guilds.cache.values()) {
             await guild.commands.set(slashCommands).catch(() => undefined);
+            await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await removeLegacyReportPanelForGuild(guild);
                 await ensureAdminReportPanelForGuild(guild);
