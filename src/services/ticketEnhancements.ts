@@ -111,6 +111,7 @@ export function findPotentialDuplicateTickets(input: {
 
     return input.tickets
         .filter(ticket => ticket.guildId === input.guildId && ticket.ownerId === input.ownerId)
+        .filter(ticket => ticket.status === "open" || ticket.status === "claimed")
         .filter(ticket => now - ticket.createdAt <= lookbackMs)
         .map(ticket => {
             const score = jaccardSimilarity(target, tokenize(ticket.reason));
@@ -238,6 +239,21 @@ export function parseTicketIntakeSnapshot(reason: string): TicketIntakeSnapshot 
         platform,
         orderId,
         evidence
+    };
+}
+
+export function hydrateTicketIntakeFields(
+    reason: string,
+    current?: Partial<TicketIntakeSnapshot>
+): TicketIntakeSnapshot {
+    const parsed = parseTicketIntakeSnapshot(reason);
+    return {
+        category: current?.category || parsed.category || "general",
+        summary: current?.summary || parsed.summary || "General support",
+        details: current?.details || parsed.details || "No details provided.",
+        platform: current?.platform || parsed.platform || "Not provided",
+        orderId: current?.orderId || parsed.orderId || "",
+        evidence: current?.evidence || parsed.evidence || "No evidence provided"
     };
 }
 

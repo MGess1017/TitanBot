@@ -455,107 +455,71 @@ export function buildRaidResultPayload(input: {
         .join("\n") || "• No high-value drops";
 
     const bossResolution = !result.bossSpawned
-        ? "No boss signature detected."
+        ? "Boss: No boss detected"
         : result.bossDefeated
-            ? `${result.bossName || mapCfg.bossName} neutralized.${result.bossBonusXp ? ` Bonus Raid XP +${result.bossBonusXp}.` : ""}`
-            : `${result.bossName || mapCfg.bossName} spawned but was not defeated.${result.bossKillChance ? ` Kill chance rolled at ${result.bossKillChance}%.` : ""}`;
+            ? `${result.bossName || mapCfg.bossName} neutralized${result.bossBonusXp ? ` • +${result.bossBonusXp} raid XP` : ""}`
+            : `${result.bossName || mapCfg.bossName} active • ${result.bossKillChance || 0}% kill chance`;
 
     const heartLine = result.bossHeartUnlockedName
-        ? `First-Kill Trophy: ${result.bossHeartUnlockedName}`
+        ? `Boss Heart: ${result.bossHeartUnlockedName}`
         : result.bossDefeated
-            ? "First-Kill Trophy: already claimed previously or boss heart not eligible."
-            : "First-Kill Trophy: no heart awarded because the boss was not defeated.";
-    const bossIdentity = result.bossSpawned
-        ? `${result.bossName || mapCfg.bossName}${result.bossTitle ? ` • ${result.bossTitle}` : ""}`
-        : "No boss signature detected.";
-    const bossFerocityLine = result.bossSpawned
-        ? `Threat Class: ${ferocityLabel(result.bossFerocity)}${result.bossFerocity ? ` • Ferocity ${result.bossFerocity.toFixed(2)}` : ""}`
-        : "Threat Class: Clear";
-    const pmcHealthLine = typeof result.pmcHpMax === "number" && typeof result.pmcHpRemaining === "number"
-        ? healthBar(result.pmcHpRemaining, result.pmcHpMax)
-        : "No direct PMC contact telemetry.";
-    const bossHealthLine = result.bossSpawned && typeof result.bossHpMax === "number" && typeof result.bossHpRemaining === "number"
-        ? healthBar(result.bossHpRemaining, result.bossHpMax)
-        : "No boss contact telemetry.";
+            ? "Boss Heart: Not awarded"
+            : "Boss Heart: Not claimed";
+
+    const prominentLoot = lootEntries.slice(0, 3).map(entry => `${entry.qty}x ${entry.def?.name || entry.id}`).join(" • ") || "No loot secured";
 
     const specialMoments = [
-        result.bossHeartUnlockedName ? `• New Boss Heart Unlocked: ${result.bossHeartUnlockedName}` : null,
-        result.pmcTierUnlockedLabel ? `• Milestone Tier Reached: ${result.pmcTierUnlockedBadge || "🏅"} ${result.pmcTierUnlockedLabel}` : null,
-        enhancedDrops.length ? `• Enhanced Recovery: ${enhancedDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null,
-        mythicDrops.length ? `• Mythic Cache Hit: ${mythicDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null
+        result.bossHeartUnlockedName ? `Boss Heart: ${result.bossHeartUnlockedName}` : null,
+        result.pmcTierUnlockedLabel ? `${result.pmcTierUnlockedBadge || "🏅"} ${result.pmcTierUnlockedLabel}` : null,
+        enhancedDrops.length ? `Enhanced: ${enhancedDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null,
+        mythicDrops.length ? `Mythic: ${mythicDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null
     ].filter(Boolean) as string[];
 
     const embed = new EmbedBuilder()
         .setColor(result.success ? 0x16a34a : 0xdc2626)
-        .setTitle(result.success ? "✅ Raid Operation Extracted" : "❌ Raid Operation Failed")
-        .setDescription(result.success
-            ? "Strike team returned with confirmed extraction and premium-grade combat telemetry."
-            : "Extraction failed. Review loadout synergy, map pressure, and tension before redeploy.")
+        .setTitle(result.success ? "✅ Raid Extraction Complete" : "❌ Raid Extraction Failed")
+        .setDescription([
+            `${result.mapLabel || mapCfg.label}`,
+            `${tensionLabel || fallbackTension} • ${conditionLabel || "Standard"}`
+        ].join("\n"))
         .setThumbnail(result.bossSpawned && result.bossImageUrl ? result.bossImageUrl : armyIconUrl)
         .addFields(
             {
-                name: "Mission Header",
+                name: "Summary",
                 value: [
-                    `Map: ${result.mapLabel || mapCfg.label}`,
-                    `Tension: ${tensionLabel || fallbackTension}`,
-                    `Condition: ${conditionLabel || "Standard"}`,
-                    `Map Tier: ${mapCfg.lootTier}`
+                    `Status: ${result.success ? "Extracted" : "Failed"}`,
+                    `Success Chance: ${result.successChance || 0}%`,
+                    `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}`
                 ].join("\n"),
                 inline: false
             },
             {
-                name: "Combat Readout",
+                name: "Rewards",
                 value: [
-                    `Weapon: ${result.selectedWeaponName || "Auto-best"}`,
-                    `Armor: ${result.selectedArmorName || "Auto-best"}`,
-                    `Success Chance: ${result.successChance || 0}%`,
-                    `Outcome Status: ${result.success ? "SUCCESS" : "FAILURE"}`
+                    `Net: ${signedNet} FN Token$`,
+                    `Raid XP: +${result.rxpGain || 0}`,
+                    `Boss XP: +${result.bossBonusXp || 0}`,
+                    `Loot: ${lootEntries.length} item${lootEntries.length === 1 ? "" : "s"}`
                 ].join("\n"),
                 inline: true
             },
             {
-                name: "Reward Snapshot",
+                name: "Boss",
                 value: [
-                    `Net Token Delta: ${signedNet} FN Token$`,
-                    `Raid XP Gained: +${result.rxpGain || 0}`,
-                    `Boss XP Bonus: +${result.bossBonusXp || 0}`,
-                    `Boss Kill Chance: ${result.bossKillChance || 0}%`
-                ].join("\n"),
-                inline: true
-            },
-            {
-                name: "Boss Encounter",
-                value: [
-                    bossIdentity,
-                    result.bossSpawned ? `Threat Level: ${result.bossDefeated ? "ELIMINATED" : "ACTIVE CONTACT"}` : "Threat Level: Clear",
-                    bossFerocityLine,
+                    result.bossSpawned ? `${result.bossName || mapCfg.bossName}` : "Boss: No boss detected",
                     bossResolution,
                     heartLine
                 ].join("\n"),
-                inline: false
-            },
-            {
-                name: "PMC Health Profile",
-                value: [
-                    `PMC: ${pmcHealthLine}`,
-                    `Boss: ${bossHealthLine}`,
-                    result.bossSpawned ? "Snapshot: Captured at encounter resolution." : "Snapshot: No boss engagement in this raid."
-                ].join("\n"),
-                inline: false
+                inline: true
             },
             {
                 name: "Recovered Loot",
-                value: lootRows.slice(0, 10).join("\n"),
-                inline: false
-            },
-            {
-                name: "Highest Value Recoveries",
-                value: highValueLoot,
+                value: prominentLoot,
                 inline: false
             },
             ...(specialMoments.length ? [{
-                name: "Premium Event Flags",
-                value: specialMoments.join("\n"),
+                name: "Highlights",
+                value: specialMoments.slice(0, 3).join("\n"),
                 inline: false
             }] : [])
         );

@@ -69,6 +69,8 @@ import {
     findPotentialDuplicateTickets,
     getKbSuggestions,
     getTicketSlaPolicy,
+    hydrateTicketIntakeFields,
+    parseTicketIntakeSnapshot,
     pickLeastLoadedAssignee,
     shouldPurgeResolvedTicket
 } from "./services/ticketEnhancements";
@@ -167,7 +169,7 @@ const DEFAULT_GIVEAWAY_CHANNEL_ID = "1535059013912363008";
 const DEFAULT_REPORT_ADMIN_PANEL_CHANNEL_ID = "1535132577059307583";
 const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
-const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1536822643414536333";
+const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
 const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
@@ -2808,16 +2810,29 @@ function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
         : (sla.resolveOverdue ? "BREACHED" : "On Track");
     const status = normalizeTicketStatus(ticket.status);
     const nextAction = getTicketNextActionHint(ticket);
-    const intake = parseTicketIntakeSnapshot(ticket.reason);
-    const intakeSummary = ticket.intakeSummary || intake.summary || "General support";
-    const intakeCategory = ticket.intakeCategory || intake.category || String(ticket.category || "general");
-    const intakeDetails = ticket.intakeDetails || intake.details || "No details provided.";
-    const intakePlatform = ticket.intakePlatform || intake.platform || "Not provided";
-    const intakeEvidence = ticket.intakeEvidence || intake.evidence || "No evidence provided";
+    const intake = hydrateTicketIntakeFields(ticket.reason, {
+        category: ticket.intakeCategory || ticket.category,
+        summary: ticket.intakeSummary,
+        details: ticket.intakeDetails,
+        platform: ticket.intakePlatform,
+        orderId: ticket.intakeOrderId,
+        evidence: ticket.intakeEvidence
+    });
+    const intakeSummary = intake.summary || "General support";
+    const intakeCategory = intake.category || String(ticket.category || "general");
+    const intakeDetails = intake.details || "No details provided.";
+    const intakePlatform = intake.platform || "Not provided";
+    const intakeEvidence = intake.evidence || "No evidence provided";
 
     const statusLabel = `${status === "open" ? "🟢" : status === "claimed" ? "🛠️" : status === "archived" ? "🗂️" : "✅"} ${status.toUpperCase()}`;
     const workflowLabel = `${ticket.workflowStatus === "new" ? "🆕" : ticket.workflowStatus === "responded" ? "💬" : ticket.workflowStatus === "waiting_user" ? "⏳" : ticket.workflowStatus === "escalated" ? "🚨" : "✅"} ${ticket.workflowStatus}`;
     const priorityLabel = `${ticket.priority === "low" ? "🟦" : ticket.priority === "normal" ? "🟨" : "🟥"} ${ticket.priority.toUpperCase()}`;
+    const intakeSnapshot = [
+        `Summary: ${intakeSummary.slice(0, 200)}`,
+        `Details: ${intakeDetails.slice(0, 450)}`,
+        `Platform / Order: ${intakePlatform === "Not provided" ? "Not provided" : intakePlatform.slice(0, 200)}`,
+        `Evidence: ${intakeEvidence.slice(0, 450)}`
+    ].join("\n");
 
     return brandLiveEmbed(new EmbedBuilder()
         .setColor(0x14b8a6)
@@ -2833,10 +2848,7 @@ function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
             { name: "🛠️ Claim Lead", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed yet", inline: true },
             { name: "🎯 Assigned Specialist", value: ticket.assignedToId ? `<@${ticket.assignedToId}>` : "Unassigned", inline: true },
             { name: "📌 Lifecycle", value: statusLabel, inline: true },
-            { name: "📝 Summary", value: intakeSummary.slice(0, 240), inline: false },
-            { name: "📄 Details", value: intakeDetails.slice(0, 700), inline: false },
-            { name: "🖥️ Platform / Order", value: intakePlatform === "Not provided" ? "Not provided" : intakePlatform.slice(0, 200), inline: false },
-            { name: "🔗 Evidence", value: intakeEvidence.slice(0, 700), inline: false },
+            { name: "📥 Intake Snapshot", value: intakeSnapshot, inline: false },
             { name: "⏱️ SLA Clock", value: `• Policy: ${policy.name}\n• First response target: ${Math.round(policy.firstResponseMs / 60000)}m (${firstResponseStatus})\n• Resolution target: ${Math.round(policy.resolveMs / 3600000)}h (${resolveStatus})`, inline: false },
             { name: "🧬 Case Graph", value: `Parent: ${ticket.parentTicketId ? `#${ticket.parentTicketId}` : "none"} | Linked: ${ticket.linkedTicketId ? `#${ticket.linkedTicketId}` : "none"} | Merged Into: ${ticket.mergedIntoTicketId ? `#${ticket.mergedIntoTicketId}` : "none"}`, inline: false },
             { name: "➡️ Recommended Move", value: nextAction, inline: false },
@@ -8389,7 +8401,14 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
         recordTicketCreateFailure("ticket_store_save_conflict");
         return { error: "Ticket persistence conflict detected. Please retry in a moment." };
     }
-    const intake = parseTicketIntakeSnapshot(reason);
+    const intake = hydrateTicketIntakeFields(reason, {
+        category: ticket.intakeCategory || ticket.category,
+        summary: ticket.intakeSummary,
+        details: ticket.intakeDetails,
+        platform: ticket.intakePlatform,
+        orderId: ticket.intakeOrderId,
+        evidence: ticket.intakeEvidence
+    });
     ticket.intakeSummary = intake.summary;
     ticket.intakeCategory = intake.category;
     ticket.intakeDetails = intake.details;
@@ -10857,6 +10876,7 @@ client.on("interactionCreate", async interaction => {
         }
 
         const ticket = created.channelId ? findTicketByChannel(created.channelId) : null;
+        const intake = parseTicketIntakeSnapshot(reason);
         await interaction.reply({
             embeds: [buildTicketCommandEmbed(
                 "🎫 Intake Submitted",
@@ -10864,7 +10884,10 @@ client.on("interactionCreate", async interaction => {
                 ticket || undefined,
                 [
                     { name: "Category", value: classifyTicketCategory(category), inline: true },
-                    { name: "Summary", value: summary.slice(0, 120), inline: false },
+                    { name: "Summary", value: (intake.summary || summary || "General support").slice(0, 180), inline: false },
+                    { name: "Details", value: (intake.details || details || "No details provided.").slice(0, 600), inline: false },
+                    { name: "Platform / Order", value: (intake.platform || intake.orderId || platform || "Not provided").slice(0, 200), inline: false },
+                    { name: "Evidence", value: (intake.evidence || evidence || "No evidence provided.").slice(0, 600), inline: false },
                     { name: "KB References", value: getKbSuggestions(reason).map(item => `• ${item}`).join("\n"), inline: false }
                 ]
             )],
