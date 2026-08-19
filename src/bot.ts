@@ -2671,6 +2671,15 @@ async function ensureTrackedTicketByChannelId(guild: Guild, channelId: string, f
     const channel = await guild.channels.fetch(channelId).catch(() => null);
     if (!channel || channel.type !== ChannelType.GuildText) return null;
 
+    const archiveCategoryId = ensureTicketConfig(guild.id).archiveCategoryId;
+    if (
+        channel.topic?.includes("[ticket-archived]")
+        || channel.parent?.name === "ticket-archive-hold"
+        || (archiveCategoryId && channel.parentId === archiveCategoryId)
+    ) {
+        return null;
+    }
+
     const ownerFromTopic = findChannelOwnerFromTopic(channel.topic);
     const ownerId = ownerFromTopic || fallbackOwnerId;
     const concurrentExisting = findTicketByChannel(channelId);
@@ -8279,6 +8288,9 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
     }
 
     try {
+    await pruneDeletedTicketRecords(guild);
+    await pruneInaccessibleOwnerTicketRecords(guild);
+
     if (!bypassDeflection) {
         const deflection = evaluateTicketDeflection(guild.id, ownerId, reason);
         if (deflection.blocked) {
@@ -8286,9 +8298,6 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
             return { error: deflection.message || "Potential duplicate ticket detected." };
         }
     }
-
-    await pruneDeletedTicketRecords(guild);
-    await pruneInaccessibleOwnerTicketRecords(guild);
 
     // Self-heal stale owner records caused by manual/deleted/inaccessible channels so /ticket works immediately.
     // Iterate until we either find a valid active ticket or no owner-open tickets remain.
@@ -8461,8 +8470,35 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
 
 async function ensureArchiveCategory(guild: Guild): Promise<string | null> {
     const cfg = ensureTicketConfig(guild.id);
-    if (cfg.archiveCategoryId && guild.channels.cache.has(cfg.archiveCategoryId)) {
-        return cfg.archiveCategoryId;
+    const fetched = await guild.channels.fetch().catch(() => null);
+    const channels = fetched ? Array.from(fetched.values()) : Array.from(guild.channels.cache.values());
+    const archiveCategories = channels
+        .filter(channel => channel?.type === ChannelType.GuildCategory && channel.name === "ticket-archive-hold")
+        .sort((a, b) => a!.id.localeCompare(b!.id));
+    const configured = archiveCategories.find(channel => channel!.id === cfg.archiveCategoryId);
+    const canonical = configured || archiveCategories[0];
+
+    if (canonical) {
+        cfg.archiveCategoryId = canonical.id;
+        saveTicketStore();
+
+        for (const duplicate of archiveCategories) {
+            if (!duplicate || duplicate.id === canonical.id) continue;
+            const children = channels.filter(channel => channel?.parentId === duplicate.id);
+            for (const child of children) {
+                if (child && "setParent" in child) {
+                    await child.setParent(canonical.id, { lockPermissions: false }).catch(() => undefined);
+                }
+            }
+            const remainingChildren = await guild.channels.fetch().catch(() => null);
+            const stillHasChildren = remainingChildren
+                ? Array.from(remainingChildren.values()).some(channel => channel?.parentId === duplicate.id)
+                : children.length > 0;
+            if (!stillHasChildren) {
+                await duplicate.delete("Remove empty duplicate ticket archive category").catch(() => undefined);
+            }
+        }
+        return canonical.id;
     }
 
     const created = await guild.channels.create({
@@ -8488,6 +8524,7 @@ async function closeTicketChannel(guild: Guild, channelId: string, closedById: s
     const archiveCategoryId = await ensureArchiveCategory(guild);
     if (channel && channel.type === ChannelType.GuildText) {
         await channel.setParent(archiveCategoryId, { lockPermissions: false }).catch(() => undefined);
+        await channel.setTopic(`${channel.topic || `Support ticket (${ticket.ownerId})`} [ticket-archived]`).catch(() => undefined);
         await channel.permissionOverwrites.edit(ticket.ownerId, {
             ViewChannel: true,
             ReadMessageHistory: true,
