@@ -21,6 +21,15 @@ export const RAID_ENCOUNTER_IDS = {
     scan: "raid_boss_scan"
 } as const;
 
+export const GEAR_UI_IDS = {
+    repair: "gear_repair",
+    insure: "gear_insure",
+    craft: "gear_craft",
+    upgrade: "gear_upgrade",
+    dismantle: "gear_dismantle",
+    loadout: "gear_loadout"
+} as const;
+
 function kindLabel(kind?: ItemDef["kind"]): string {
     const key = String(kind || "resource");
     if (key === "weapon") return "Weapons";
@@ -135,6 +144,8 @@ export function buildSellPickerPayload(input: {
 export function buildInventoryPayload(input: {
     inventory: Record<string, number>;
     wallet: number;
+    gearDurability?: Record<string, number>;
+    insuredGear?: Record<string, number>;
 }): string {
     const entries = Object.entries(input.inventory)
         .map(([id, qty]) => ({ id, qty: Math.max(0, Math.floor(Number(qty) || 0)), def: ITEM_DEFS[id] }))
@@ -214,6 +225,11 @@ export function buildInventoryPayload(input: {
             {
                 name: "Highest Value Holdings",
                 value: topByValue || "No valuation data.",
+                inline: false
+            },
+            {
+                name: "Gear Condition",
+                value: entries.filter(entry => entry.def.kind === "weapon" || entry.def.kind === "armor").slice(0, 8).map(entry => `${entry.def.name}: ${Math.max(0, Math.min(100, Math.floor(input.gearDurability?.[entry.id] ?? 100)))}%${input.insuredGear?.[entry.id] ? " • Insured" : ""}`).join("\n") || "No weapons or armor tracked.",
                 inline: false
             },
             ...categoryFields.slice(0, 6),
@@ -299,7 +315,17 @@ export function buildShopPayload(input: {
             }
         );
 
-    return JSON.stringify({ embed: embed.toJSON() });
+    const economyRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(GEAR_UI_IDS.repair).setLabel("Repair").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(GEAR_UI_IDS.insure).setLabel("Insure").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(GEAR_UI_IDS.craft).setLabel("Craft").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(GEAR_UI_IDS.upgrade).setLabel("Upgrade").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(GEAR_UI_IDS.dismantle).setLabel("Dismantle").setStyle(ButtonStyle.Secondary)
+    );
+    const loadoutRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(GEAR_UI_IDS.loadout).setLabel("Save Loadout").setStyle(ButtonStyle.Primary)
+    );
+    return JSON.stringify({ embed: embed.toJSON(), components: [economyRow.toJSON(), loadoutRow.toJSON()] });
 }
 
 export function buildTradeActionPayload(input: {
@@ -650,6 +676,8 @@ export function buildBossBattlePayload(input: {
     turn: number;
     totalTurns: number;
     action?: "attack" | "defend" | "heal" | "scan";
+    animationFrame?: number;
+    interactive?: boolean;
 }): string {
     const totalTurns = Math.max(1, Math.floor(input.totalTurns));
     const turn = Math.max(0, Math.min(totalTurns, Math.floor(input.turn)));
@@ -659,6 +687,9 @@ export function buildBossBattlePayload(input: {
     const phaseNames = input.bossPhaseNames?.length ? input.bossPhaseNames : ["Contact"];
     const phaseIndex = Math.min(phaseNames.length - 1, Math.floor(progress * phaseNames.length));
     const phase = turn >= totalTurns ? input.bossCurrentPhase || phaseNames[phaseIndex] : phaseNames[phaseIndex];
+    const animationFrame = Math.max(0, Math.floor(input.animationFrame || 0)) % 4;
+    const animationLabel = ["ENTRANCE", "CHARGE", "IMPACT", "AFTERMATH"][animationFrame];
+    const animationGlyph = ["◆", "◇", "✦", "◆"][animationFrame];
     const actionLabel = input.action === "defend" ? "Defend" : input.action === "heal" ? "Heal" : input.action === "scan" ? "Scan" : "Attack";
     const actionEffect = input.action === "defend"
         ? "Damage mitigated while the PMC reads the boss counter."
@@ -668,7 +699,7 @@ export function buildBossBattlePayload(input: {
                 ? `Intel acquired: ${phase} phase and ${input.bossTraitLabels?.join(" / ") || "unknown traits"}.`
                 : "The PMC commits a direct strike.";
     const status = turn === 0
-        ? `${input.bossName} entered the combat zone.`
+            ? `${animationGlyph} ${input.bossName} entered the combat zone.`
         : turn < totalTurns
             ? `Turn ${turn}: ${actionLabel}. ${actionEffect} ${input.bossName} counters from ${phase}.`
             : input.bossDefeated
@@ -688,7 +719,7 @@ export function buildBossBattlePayload(input: {
                     `Traits: ${input.bossTraitLabels?.join(" • ") || "Unknown"}`,
                     `Threat: ${(input.bossFerocity || 1).toFixed(2)}x`
                 ].join("\n"),
-                inline: false
+                inline: true
             },
             {
                 name: `PMC • Level ${(input.pmcLevel || 0).toLocaleString()} • Prestige ${input.pmcPrestige || 0}`,
@@ -698,13 +729,13 @@ export function buildBossBattlePayload(input: {
                     `Armor: ${input.armorName || "Auto-best armor"}`,
                     `Boss Takedown Chance: ${input.bossKillChance || 0}%`
                 ].join("\n"),
-                inline: false
+                inline: true
             },
-            { name: "Battle Feed", value: status, inline: false }
+            { name: `${animationLabel} • Battle Feed`, value: status, inline: false }
         )
         .setFooter({ text: `Combat simulation • ${phaseNames.join(" -> ")}` });
     if (input.bossImageUrl) embed.setThumbnail(input.bossImageUrl);
-    const components = turn < totalTurns
+    const components = turn < totalTurns && input.interactive !== false
         ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.attack).setLabel("Attack").setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.defend).setLabel("Defend").setStyle(ButtonStyle.Secondary),

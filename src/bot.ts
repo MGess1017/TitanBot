@@ -102,8 +102,8 @@ import {
 import { ARMOR_IDS, BOSS_HEART_DEFS, BOSS_HEART_IDS, COLLECTIBLE_ITEM_IDS, getVendorSellPrice, ITEM_DEFS, SHOP_ITEMS, ULTRA_RARE_COLLECTIBLE_IDS, type ItemDef, WEAPON_IDS } from "./game/catalog";
 import { awardBossHeartAchievement, getUnlockedBossHeartNames } from "./game/bossHearts";
 import { getBossPortraitUrl } from "./game/bossPortraits";
-import { getDynamicVendorPrice, resolveGearLoss } from "./game/gearEconomy";
-import { buildBossBattlePayload, buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildSellPickerPayload, buildShopPayload, buildTradeActionPayload, getSellableInventoryOptions, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS, rarityBadge } from "./game/payloads";
+import { CRAFT_RECIPES, craftItem, dismantleGear, getDynamicVendorPrice, insureGear, repairGear, resolveGearLoss, saveLoadout, upgradeGear } from "./game/gearEconomy";
+import { buildBossBattlePayload, buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildSellPickerPayload, buildShopPayload, buildTradeActionPayload, getSellableInventoryOptions, GEAR_UI_IDS, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS, rarityBadge } from "./game/payloads";
 import { getRaidOutcome, getRaidRewards } from "./game/raid";
 import * as RaidDomain from "./raid/domain";
 import * as RaidRuntime from "./raid/runtime";
@@ -2507,6 +2507,22 @@ function buildRaidItemGiveawayModal(): ModalBuilder {
         );
 }
 
+function buildGearActionModal(action: string): ModalBuilder {
+    const modal = new ModalBuilder().setCustomId(`${GEAR_MODAL_PREFIX}${action}`).setTitle(`Gear ${action}`);
+    if (action === "loadout") {
+        return modal.addComponents(
+            new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("name").setLabel("Loadout name").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(24)),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("weapon").setLabel("Weapon ID (optional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(80)),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("armor").setLabel("Armor ID (optional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(80)),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("ammo").setLabel("Ammo ID (optional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(80))
+        );
+    }
+    const label = action === "craft" ? "Recipe output ID" : "Item ID";
+    return modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId("item").setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80)
+    ));
+}
+
 function buildAdminReportPanelPayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x0ea5e9)
@@ -3452,6 +3468,7 @@ const PMC_PRESTIGE_IDS = {
 } as const;
 
 const activeRaidEncounters = new Set<string>();
+const GEAR_MODAL_PREFIX = "gear_modal:";
 
 type CasinoGameKey = Exclude<GameStatKey, "raid">;
 type CasinoActionKind = "launch" | "replay" | "double" | "half" | "switch";
@@ -5705,6 +5722,9 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
     selectedArmorName?: string;
 }): Promise<void> {
     if (!result.bossName || !result.bossHpMax || !result.pmcHpMax) return;
+    const bossName = result.bossName;
+    const bossHpMax = result.bossHpMax;
+    const pmcHpMax = result.pmcHpMax;
     const totalTurns = Math.max(3, Math.min(5, result.bossPhaseNames?.length || 3));
     let action: "attack" | "defend" | "heal" | "scan" | undefined;
     const actionIds = new Map<string, "attack" | "defend" | "heal" | "scan">([
@@ -5713,9 +5733,9 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
         [RAID_ENCOUNTER_IDS.heal, "heal"],
         [RAID_ENCOUNTER_IDS.scan, "scan"]
     ]);
-    for (let turn = 0; turn <= totalTurns; turn++) {
+    const renderFrame = async (turn: number, animationFrame: number, interactive: boolean): Promise<boolean> => {
         const payload = JSON.parse(buildBossBattlePayload({
-            bossName: result.bossName,
+            bossName,
             bossTitle: result.bossTitle,
             bossImageUrl: result.bossImageUrl,
             bossFerocity: result.bossFerocity,
@@ -5724,22 +5744,38 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
             bossCurrentPhase: result.bossCurrentPhase,
             bossDefeated: result.bossDefeated,
             bossKillChance: result.bossKillChance,
-            bossHpMax: result.bossHpMax,
+            bossHpMax,
             bossHpFinal: result.bossHpRemaining || 0,
             pmcLevel: result.pmcLevel,
             pmcPrestige: result.pmcPrestige,
-            pmcHpMax: result.pmcHpMax,
+            pmcHpMax,
             pmcHpFinal: result.pmcHpRemaining || 0,
             weaponName: result.selectedWeaponName,
             armorName: result.selectedArmorName,
             turn,
             totalTurns,
-            action
+            action,
+            animationFrame,
+            interactive
         }));
         const displayed = await interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components })
             .then(() => true)
             .catch(() => false);
-        if (!displayed) return;
+        return displayed;
+    };
+    for (let entranceFrame = 0; entranceFrame < 4; entranceFrame++) {
+        if (!await renderFrame(0, entranceFrame, entranceFrame === 3)) return;
+        if (entranceFrame < 3) await new Promise(resolve => setTimeout(resolve, 350));
+    }
+    for (let turn = 0; turn <= totalTurns; turn++) {
+        if (turn > 0) {
+            if (!await renderFrame(turn, 1, false)) return;
+            await new Promise(resolve => setTimeout(resolve, 300));
+            if (!await renderFrame(turn, 2, false)) return;
+            await new Promise(resolve => setTimeout(resolve, 350));
+            if (!await renderFrame(turn, 3, turn < totalTurns)) return;
+        }
+        if (turn >= totalTurns) return;
         if (turn < totalTurns) {
             const message = await interaction.fetchReply().catch(() => null);
             const selected = message && "awaitMessageComponent" in message
@@ -10146,7 +10182,8 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         });
     },
     inventory: async interaction => {
-        return buildInventoryPayload({ inventory: ensureUser(interaction.user.id).inventory, wallet: getTokens(interaction.user.id) });
+        const state = ensureUser(interaction.user.id);
+        return buildInventoryPayload({ inventory: state.inventory, wallet: getTokens(interaction.user.id), gearDurability: state.gearDurability, insuredGear: state.insuredGear });
     },
     buy: async interaction => {
         const item = interaction.options.getString("item", true).trim().toLowerCase();
@@ -10733,6 +10770,30 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
+
+    if (interaction.isButton() && Object.values(GEAR_UI_IDS).includes(interaction.customId as typeof GEAR_UI_IDS[keyof typeof GEAR_UI_IDS])) {
+        const action = Object.entries(GEAR_UI_IDS).find(([, id]) => id === interaction.customId)?.[0];
+        if (action) await interaction.showModal(buildGearActionModal(action)).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(GEAR_MODAL_PREFIX)) {
+        const action = interaction.customId.slice(GEAR_MODAL_PREFIX.length);
+        const user = ensureUser(interaction.user.id);
+        let result: { error?: string; changed?: number; cost?: number; recovered?: boolean } | null = null;
+        if (action === "loadout") {
+            result = saveLoadout(user, interaction.fields.getTextInputValue("name"), interaction.fields.getTextInputValue("weapon") || null, interaction.fields.getTextInputValue("armor") || null, interaction.fields.getTextInputValue("ammo") || null);
+        } else if (action === "craft") {
+            const recipe = CRAFT_RECIPES.find(entry => entry.outputId === interaction.fields.getTextInputValue("item").trim().toLowerCase());
+            result = recipe ? craftItem(user, recipe) : { error: "Unknown recipe output. Use upgrade_core, blueprint_bossbreaker, or tactical_overdrive." };
+        } else {
+            const itemId = interaction.fields.getTextInputValue("item").trim().toLowerCase();
+            result = action === "repair" ? repairGear(user, itemId) : action === "insure" ? insureGear(user, itemId) : action === "upgrade" ? upgradeGear(user, itemId) : dismantleGear(user, itemId);
+        }
+        savePoints();
+        await interaction.reply({ content: result.error || `Gear ${action} completed${result.cost ? ` for ${result.cost} FN Token$` : ""}.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
 
     if (interaction.isModalSubmit() && interaction.customId === TICKET_IDS.intakeModal) {
         const guild = interaction.guild;

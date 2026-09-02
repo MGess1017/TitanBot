@@ -1957,6 +1957,14 @@ function buildRaidItemGiveawayModal() {
         .setTitle("Raid Item Giveaway")
         .addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidItemId).setLabel("Raid Item ID").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(80).setPlaceholder("mythic_crate, fn_coin, reactor_blade")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidItemQty).setLabel("Quantity Per Winner").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(10).setPlaceholder("1")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidDuration).setLabel("Duration").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(20).setPlaceholder("30m, 6h, 2d")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidWinners).setLabel("Winner Count").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(10).setPlaceholder("1")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(GIVEAWAY_IDS.raidDescription).setLabel("Description").setStyle(discord_js_1.TextInputStyle.Paragraph).setRequired(false).setMaxLength(400).setPlaceholder("Optional context or event blurb")));
 }
+function buildGearActionModal(action) {
+    const modal = new discord_js_1.ModalBuilder().setCustomId(`${GEAR_MODAL_PREFIX}${action}`).setTitle(`Gear ${action}`);
+    if (action === "loadout") {
+        return modal.addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("name").setLabel("Loadout name").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(24)), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("weapon").setLabel("Weapon ID (optional)").setStyle(discord_js_1.TextInputStyle.Short).setRequired(false).setMaxLength(80)), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("armor").setLabel("Armor ID (optional)").setStyle(discord_js_1.TextInputStyle.Short).setRequired(false).setMaxLength(80)), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("ammo").setLabel("Ammo ID (optional)").setStyle(discord_js_1.TextInputStyle.Short).setRequired(false).setMaxLength(80)));
+    }
+    const label = action === "craft" ? "Recipe output ID" : "Item ID";
+    return modal.addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("item").setLabel(label).setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(80)));
+}
 function buildAdminReportPanelPayload(guildName) {
     const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
         .setColor(0x0ea5e9)
@@ -2735,6 +2743,7 @@ const PMC_PRESTIGE_IDS = {
     cancel: "pmc_prestige_cancel"
 };
 const activeRaidEncounters = new Set();
+const GEAR_MODAL_PREFIX = "gear_modal:";
 const CASINO_GAME_ORDER = [
     "dice",
     "roulette",
@@ -4694,6 +4703,9 @@ async function resolveRaidBranchDecision(interaction, mapLabel, tension) {
 async function presentBossBattle(interaction, result) {
     if (!result.bossName || !result.bossHpMax || !result.pmcHpMax)
         return;
+    const bossName = result.bossName;
+    const bossHpMax = result.bossHpMax;
+    const pmcHpMax = result.pmcHpMax;
     const totalTurns = Math.max(3, Math.min(5, result.bossPhaseNames?.length || 3));
     let action;
     const actionIds = new Map([
@@ -4702,9 +4714,9 @@ async function presentBossBattle(interaction, result) {
         [payloads_1.RAID_ENCOUNTER_IDS.heal, "heal"],
         [payloads_1.RAID_ENCOUNTER_IDS.scan, "scan"]
     ]);
-    for (let turn = 0; turn <= totalTurns; turn++) {
+    const renderFrame = async (turn, animationFrame, interactive) => {
         const payload = JSON.parse((0, payloads_1.buildBossBattlePayload)({
-            bossName: result.bossName,
+            bossName,
             bossTitle: result.bossTitle,
             bossImageUrl: result.bossImageUrl,
             bossFerocity: result.bossFerocity,
@@ -4713,22 +4725,43 @@ async function presentBossBattle(interaction, result) {
             bossCurrentPhase: result.bossCurrentPhase,
             bossDefeated: result.bossDefeated,
             bossKillChance: result.bossKillChance,
-            bossHpMax: result.bossHpMax,
+            bossHpMax,
             bossHpFinal: result.bossHpRemaining || 0,
             pmcLevel: result.pmcLevel,
             pmcPrestige: result.pmcPrestige,
-            pmcHpMax: result.pmcHpMax,
+            pmcHpMax,
             pmcHpFinal: result.pmcHpRemaining || 0,
             weaponName: result.selectedWeaponName,
             armorName: result.selectedArmorName,
             turn,
             totalTurns,
-            action
+            action,
+            animationFrame,
+            interactive
         }));
         const displayed = await interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components })
             .then(() => true)
             .catch(() => false);
-        if (!displayed)
+        return displayed;
+    };
+    for (let entranceFrame = 0; entranceFrame < 4; entranceFrame++) {
+        if (!await renderFrame(0, entranceFrame, entranceFrame === 3))
+            return;
+        if (entranceFrame < 3)
+            await new Promise(resolve => setTimeout(resolve, 350));
+    }
+    for (let turn = 0; turn <= totalTurns; turn++) {
+        if (turn > 0) {
+            if (!await renderFrame(turn, 1, false))
+                return;
+            await new Promise(resolve => setTimeout(resolve, 300));
+            if (!await renderFrame(turn, 2, false))
+                return;
+            await new Promise(resolve => setTimeout(resolve, 350));
+            if (!await renderFrame(turn, 3, turn < totalTurns))
+                return;
+        }
+        if (turn >= totalTurns)
             return;
         if (turn < totalTurns) {
             const message = await interaction.fetchReply().catch(() => null);
@@ -8809,7 +8842,8 @@ const commandHandlers = {
         });
     },
     inventory: async (interaction) => {
-        return (0, payloads_1.buildInventoryPayload)({ inventory: (0, utils_1.ensureUser)(interaction.user.id).inventory, wallet: (0, utils_1.getTokens)(interaction.user.id) });
+        const state = (0, utils_1.ensureUser)(interaction.user.id);
+        return (0, payloads_1.buildInventoryPayload)({ inventory: state.inventory, wallet: (0, utils_1.getTokens)(interaction.user.id), gearDurability: state.gearDurability, insuredGear: state.insuredGear });
     },
     buy: async (interaction) => {
         const item = interaction.options.getString("item", true).trim().toLowerCase();
@@ -9393,6 +9427,31 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.showModal(buildTicketIntakeModal()).catch(async () => {
             await interaction.reply({ content: "Unable to open intake modal right now.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
         });
+        return;
+    }
+    if (interaction.isButton() && Object.values(payloads_1.GEAR_UI_IDS).includes(interaction.customId)) {
+        const action = Object.entries(payloads_1.GEAR_UI_IDS).find(([, id]) => id === interaction.customId)?.[0];
+        if (action)
+            await interaction.showModal(buildGearActionModal(action)).catch(() => undefined);
+        return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(GEAR_MODAL_PREFIX)) {
+        const action = interaction.customId.slice(GEAR_MODAL_PREFIX.length);
+        const user = (0, utils_1.ensureUser)(interaction.user.id);
+        let result = null;
+        if (action === "loadout") {
+            result = (0, gearEconomy_1.saveLoadout)(user, interaction.fields.getTextInputValue("name"), interaction.fields.getTextInputValue("weapon") || null, interaction.fields.getTextInputValue("armor") || null, interaction.fields.getTextInputValue("ammo") || null);
+        }
+        else if (action === "craft") {
+            const recipe = gearEconomy_1.CRAFT_RECIPES.find(entry => entry.outputId === interaction.fields.getTextInputValue("item").trim().toLowerCase());
+            result = recipe ? (0, gearEconomy_1.craftItem)(user, recipe) : { error: "Unknown recipe output. Use upgrade_core, blueprint_bossbreaker, or tactical_overdrive." };
+        }
+        else {
+            const itemId = interaction.fields.getTextInputValue("item").trim().toLowerCase();
+            result = action === "repair" ? (0, gearEconomy_1.repairGear)(user, itemId) : action === "insure" ? (0, gearEconomy_1.insureGear)(user, itemId) : action === "upgrade" ? (0, gearEconomy_1.upgradeGear)(user, itemId) : (0, gearEconomy_1.dismantleGear)(user, itemId);
+        }
+        (0, utils_1.savePoints)();
+        await interaction.reply({ content: result.error || `Gear ${action} completed${result.cost ? ` for ${result.cost} FN Token$` : ""}.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
     if (interaction.isModalSubmit() && interaction.customId === TICKET_IDS.intakeModal) {

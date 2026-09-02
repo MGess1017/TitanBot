@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RAID_ENCOUNTER_IDS = exports.RAID_RESULT_ACTION_IDS = void 0;
+exports.GEAR_UI_IDS = exports.RAID_ENCOUNTER_IDS = exports.RAID_RESULT_ACTION_IDS = void 0;
 exports.rarityBadge = rarityBadge;
 exports.getSellableInventoryOptions = getSellableInventoryOptions;
 exports.buildSellPickerPayload = buildSellPickerPayload;
@@ -31,6 +31,14 @@ exports.RAID_ENCOUNTER_IDS = {
     defend: "raid_boss_defend",
     heal: "raid_boss_heal",
     scan: "raid_boss_scan"
+};
+exports.GEAR_UI_IDS = {
+    repair: "gear_repair",
+    insure: "gear_insure",
+    craft: "gear_craft",
+    upgrade: "gear_upgrade",
+    dismantle: "gear_dismantle",
+    loadout: "gear_loadout"
 };
 function kindLabel(kind) {
     const key = String(kind || "resource");
@@ -218,6 +226,10 @@ function buildInventoryPayload(input) {
         name: "Highest Value Holdings",
         value: topByValue || "No valuation data.",
         inline: false
+    }, {
+        name: "Gear Condition",
+        value: entries.filter(entry => entry.def.kind === "weapon" || entry.def.kind === "armor").slice(0, 8).map(entry => `${entry.def.name}: ${Math.max(0, Math.min(100, Math.floor(input.gearDurability?.[entry.id] ?? 100)))}%${input.insuredGear?.[entry.id] ? " • Insured" : ""}`).join("\n") || "No weapons or armor tracked.",
+        inline: false
     }, ...categoryFields.slice(0, 6), {
         name: "Next Actions",
         value: "• /sell\n• /opencrate\n• /useitem\n• /raidintel",
@@ -280,7 +292,9 @@ function buildShopPayload(input) {
         value: "• /buy\n• /inventory\n• /loadout\n• /raidintel",
         inline: false
     });
-    return JSON.stringify({ embed: embed.toJSON() });
+    const economyRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.GEAR_UI_IDS.repair).setLabel("Repair").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.GEAR_UI_IDS.insure).setLabel("Insure").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.GEAR_UI_IDS.craft).setLabel("Craft").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(exports.GEAR_UI_IDS.upgrade).setLabel("Upgrade").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(exports.GEAR_UI_IDS.dismantle).setLabel("Dismantle").setStyle(discord_js_1.ButtonStyle.Secondary));
+    const loadoutRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.GEAR_UI_IDS.loadout).setLabel("Save Loadout").setStyle(discord_js_1.ButtonStyle.Primary));
+    return JSON.stringify({ embed: embed.toJSON(), components: [economyRow.toJSON(), loadoutRow.toJSON()] });
 }
 function buildTradeActionPayload(input) {
     const embed = new discord_js_1.EmbedBuilder()
@@ -493,6 +507,9 @@ function buildBossBattlePayload(input) {
     const phaseNames = input.bossPhaseNames?.length ? input.bossPhaseNames : ["Contact"];
     const phaseIndex = Math.min(phaseNames.length - 1, Math.floor(progress * phaseNames.length));
     const phase = turn >= totalTurns ? input.bossCurrentPhase || phaseNames[phaseIndex] : phaseNames[phaseIndex];
+    const animationFrame = Math.max(0, Math.floor(input.animationFrame || 0)) % 4;
+    const animationLabel = ["ENTRANCE", "CHARGE", "IMPACT", "AFTERMATH"][animationFrame];
+    const animationGlyph = ["◆", "◇", "✦", "◆"][animationFrame];
     const actionLabel = input.action === "defend" ? "Defend" : input.action === "heal" ? "Heal" : input.action === "scan" ? "Scan" : "Attack";
     const actionEffect = input.action === "defend"
         ? "Damage mitigated while the PMC reads the boss counter."
@@ -502,7 +519,7 @@ function buildBossBattlePayload(input) {
                 ? `Intel acquired: ${phase} phase and ${input.bossTraitLabels?.join(" / ") || "unknown traits"}.`
                 : "The PMC commits a direct strike.";
     const status = turn === 0
-        ? `${input.bossName} entered the combat zone.`
+        ? `${animationGlyph} ${input.bossName} entered the combat zone.`
         : turn < totalTurns
             ? `Turn ${turn}: ${actionLabel}. ${actionEffect} ${input.bossName} counters from ${phase}.`
             : input.bossDefeated
@@ -520,7 +537,7 @@ function buildBossBattlePayload(input) {
             `Traits: ${input.bossTraitLabels?.join(" • ") || "Unknown"}`,
             `Threat: ${(input.bossFerocity || 1).toFixed(2)}x`
         ].join("\n"),
-        inline: false
+        inline: true
     }, {
         name: `PMC • Level ${(input.pmcLevel || 0).toLocaleString()} • Prestige ${input.pmcPrestige || 0}`,
         value: [
@@ -529,12 +546,12 @@ function buildBossBattlePayload(input) {
             `Armor: ${input.armorName || "Auto-best armor"}`,
             `Boss Takedown Chance: ${input.bossKillChance || 0}%`
         ].join("\n"),
-        inline: false
-    }, { name: "Battle Feed", value: status, inline: false })
+        inline: true
+    }, { name: `${animationLabel} • Battle Feed`, value: status, inline: false })
         .setFooter({ text: `Combat simulation • ${phaseNames.join(" -> ")}` });
     if (input.bossImageUrl)
         embed.setThumbnail(input.bossImageUrl);
-    const components = turn < totalTurns
+    const components = turn < totalTurns && input.interactive !== false
         ? [new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.attack).setLabel("Attack").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.defend).setLabel("Defend").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.heal).setLabel("Heal").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.scan).setLabel("Scan").setStyle(discord_js_1.ButtonStyle.Primary)).toJSON()]
         : [];
     return JSON.stringify({ embed: embed.toJSON(), components });

@@ -27,7 +27,7 @@ import { getRaidRewards } from "../game/raid";
 import { ITEM_DEFS, SHOP_ITEMS } from "../game/catalog";
 import { getRouteAccessItemDropChance } from "../raid/runtime";
 import { CRAFT_RECIPES, craftItem, createAuctionListing, dismantleGear, getDynamicVendorPrice, calculateDynamicLootValue, getGearDurability, insureGear, placeAuctionBid, repairGear, resolveGearLoss, saveLoadout, upgradeGear } from "../game/gearEconomy";
-import { buildBossBattlePayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
+import { buildBossBattlePayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildShopPayload, GEAR_UI_IDS, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
 import {
     BOSS_TRAITS,
     MAP_REPUTATION_TIERS,
@@ -187,6 +187,9 @@ function runEconomyAndRaidTests(): void {
         points[userA].pmcXP = PMC_LEVEL_THRESHOLDS[PMC_LEVEL_CAP - 1] + 2000000;
         assert.equal(getPmcMasteryLevel(points[userA].pmcXP), 2);
         assert.equal(applyPmcMilestoneRewards(userA).masteryLevel, 2);
+        const shopPayload = JSON.parse(buildShopPayload({ shopItemIds: SHOP_ITEMS, inventory: points[userA].inventory, wallet: points[userA].fnTokens }));
+        assert.deepEqual(shopPayload.components[0].components.map((component: { custom_id: string }) => component.custom_id), Object.values(GEAR_UI_IDS).slice(0, 5));
+        assert.equal(shopPayload.components[1].components[0].custom_id, GEAR_UI_IDS.loadout);
         assert.equal(discoverRareExtractionRoute({ mapKey: "plagued_cemetary", tension: "high", reputationLevel: 4, inventory: {}, random: () => 0 }), null);
         const discoveredRoute = discoverRareExtractionRoute({ mapKey: "plagued_cemetary", tension: "high", reputationLevel: 4, inventory: { boneway_key: 1 }, random: () => 0 });
         assert.equal(discoveredRoute?.key, "catacomb_smuggler");
@@ -225,6 +228,7 @@ function runEconomyAndRaidTests(): void {
         const battleOpening = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 0, totalTurns: 3 }));
         const battleFinal = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 3, totalTurns: 3 }));
         assert.equal(battleOpening.components[0].components.length, 4);
+        assert.ok(battleOpening.embed.fields[2].name.includes("ENTRANCE"));
         assert.ok(battleOpening.embed.fields[0].value.includes("800/800"));
         assert.ok(battleFinal.embed.fields[0].value.includes("0/800"));
         assert.ok(battleFinal.embed.fields[1].value.includes("240/600"));
