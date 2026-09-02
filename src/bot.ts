@@ -7714,75 +7714,44 @@ async function runCasinoQuickAction(input: {
     return { gameKey: "keno", payload: playKeno(input.userId, effectiveBet, arg || "3,8,11,24") };
 }
 
-function buildTicketPanelPayload(guildName: string) {
+function buildTicketPanelPayload(guildName: string, frame: "opening" | "ready" = "ready") {
+    if (frame === "opening") {
+        const openingEmbed = brandLiveEmbed(new EmbedBuilder()
+            .setColor(0x0ea5e9)
+            .setTitle("⌛ FN Support Desk")
+            .setDescription(`Connecting to ${guildName} support operations...`)
+            .addFields({ name: "Status", value: "Establishing a private support lane.", inline: false })
+            .setFooter({ text: "Support operations initializing" }), "FN Support Desk", `${guildName} support panel`);
+        return {
+            embed: openingEmbed.toJSON(),
+            components: [],
+            isTicketPanel: true
+        };
+    }
+
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x14b8a6)
-        .setTitle("🎫 FN Support tickets.")
+        .setTitle("🎫 FN Support Desk")
         .setDescription([
-            `Welcome to **${guildName}** support HQ.`,
-            "",
-            "Open a private ticket to start a tracked case with live status, assignment flow, and SLA visibility.",
-            "",
-            "Need fast help? Include screenshots, IDs, and exact steps so handlers can act quickly."
+            `Private support for **${guildName}**.`,
+            "Open a tracked case with live status, handler assignment, and SLA visibility."
         ].join("\n"))
         .addFields(
             {
-                name: "🧭 Desk Purpose",
-                value: [
-                    "Private support lane for account help, billing, appeals, and operations issues.",
-                    "",
-                    "Built for clean tracking from open to final resolution."
-                ].join("\n")
+                name: "Start Here",
+                value: "Press **Open Support Ticket**. A private case channel and operations panel will appear automatically."
             },
             {
-                name: "🚀 How To Open",
-                value: [
-                    "Press **Open Support Ticket**.",
-                    "",
-                    "A private channel is created instantly and a live operations panel is posted."
-                ].join("\n")
+                name: "Include This",
+                value: "A short summary, exact steps, timestamps, IDs, and evidence links when relevant."
             },
             {
-                name: "📊 Priority Guide",
-                value: [
-                    "**Low**: General questions",
-                    "",
-                    "**Normal**: Standard support",
-                    "",
-                    "**High**: Urgent operational issue"
-                ].join("\n")
+                name: "Priority",
+                value: "Low: general questions\nNormal: standard support\nHigh: urgent operational issue"
             },
             {
-                name: "🧩 Workflow",
-                value: "`new` -> `responded` -> `waiting_user` -> `archived` -> `resolved`"
-            },
-            {
-                name: "🔐 Visibility",
-                value: [
-                    "Only ticket owner, admins, and handler role can view ticket channels.",
-                    "",
-                    "Actions are logged for audit and accountability."
-                ].join("\n")
-            },
-            {
-                name: "🛠️ Handler Toolkit",
-                value: [
-                    "Button actions: Claim, Archive, Resolve",
-                    "",
-                    "Slash actions: `/claimticket` `/ticketassign` `/ticketstatus` `/reopenticket` `/closeticket` `/resolveticket`"
-                ].join("\n")
-            },
-            {
-                name: "🧠 Quality Tips",
-                value: [
-                    "Include screenshots, message links, and IDs.",
-                    "",
-                    "Write exact steps and expected vs actual behavior."
-                ].join("\n")
-            },
-            {
-                name: "⚖️ Rules",
-                value: "One active support ticket per user. Spam or abuse may trigger moderation actions."
+                name: "Workflow",
+                value: "`new` → `responded` → `waiting_user` → `archived` → `resolved`\nPrivate channels. Audited actions. One active case per user."
             }
         ), "FN Support Desk", `${guildName} support panel`);
 
@@ -7861,14 +7830,14 @@ async function upsertTicketPanelInChannel(guild: Guild, channelId: string): Prom
 
     let candidateId: string | null = null;
     let beforeId: string | undefined;
-    const expectedTitle = "🎫 FN Support tickets.";
+    const expectedTitle = "🎫 FN Support Desk";
     for (let i = 0; i < 5; i++) {
         const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
         if (!batch || !batch.size) break;
 
         const candidate = batch.find(message =>
             message.author.id === (client.user?.id || "")
-            && (messageHasTicketOpenButton(message as MessageWithComponents) || message.embeds[0]?.title === expectedTitle)
+            && (messageHasTicketOpenButton(message as MessageWithComponents) || message.embeds[0]?.title === expectedTitle || message.embeds[0]?.title === "⌛ FN Support Desk")
         );
         if (candidate) {
             candidateId = candidate.id;
@@ -7889,10 +7858,14 @@ async function upsertTicketPanelInChannel(guild: Guild, channelId: string): Prom
         return { ok: true, action: "updated" };
     }
 
-    const sent = await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+    const opening = buildTicketPanelPayload(guild.name, "opening");
+    const sent = await channel.send({ embeds: [opening.embed as APIEmbed], components: [], allowedMentions: { parse: [] } }).catch(() => null);
     if (!sent) {
         return { ok: false, error: "Failed to post ticket panel message. Check bot permissions for this channel." };
     }
+    setTimeout(() => {
+        void sent.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => undefined);
+    }, 650).unref();
     return { ok: true, action: "posted" };
 }
 
