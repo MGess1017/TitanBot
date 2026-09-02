@@ -2627,6 +2627,23 @@ async function pruneInaccessibleOwnerTicketRecords(guild: Guild): Promise<number
     return removed;
 }
 
+function purgeLegacyImportedTicketRecords(guildId: string): number {
+    const legacyReasons = new Set([
+        "Imported existing ticket channel",
+        "Imported from known ticket button channel"
+    ]);
+    const before = ticketStore.tickets.length;
+    ticketStore.tickets = ticketStore.tickets.filter(ticket => !(
+        ticket.guildId === guildId && legacyReasons.has(ticket.reason)
+    ));
+    const removed = before - ticketStore.tickets.length;
+    if (removed > 0) {
+        saveTicketStore();
+        appendAuditEvent("ticket_legacy_import_purge", { guildId, removed });
+    }
+    return removed;
+}
+
 function findChannelOwnerFromTopic(topic: string | null | undefined): string | null {
     if (!topic) return null;
     const match = topic.match(/\((\d{17,21})\)\s*$/);
@@ -2634,65 +2651,10 @@ function findChannelOwnerFromTopic(topic: string | null | undefined): string | n
     return match[1];
 }
 
-function importTicketEntryForChannel(guildId: string, ownerId: string, channelId: string, reason: string): TicketEntry {
+async function ensureTrackedTicketByChannelId(_guild: Guild, channelId: string, _fallbackOwnerId: string): Promise<TicketEntry | null> {
     const existing = findTicketByChannel(channelId);
     if (existing) return existing;
-
-    const ticket: TicketEntry = {
-        id: ticketStore.nextId++,
-        guildId,
-        ownerId,
-        channelId,
-        reason,
-        status: "open",
-        priority: "normal",
-        workflowStatus: "new",
-        claimedById: null,
-        assignedToId: null,
-        panelMessageId: null,
-        firstResponseAt: null,
-        archivedAt: null,
-        resolvedAt: null,
-        closedReason: null,
-        resolvedReason: null,
-        transcript: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-    };
-    ticketStore.tickets.push(ticket);
-    saveTicketStore();
-    return ticket;
-}
-
-async function ensureTrackedTicketByChannelId(guild: Guild, channelId: string, fallbackOwnerId: string): Promise<TicketEntry | null> {
-    const existing = findTicketByChannel(channelId);
-    if (existing) return existing;
-
-    const channel = await guild.channels.fetch(channelId).catch(() => null);
-    if (!channel || channel.type !== ChannelType.GuildText) return null;
-
-    const archiveCategoryId = ensureTicketConfig(guild.id).archiveCategoryId;
-    if (
-        channel.topic?.includes("[ticket-archived]")
-        || channel.parent?.name === "ticket-archive-hold"
-        || (archiveCategoryId && channel.parentId === archiveCategoryId)
-    ) {
-        return null;
-    }
-
-    const ownerFromTopic = findChannelOwnerFromTopic(channel.topic);
-    const ownerId = ownerFromTopic || fallbackOwnerId;
-    const concurrentExisting = findTicketByChannel(channelId);
-    if (concurrentExisting) return concurrentExisting;
-    const imported = importTicketEntryForChannel(guild.id, ownerId, channel.id, "Imported existing ticket channel");
-    appendAuditEvent("ticket_import", {
-        guildId: guild.id,
-        ticketId: imported.id,
-        channelId: imported.channelId,
-        ownerId: imported.ownerId,
-        importedByFallback: true
-    });
-    return imported;
+    return null;
 }
 
 function createTicketEntry(guildId: string, ownerId: string, channelId: string, reason: string, priority: TicketPriority): TicketEntry | null {
@@ -2820,7 +2782,7 @@ function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
     const status = normalizeTicketStatus(ticket.status);
     const nextAction = getTicketNextActionHint(ticket);
     const intake = hydrateTicketIntakeFields(ticket.reason, {
-        category: ticket.intakeCategory || ticket.category,
+        category: ticket.intakeCategory,
         summary: ticket.intakeSummary,
         details: ticket.intakeDetails,
         platform: ticket.intakePlatform,
@@ -2852,7 +2814,7 @@ function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
             { name: "🕒 Opened At", value: `<t:${Math.floor(ticket.createdAt / 1000)}:f>`, inline: true },
             { name: "📍 Ticket Thread", value: `<#${ticket.channelId}>`, inline: true },
             { name: "⚡ Priority Tier", value: priorityLabel, inline: true },
-            { name: "🏷️ Category", value: String(ticket.category || intakeCategory), inline: true },
+            { name: "🏷️ Submitted Category", value: intakeCategory, inline: true },
             { name: "🧭 Workflow Lane", value: workflowLabel, inline: true },
             { name: "🛠️ Claim Lead", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed yet", inline: true },
             { name: "🎯 Assigned Specialist", value: ticket.assignedToId ? `<@${ticket.assignedToId}>` : "Unassigned", inline: true },
@@ -8288,6 +8250,7 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
     }
 
     try {
+    purgeLegacyImportedTicketRecords(guild.id);
     await pruneDeletedTicketRecords(guild);
     await pruneInaccessibleOwnerTicketRecords(guild);
 
@@ -8411,7 +8374,7 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
         return { error: "Ticket persistence conflict detected. Please retry in a moment." };
     }
     const intake = hydrateTicketIntakeFields(reason, {
-        category: ticket.intakeCategory || ticket.category,
+        category: ticket.intakeCategory,
         summary: ticket.intakeSummary,
         details: ticket.intakeDetails,
         platform: ticket.intakePlatform,
@@ -8551,17 +8514,9 @@ async function closeTicketChannel(guild: Guild, channelId: string, closedById: s
 }
 
 async function claimTicketChannel(guild: Guild, channelId: string, claimerId: string): Promise<string> {
-    let ticket = await ensureTrackedTicketByChannelId(guild, channelId, claimerId);
+    const ticket = await ensureTrackedTicketByChannelId(guild, channelId, claimerId);
     if (!ticket) {
-        // Permanent QoL fallback: if channel is already in this guild cache, force-import it
-        // so button/command claim does not fail with a false "not tracked" on valid ticket channels.
-        const cached = guild.channels.cache.get(channelId);
-        if (cached && cached.type === ChannelType.GuildText) {
-            ticket = ensureTrackedTicketFromKnownChannel(guild, cached, claimerId);
-        }
-    }
-    if (!ticket) {
-        return "This channel is not a tracked ticket and could not be imported. Provide ticket_channel_id or run /tickets to verify the channel.";
+        return "This channel is not an active tracked ticket. Open a fresh ticket from the support panel.";
     }
     const status = normalizeTicketStatus(ticket.status);
     if (status === "resolved") return "This ticket is already permanently resolved.";
@@ -8591,22 +8546,6 @@ async function claimTicketChannel(guild: Guild, channelId: string, claimerId: st
     });
 
     return `Ticket #${claimed.id} claimed by <@${claimerId}>.`;
-}
-
-function ensureTrackedTicketFromKnownChannel(guild: Guild, channel: { id: string; topic?: string | null }, fallbackOwnerId: string): TicketEntry {
-    const existing = findTicketByChannel(channel.id);
-    if (existing) return existing;
-    const ownerFromTopic = findChannelOwnerFromTopic(channel.topic);
-    const ownerId = ownerFromTopic || fallbackOwnerId;
-    const imported = importTicketEntryForChannel(guild.id, ownerId, channel.id, "Imported from known ticket button channel");
-    appendAuditEvent("ticket_import", {
-        guildId: guild.id,
-        ticketId: imported.id,
-        channelId: imported.channelId,
-        ownerId: imported.ownerId,
-        importedFromKnownChannel: true
-    });
-    return imported;
 }
 
 async function resolveTicketChannel(guild: Guild, channelId: string, resolverId: string, resolvedReason: string): Promise<string> {
@@ -10653,6 +10592,7 @@ client.once("clientReady", async () => {
         if (guild) {
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
+            purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await removeLegacyReportPanelForGuild(guild);
@@ -10673,6 +10613,7 @@ client.once("clientReady", async () => {
     if (client.guilds.cache.size > 0) {
         for (const guild of client.guilds.cache.values()) {
             await guild.commands.set(slashCommands).catch(() => undefined);
+            purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await removeLegacyReportPanelForGuild(guild);
@@ -11409,17 +11350,7 @@ client.on("interactionCreate", async interaction => {
             return;
         }
 
-        // QoL hardening: if this is a valid ticket channel context, ensure it is tracked
-        // before claim to avoid false "not tracked" responses from stale/missing store rows.
-        if (interaction.channel.isTextBased() && interaction.channel.type === ChannelType.GuildText) {
-            ensureTrackedTicketFromKnownChannel(guild, interaction.channel, interaction.user.id);
-        }
-
-        let msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
-        if (msg.includes("not a tracked ticket") && interaction.channel.isTextBased() && interaction.channel.type === ChannelType.GuildText) {
-            ensureTrackedTicketFromKnownChannel(guild, interaction.channel, interaction.user.id);
-            msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
-        }
+        const msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
         const claimed = findTicketByChannel(interaction.channel.id);
         if (claimed && msg.toLowerCase().includes("claimed")) {
             await interaction.reply({

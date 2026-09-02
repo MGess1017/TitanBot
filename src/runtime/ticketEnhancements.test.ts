@@ -31,6 +31,13 @@ function runTicketEnhancementTests(): void {
     assert.equal(parsed.platform, "PC");
     assert.equal(parsed.evidence, "https://img.example/1");
 
+    const customCategory = parseTicketIntakeSnapshot(buildTicketIntakeReason({
+        category: "Gameplay / Other",
+        summary: "Custom category test",
+        details: "Preserve what the user submitted"
+    }));
+    assert.equal(customCategory.category, "Gameplay / Other");
+
     const hydrated = hydrateTicketIntakeFields(reason, { summary: "", details: "", platform: "", evidence: "" });
     assert.equal(hydrated.summary, "Crash when opening inventory");
     assert.equal(hydrated.details, "Steps: open inventory after raid");

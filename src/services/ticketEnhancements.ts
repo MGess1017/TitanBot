@@ -265,10 +265,14 @@ export function buildTicketIntakeReason(input: {
     orderId?: string;
     evidence?: string;
 }): string {
+    const submittedCategory = String(input.category || "general")
+        .replace(/[\[\]|\r\n]/g, " ")
+        .trim()
+        .slice(0, 40) || "general";
     const summary = String(input.summary || "General support").slice(0, 120);
     const details = String(input.details || "").slice(0, 700);
     const pieces = [
-        `[${classifyTicketCategory(input.category)}]`,
+        `[${submittedCategory}]`,
         summary,
         details ? `Details: ${details}` : null,
         input.platform ? `Platform: ${String(input.platform).slice(0, 60)}` : null,
