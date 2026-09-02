@@ -141,6 +141,8 @@ export function buildSlashCommands(input: {
         new SlashCommandBuilder().setName("useitem").setDescription("Use a consumable inventory item")
             .addStringOption(o => o.setName("item").setDescription("Consumable item id").setRequired(false).setAutocomplete(true))
             .addIntegerOption(o => o.setName("quantity").setDescription("Quantity to use (default 1)").setRequired(false)),
+        new SlashCommandBuilder().setName("casino").setDescription("Open the interactive casino floor")
+            .addIntegerOption(o => o.setName("bet").setDescription("Stake used by game buttons (default 10)").setRequired(false).setMinValue(1)),
         new SlashCommandBuilder().setName("dice").setDescription("Bet on a dice roll")
             .addIntegerOption(o => o.setName("bet").setDescription("Amount").setRequired(true))
             .addStringOption(o => o.setName("choice").setDescription("1-6, high, low, odd, even").setRequired(true)),

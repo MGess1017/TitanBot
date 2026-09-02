@@ -8,6 +8,7 @@ import {
     removeTokens as removeTokensCore,
     savePoints
 } from "../utils";
+import { resolveFairCrash } from "./casinoBalance";
 
 export function getTokens(userId: string): number {
     return getTokensCore(userId);
@@ -55,16 +56,7 @@ export function claimDaily(userId: string): { bonus: number; tokenBonus: number;
 }
 
 export function resolveCrash(bet: number, target: number): { win: boolean; crashPoint: string; payout: number; loss: number } {
-    const crashPoint = 1 + Math.random() * 9;
-    const rounded = crashPoint.toFixed(2);
-    const win = crashPoint >= target;
-
-    if (win) {
-        const payout = Math.max(1, Math.floor(bet * target));
-        return { win: true, crashPoint: rounded, payout, loss: 0 };
-    }
-
-    return { win: false, crashPoint: rounded, payout: 0, loss: bet };
+    return resolveFairCrash(bet, target);
 }
 
 export function canStartRaid(userId: string, cost = 10): boolean {
