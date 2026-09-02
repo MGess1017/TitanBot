@@ -1,5 +1,6 @@
+import type { TicketStatus } from "./ticketState";
+
 export type TicketPriority = "low" | "normal" | "high";
-export type TicketStatus = "open" | "claimed" | "archived" | "resolved";
 export type TicketCategory = "general" | "bug" | "appeal" | "billing" | "account" | "report";
 
 export type TicketSlaPolicy = {

@@ -9,19 +9,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "include": [
-    "src/bot.ts",
-    "src/utils.ts",
-    "src/services/ticketOps.ts",
-    "src/services/ticketTranscript.ts",
-    "src/services/ticketState.ts",
-    "src/services/ticketAnalytics.ts",
-    "src/commands/ticketCommands.ts",
-    "src/commands/moderationCommands.ts",
-    "src/game/economy.ts",
-    "src/game/raid.ts",
-    "src/raid/domain.ts",
-    "src/raid/simulator.ts"
-  ],
+  "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "**/*.spec.ts", "src/**/*.test.ts"]
 }

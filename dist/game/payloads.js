@@ -15,7 +15,8 @@ const catalog_1 = require("./catalog");
 exports.RAID_RESULT_ACTION_IDS = {
     inventory: "raid_result_inventory",
     history: "raid_result_history",
-    bosses: "raid_result_bosses"
+    bosses: "raid_result_bosses",
+    mastery: "raid_result_mastery"
 };
 function kindLabel(kind) {
     const key = String(kind || "resource");
@@ -54,6 +55,18 @@ function ferocityLabel(value) {
     if (ferocity >= 0.75)
         return "Veteran";
     return "Standard";
+}
+function toPercent(current, max) {
+    if (max <= 0)
+        return 0;
+    return Math.max(0, Math.min(100, Math.round((current / max) * 100)));
+}
+function healthBar(currentRaw, maxRaw, width = 14) {
+    const max = Math.max(1, Math.floor(Number(maxRaw) || 0));
+    const current = Math.max(0, Math.min(max, Math.floor(Number(currentRaw) || 0)));
+    const fill = Math.max(0, Math.min(width, Math.round((current / max) * width)));
+    const empty = Math.max(0, width - fill);
+    return `[${"#".repeat(fill)}${"-".repeat(empty)}] ${current}/${max} (${toPercent(current, max)}%)`;
 }
 function rarityBadge(rarityRaw) {
     const rarity = String(rarityRaw || "common").toLowerCase();
@@ -354,82 +367,78 @@ function buildRaidResultPayload(input) {
         .map(entry => `• ${entry.def?.name || entry.id} x${entry.qty}`)
         .join("\n") || "• No high-value drops";
     const bossResolution = !result.bossSpawned
-        ? "No boss signature detected."
+        ? "Boss: No boss detected"
         : result.bossDefeated
-            ? `${result.bossName || mapCfg.bossName} neutralized.${result.bossBonusXp ? ` Bonus Raid XP +${result.bossBonusXp}.` : ""}`
-            : `${result.bossName || mapCfg.bossName} spawned but was not defeated.${result.bossKillChance ? ` Kill chance rolled at ${result.bossKillChance}%.` : ""}`;
+            ? `${result.bossName || mapCfg.bossName} neutralized${result.bossBonusXp ? ` • +${result.bossBonusXp} raid XP` : ""}`
+            : `${result.bossName || mapCfg.bossName} active • ${result.bossKillChance || 0}% kill chance`;
     const heartLine = result.bossHeartUnlockedName
-        ? `First-Kill Trophy: ${result.bossHeartUnlockedName}`
+        ? `Boss Heart: ${result.bossHeartUnlockedName}`
         : result.bossDefeated
-            ? "First-Kill Trophy: already claimed previously or boss heart not eligible."
-            : "First-Kill Trophy: no heart awarded because the boss was not defeated.";
-    const bossIdentity = result.bossSpawned
-        ? `${result.bossName || mapCfg.bossName}${result.bossTitle ? ` • ${result.bossTitle}` : ""}`
-        : "No boss signature detected.";
-    const bossFerocityLine = result.bossSpawned
-        ? `Threat Class: ${ferocityLabel(result.bossFerocity)}${result.bossFerocity ? ` • Ferocity ${result.bossFerocity.toFixed(2)}` : ""}`
-        : "Threat Class: Clear";
+            ? "Boss Heart: Not awarded"
+            : "Boss Heart: Not claimed";
+    const prominentLoot = lootEntries.slice(0, 3).map(entry => `${entry.qty}x ${entry.def?.name || entry.id}`).join(" • ") || "No loot secured";
     const specialMoments = [
-        result.bossHeartUnlockedName ? `• New Boss Heart Unlocked: ${result.bossHeartUnlockedName}` : null,
-        result.pmcTierUnlockedLabel ? `• Milestone Tier Reached: ${result.pmcTierUnlockedBadge || "🏅"} ${result.pmcTierUnlockedLabel}` : null,
-        enhancedDrops.length ? `• Enhanced Recovery: ${enhancedDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null,
-        mythicDrops.length ? `• Mythic Cache Hit: ${mythicDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null
+        result.bossHeartUnlockedName ? `Boss Heart: ${result.bossHeartUnlockedName}` : null,
+        result.pmcTierUnlockedLabel ? `${result.pmcTierUnlockedBadge || "🏅"} ${result.pmcTierUnlockedLabel}` : null,
+        result.mapReputationTierUnlocked ? `Territory Rank: ${result.mapReputationTierUnlocked}` : null,
+        enhancedDrops.length ? `Enhanced: ${enhancedDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null,
+        mythicDrops.length ? `Mythic: ${mythicDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null
     ].filter(Boolean);
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(result.success ? 0x16a34a : 0xdc2626)
-        .setTitle(result.success ? "✅ Raid Operation Extracted" : "❌ Raid Operation Failed")
-        .setDescription(result.success
-        ? "Strike team returned with confirmed extraction and premium-grade combat telemetry."
-        : "Extraction failed. Review loadout synergy, map pressure, and tension before redeploy.")
-        .setThumbnail(armyIconUrl)
+        .setTitle(result.success ? "✅ Raid Extraction Complete" : "❌ Raid Extraction Failed")
+        .setDescription([
+        `${result.mapLabel || mapCfg.label}`,
+        `${tensionLabel || fallbackTension} • ${conditionLabel || "Standard"}`
+    ].join("\n"))
+        .setThumbnail(result.bossSpawned && result.bossImageUrl ? result.bossImageUrl : armyIconUrl)
         .addFields({
-        name: "Mission Header",
+        name: "Summary",
         value: [
-            `Map: ${result.mapLabel || mapCfg.label}`,
-            `Tension: ${tensionLabel || fallbackTension}`,
-            `Condition: ${conditionLabel || "Standard"}`,
-            `Map Tier: ${mapCfg.lootTier}`
+            `Status: ${result.success ? "Extracted" : "Failed"}`,
+            `Success Chance: ${result.successChance || 0}%`,
+            `Approach: ${result.approachLabel || "Balanced"}`,
+            `PMC: Prestige ${result.pmcPrestige || 0} • ${result.pmcPrestigeLabel || "Unprestiged"}`,
+            `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}`,
+            `Territory: ${result.mapReputationTier || "Unproven"} • ${result.mapReputationPoints || 0} REP`
         ].join("\n"),
         inline: false
     }, {
-        name: "Combat Readout",
+        name: "Rewards",
         value: [
-            `Weapon: ${result.selectedWeaponName || "Auto-best"}`,
-            `Armor: ${result.selectedArmorName || "Auto-best"}`,
-            `Success Chance: ${result.successChance || 0}%`,
-            `Outcome Status: ${result.success ? "SUCCESS" : "FAILURE"}`
-        ].join("\n"),
-        inline: true
-    }, {
-        name: "Reward Snapshot",
-        value: [
-            `Net Token Delta: ${signedNet} FN Token$`,
-            `Raid XP Gained: +${result.rxpGain || 0}`,
-            `Boss XP Bonus: +${result.bossBonusXp || 0}`,
-            `Boss Kill Chance: ${result.bossKillChance || 0}%`
+            `Net: ${signedNet} FN Token$`,
+            `Raid XP: +${result.rxpGain || 0}`,
+            `Boss XP: +${result.bossBonusXp || 0}`,
+            `Loot: ${lootEntries.length} item${lootEntries.length === 1 ? "" : "s"}`,
+            `Map REP: +${result.mapReputationGain || 0}`
         ].join("\n"),
         inline: true
     }, {
         name: "Boss Encounter",
         value: [
-            bossIdentity,
-            result.bossSpawned ? `Threat Level: ${result.bossDefeated ? "ELIMINATED" : "ACTIVE CONTACT"}` : "Threat Level: Clear",
-            bossFerocityLine,
+            result.bossSpawned ? `${result.bossName || mapCfg.bossName}` : "Boss: No boss detected",
             bossResolution,
-            heartLine
-        ].join("\n"),
-        inline: false
-    }, {
+            heartLine,
+            result.bossSpawned ? `Traits: ${result.bossTraitLabels?.join(" • ") || "Unknown"}` : null
+        ].filter(Boolean).join("\n"),
+        inline: true
+    }, ...(result.bossSpawned ? [{
+            name: "Combat Sequence",
+            value: [
+                `Phases Cleared: ${result.bossPhasesReached || 0}/${result.bossPhaseNames?.length || 0}`,
+                `Active/Final Phase: ${result.bossCurrentPhase || "Contact"}`,
+                `Sequence: ${result.bossPhaseNames?.join(" → ") || "Contact"}`,
+                `Counter Intel: ${result.bossCounteredTraits?.length ? result.bossCounteredTraits.join(", ") : "No trait counter matched"}`,
+                `Threat Reward Scale: ${(result.bossCombatRewardMultiplier || 1).toFixed(2)}x`
+            ].join("\n"),
+            inline: false
+        }] : []), {
         name: "Recovered Loot",
-        value: lootRows.slice(0, 10).join("\n"),
-        inline: false
-    }, {
-        name: "Highest Value Recoveries",
-        value: highValueLoot,
+        value: prominentLoot,
         inline: false
     }, ...(specialMoments.length ? [{
             name: "Premium Event Flags",
-            value: specialMoments.join("\n"),
+            value: specialMoments.slice(0, 3).join("\n"),
             inline: false
         }] : []));
     const actionRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
@@ -441,6 +450,9 @@ function buildRaidResultPayload(input) {
         .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
         .setCustomId(exports.RAID_RESULT_ACTION_IDS.bosses)
         .setLabel("Boss Roster")
+        .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+        .setCustomId(exports.RAID_RESULT_ACTION_IDS.mastery)
+        .setLabel("Map Mastery")
         .setStyle(discord_js_1.ButtonStyle.Secondary));
     return JSON.stringify({ embed: embed.toJSON(), components: [actionRow.toJSON()] });
 }

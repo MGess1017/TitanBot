@@ -4,7 +4,9 @@ const path = require("path");
 require("ts-node/register/transpile-only");
 
 const { buildSlashCommands } = require("../src/commands/slashCatalog");
-const { RAID_MAP_CHOICES, RAID_CONDITIONS } = require("../src/raid/domain");
+const { BOSS_HEART_DEFS, ITEM_DEFS } = require("../src/game/catalog");
+const { RAID_RESULT_ACTION_IDS } = require("../src/game/payloads");
+const { RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_MAPS, RAID_MAP_CHOICES, RAID_CONDITIONS } = require("../src/raid/domain");
 
 const BOT_FILE = path.resolve(__dirname, "../src/bot.ts");
 
@@ -49,6 +51,18 @@ function parseHelpGameCommands(source) {
   return uniq(Array.from(fnMatch[0].matchAll(cmdRegex)).map(m => m[1].toLowerCase()));
 }
 
+function parseIdObjects(source) {
+  const entries = [];
+  const objectRegex = /const\s+([A-Z][A-Z0-9_]*_IDS)\s*=\s*\{([\s\S]*?)\}\s*as const;/g;
+  const valueRegex = /([a-zA-Z][a-zA-Z0-9]*):\s*"([^"]+)"/g;
+  for (const objectMatch of source.matchAll(objectRegex)) {
+    for (const valueMatch of objectMatch[2].matchAll(valueRegex)) {
+      entries.push({ owner: `${objectMatch[1]}.${valueMatch[1]}`, value: valueMatch[2] });
+    }
+  }
+  return entries;
+}
+
 function parseGamesFromSlashBlock(slashBlock) {
   const gameSet = new Set([
     "dice",
@@ -67,6 +81,11 @@ function parseGamesFromSlashBlock(slashBlock) {
 
 function assert(condition, message, errors) {
   if (!condition) errors.push(message);
+}
+
+function assertUniqueRegistry(label, values, errors) {
+  const duplicates = values.filter((value, index) => values.indexOf(value) !== index);
+  assert(duplicates.length === 0, `${label} contains duplicate values: ${uniq(duplicates).join(", ")}`, errors);
 }
 
 function run() {
@@ -106,6 +125,31 @@ function run() {
   ];
 
   const errors = [];
+  const interactionIds = [
+    ...parseIdObjects(source),
+    ...Object.entries(RAID_RESULT_ACTION_IDS).map(([key, value]) => ({ owner: `RAID_RESULT_ACTION_IDS.${key}`, value }))
+  ];
+  const interactionIdOwners = new Map();
+
+  for (const entry of interactionIds) {
+    const existingOwner = interactionIdOwners.get(entry.value);
+    assert(!existingOwner, `Interaction ID collision '${entry.value}': ${existingOwner} and ${entry.owner}`, errors);
+    assert(entry.value.length <= 100, `Interaction ID exceeds Discord's 100-character limit: ${entry.owner}`, errors);
+    interactionIdOwners.set(entry.value, entry.owner);
+  }
+
+  const registries = [
+    ["Item IDs", Object.keys(ITEM_DEFS)],
+    ["Boss heart IDs", Object.values(BOSS_HEART_DEFS).map(definition => definition.id)],
+    ["Raid map keys", Object.keys(RAID_MAPS)],
+    ["Raid approach keys", Object.keys(RAID_APPROACHES)],
+    ["Raid condition keys", RAID_CONDITIONS.map(condition => condition.key)],
+    ["Raid boss names", RAID_BOSS_ROSTER.map(boss => boss.name)]
+  ];
+
+  for (const [label, values] of registries) {
+    assertUniqueRegistry(label, values, errors);
+  }
 
   assert(commands.length > 0, "No slash commands were detected.", errors);
   assert(handlers.length > 0, "No command handlers were detected.", errors);
@@ -134,6 +178,8 @@ function run() {
   console.log(`- Slash commands: ${commands.length}`);
   console.log(`- Handlers: ${handlers.length}`);
   console.log(`- Game commands checked: ${requiredGames.length}`);
+  console.log(`- Interaction IDs checked: ${interactionIds.length}`);
+  console.log(`- Unique registries checked: ${registries.length}`);
 }
 
 run();

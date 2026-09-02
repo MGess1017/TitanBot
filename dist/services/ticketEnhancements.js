@@ -8,7 +8,10 @@ exports.pickLeastLoadedAssignee = pickLeastLoadedAssignee;
 exports.canReopenTicket = canReopenTicket;
 exports.extractSearchableTicketText = extractSearchableTicketText;
 exports.shouldPurgeResolvedTicket = shouldPurgeResolvedTicket;
+exports.parseTicketIntakeSnapshot = parseTicketIntakeSnapshot;
+exports.hydrateTicketIntakeFields = hydrateTicketIntakeFields;
 exports.buildTicketIntakeReason = buildTicketIntakeReason;
+exports.buildReportIntakeReason = buildReportIntakeReason;
 function classifyTicketCategory(reason) {
     const text = String(reason || "").toLowerCase();
     if (/appeal|ban|mute|timeout/.test(text))
@@ -80,6 +83,7 @@ function findPotentialDuplicateTickets(input) {
     const target = tokenize(input.reason);
     return input.tickets
         .filter(ticket => ticket.guildId === input.guildId && ticket.ownerId === input.ownerId)
+        .filter(ticket => ticket.status === "open" || ticket.status === "claimed")
         .filter(ticket => now - ticket.createdAt <= lookbackMs)
         .map(ticket => {
         const score = jaccardSimilarity(target, tokenize(ticket.reason));
@@ -146,16 +150,96 @@ function shouldPurgeResolvedTicket(ticket, retentionDays, now = Date.now()) {
         return false;
     return now - ticket.resolvedAt > retentionDays * 24 * 60 * 60 * 1000;
 }
+function parseTicketIntakeSnapshot(reason) {
+    const text = String(reason || "");
+    const segments = text
+        .split(/\s*\|\s*/)
+        .map(part => part.trim())
+        .filter(Boolean);
+    const categorySegment = segments.find(part => /^\[[^\]]+\]$/.test(part));
+    const category = categorySegment ? categorySegment.replace(/^\[|\]$/g, "").trim() || "general" : "general";
+    let summary = "General support";
+    let details = "";
+    let platform = "";
+    let orderId = "";
+    let evidence = "";
+    for (const segment of segments) {
+        if (segment === categorySegment)
+            continue;
+        if (!summary || summary === "General support") {
+            if (!/^Details:|^Platform:|^Order:|^Evidence:/.test(segment)) {
+                summary = segment.replace(/^[\s|:-]+/, "").trim() || "General support";
+            }
+        }
+        if (/^Details:/i.test(segment)) {
+            details = segment.replace(/^Details:\s*/i, "").trim();
+        }
+        else if (/^Platform:/i.test(segment)) {
+            platform = segment.replace(/^Platform:\s*/i, "").trim();
+        }
+        else if (/^Order:/i.test(segment)) {
+            orderId = segment.replace(/^Order:\s*/i, "").trim();
+        }
+        else if (/^Evidence:/i.test(segment)) {
+            evidence = segment.replace(/^Evidence:\s*/i, "").trim();
+        }
+    }
+    if (!details) {
+        const detailsIndex = segments.findIndex(segment => /^Details:/i.test(segment));
+        if (detailsIndex >= 0) {
+            const raw = segments[detailsIndex].replace(/^Details:\s*/i, "").trim();
+            details = raw;
+        }
+    }
+    return {
+        category,
+        summary,
+        details,
+        platform,
+        orderId,
+        evidence
+    };
+}
+function hydrateTicketIntakeFields(reason, current) {
+    const parsed = parseTicketIntakeSnapshot(reason);
+    return {
+        category: current?.category || parsed.category || "general",
+        summary: current?.summary || parsed.summary || "General support",
+        details: current?.details || parsed.details || "No details provided.",
+        platform: current?.platform || parsed.platform || "Not provided",
+        orderId: current?.orderId || parsed.orderId || "",
+        evidence: current?.evidence || parsed.evidence || "No evidence provided"
+    };
+}
 function buildTicketIntakeReason(input) {
+    const submittedCategory = String(input.category || "general")
+        .replace(/[\[\]|\r\n]/g, " ")
+        .trim()
+        .slice(0, 40) || "general";
     const summary = String(input.summary || "General support").slice(0, 120);
     const details = String(input.details || "").slice(0, 700);
     const pieces = [
-        `[${classifyTicketCategory(input.category)}]`,
+        `[${submittedCategory}]`,
         summary,
         details ? `Details: ${details}` : null,
         input.platform ? `Platform: ${String(input.platform).slice(0, 60)}` : null,
         input.orderId ? `Order: ${String(input.orderId).slice(0, 60)}` : null,
         input.evidence ? `Evidence: ${String(input.evidence).slice(0, 240)}` : null
+    ].filter(Boolean);
+    return pieces.join(" | ");
+}
+function buildReportIntakeReason(input) {
+    const reportedUser = String(input.reportedUser || "Unknown target").slice(0, 80);
+    const summary = String(input.summary || "User report").slice(0, 120);
+    const details = String(input.details || "").slice(0, 700);
+    const pieces = [
+        "[report]",
+        `Target: ${reportedUser}`,
+        summary,
+        details ? `Details: ${details}` : null,
+        input.location ? `Location: ${String(input.location).slice(0, 120)}` : null,
+        input.evidence ? `Evidence: ${String(input.evidence).slice(0, 240)}` : null,
+        input.severity ? `Severity: ${String(input.severity).slice(0, 40)}` : null
     ].filter(Boolean);
     return pieces.join(" | ");
 }

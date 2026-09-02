@@ -4,6 +4,12 @@ exports.buildSlashCommands = buildSlashCommands;
 const discord_js_1 = require("discord.js");
 function buildSlashCommands(input) {
     const { raidConditionChoices, raidMapChoices } = input;
+    const raidApproachChoices = input.raidApproachChoices || [
+        { name: "Balanced", value: "balanced" },
+        { name: "Recon", value: "recon" },
+        { name: "Assault", value: "assault" },
+        { name: "Scavenge", value: "scavenge" }
+    ];
     return [
         new discord_js_1.SlashCommandBuilder()
             .setName("ping")
@@ -11,12 +17,6 @@ function buildSlashCommands(input) {
         new discord_js_1.SlashCommandBuilder()
             .setName("help")
             .setDescription("Show available bot commands."),
-        new discord_js_1.SlashCommandBuilder()
-            .setName("quickstart")
-            .setDescription("Guided first-run command flow for raids and economy."),
-        new discord_js_1.SlashCommandBuilder()
-            .setName("testupdate")
-            .setDescription("Test command that replies with Updated."),
         new discord_js_1.SlashCommandBuilder()
             .setName("xproles")
             .setDescription("View XP rank roles in a randomized color embed."),
@@ -28,15 +28,8 @@ function buildSlashCommands(input) {
             .setName("status")
             .setDescription("Show bot runtime status."),
         new discord_js_1.SlashCommandBuilder()
-            .setName("findbots")
-            .setDescription("List bot accounts in this server and highlight this bot."),
-        new discord_js_1.SlashCommandBuilder()
             .setName("balance")
             .setDescription("Show your FN Token$ balance."),
-        new discord_js_1.SlashCommandBuilder()
-            .setName("token")
-            .setDescription("Show FN Token$ balance")
-            .addUserOption(o => o.setName("user").setDescription("Optional user").setRequired(false)),
         new discord_js_1.SlashCommandBuilder()
             .setName("bank")
             .setDescription("Show wallet and bank balances")
@@ -126,6 +119,8 @@ function buildSlashCommands(input) {
             .addChoices({ name: "low", value: "low" }, { name: "medium", value: "medium" }, { name: "high", value: "high" }))
             .addStringOption(o => o.setName("map").setDescription("Select raid map").setRequired(false)
             .addChoices(...raidMapChoices))
+            .addStringOption(o => o.setName("approach").setDescription("Choose a tactical approach").setRequired(false)
+            .addChoices(...raidApproachChoices))
             .addStringOption(o => o.setName("weapon").setDescription("Optional weapon (OWNED shown first)").setRequired(false).setAutocomplete(true))
             .addStringOption(o => o.setName("armor").setDescription("Optional armor (OWNED shown first)").setRequired(false).setAutocomplete(true)),
         new discord_js_1.SlashCommandBuilder().setName("raidhistory").setDescription("View recent raid history"),
@@ -142,6 +137,8 @@ function buildSlashCommands(input) {
         new discord_js_1.SlashCommandBuilder().setName("useitem").setDescription("Use a consumable inventory item")
             .addStringOption(o => o.setName("item").setDescription("Consumable item id").setRequired(false).setAutocomplete(true))
             .addIntegerOption(o => o.setName("quantity").setDescription("Quantity to use (default 1)").setRequired(false)),
+        new discord_js_1.SlashCommandBuilder().setName("casino").setDescription("Open the interactive casino floor")
+            .addIntegerOption(o => o.setName("bet").setDescription("Stake used by game buttons (default 10)").setRequired(false).setMinValue(1)),
         new discord_js_1.SlashCommandBuilder().setName("dice").setDescription("Bet on a dice roll")
             .addIntegerOption(o => o.setName("bet").setDescription("Amount").setRequired(true))
             .addStringOption(o => o.setName("choice").setDescription("1-6, high, low, odd, even").setRequired(true)),
@@ -155,10 +152,6 @@ function buildSlashCommands(input) {
         new discord_js_1.SlashCommandBuilder().setName("crash").setDescription("Play crash")
             .addIntegerOption(o => o.setName("bet").setDescription("Amount").setRequired(true))
             .addNumberOption(o => o.setName("target").setDescription("Multiplier (1.05-10.0)").setRequired(true)),
-        new discord_js_1.SlashCommandBuilder().setName("slots").setDescription("Play multi-line slots with lucky multipliers")
-            .addIntegerOption(o => o.setName("bet").setDescription("Bet per line").setRequired(true))
-            .addIntegerOption(o => o.setName("lines").setDescription("Number of active lines (1-8)").setRequired(true)
-            .addChoices({ name: "1 line", value: 1 }, { name: "2 lines", value: 2 }, { name: "3 lines", value: 3 }, { name: "4 lines", value: 4 }, { name: "5 lines", value: 5 }, { name: "6 lines", value: 6 }, { name: "7 lines", value: 7 }, { name: "8 lines", value: 8 })),
         new discord_js_1.SlashCommandBuilder().setName("coinflip").setDescription("Classic coin flip with lucky multipliers")
             .addIntegerOption(o => o.setName("bet").setDescription("Amount").setRequired(true))
             .addStringOption(o => o.setName("side").setDescription("heads|tails").setRequired(true)
@@ -178,9 +171,6 @@ function buildSlashCommands(input) {
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
             .addUserOption(o => o.setName("user").setDescription("User").setRequired(true))
             .addIntegerOption(o => o.setName("amount").setDescription("Amount").setRequired(true)),
-        new discord_js_1.SlashCommandBuilder().setName("pointsuser").setDescription("Check user Access Points")
-            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
-            .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
         new discord_js_1.SlashCommandBuilder().setName("timeout").setDescription("Timeout user")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
             .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
@@ -201,7 +191,8 @@ function buildSlashCommands(input) {
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator),
         new discord_js_1.SlashCommandBuilder().setName("incident").setDescription("Admin: run consolidated health and sanity triage")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
-            .addBooleanOption(o => o.setName("fix").setDescription("Attempt remediation actions where possible").setRequired(false)),
+            .addBooleanOption(o => o.setName("fix").setDescription("Attempt remediation actions where possible").setRequired(false))
+            .addBooleanOption(o => o.setName("restart").setDescription("Restart the bot after triage completes (PM2 required)").setRequired(false)),
         new discord_js_1.SlashCommandBuilder().setName("xpverify").setDescription("Admin: verify persisted XP state for a user")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
             .addUserOption(o => o.setName("user").setDescription("User to verify").setRequired(true)),
@@ -217,6 +208,12 @@ function buildSlashCommands(input) {
             .addStringOption(o => o.setName("reason").setDescription("Short reason for your ticket").setRequired(false))
             .addStringOption(o => o.setName("priority").setDescription("Ticket priority").setRequired(false)
             .addChoices({ name: "Low", value: "low" }, { name: "Normal", value: "normal" }, { name: "High", value: "high" })),
+        new discord_js_1.SlashCommandBuilder().setName("reportintake").setDescription("Admin: file a formal user report")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addUserOption(o => o.setName("user").setDescription("User being reported").setRequired(true))
+            .addStringOption(o => o.setName("summary").setDescription("Short report summary").setRequired(true))
+            .addStringOption(o => o.setName("details").setDescription("Detailed report context").setRequired(false))
+            .addStringOption(o => o.setName("evidence").setDescription("Evidence links or references").setRequired(false)),
         new discord_js_1.SlashCommandBuilder().setName("ticketintake").setDescription("Open a smart intake modal for structured support requests"),
         new discord_js_1.SlashCommandBuilder().setName("ticketforce").setDescription("Open a ticket and bypass duplicate/KB deflection checks")
             .addStringOption(o => o.setName("reason").setDescription("Short reason for your ticket").setRequired(true))
@@ -224,14 +221,13 @@ function buildSlashCommands(input) {
             .addChoices({ name: "Low", value: "low" }, { name: "Normal", value: "normal" }, { name: "High", value: "high" })),
         new discord_js_1.SlashCommandBuilder().setName("ticketpanel").setDescription("Post the support ticket panel in this channel")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.ManageChannels),
+        new discord_js_1.SlashCommandBuilder().setName("reportprofile").setDescription("Admin: view a user's report profile")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addUserOption(o => o.setName("user").setDescription("User to inspect").setRequired(true)),
         new discord_js_1.SlashCommandBuilder().setName("claimticket").setDescription("Claim a tracked ticket (handler/admin only)")
             .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional ticket channel (use when running outside ticket)").addChannelTypes(discord_js_1.ChannelType.GuildText).setRequired(false))
             .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional ticket channel ID when channel picker does not show it").setRequired(false)),
         new discord_js_1.SlashCommandBuilder().setName("ticketassign").setDescription("Assign a tracked ticket to a handler/admin")
-            .addUserOption(o => o.setName("user").setDescription("Assignee").setRequired(true))
-            .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional ticket channel (use when running outside ticket)").addChannelTypes(discord_js_1.ChannelType.GuildText).setRequired(false))
-            .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional ticket channel ID when channel picker does not show it").setRequired(false)),
-        new discord_js_1.SlashCommandBuilder().setName("ticketassgin").setDescription("Alias for ticketassign (legacy typo support)")
             .addUserOption(o => o.setName("user").setDescription("Assignee").setRequired(true))
             .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional ticket channel (use when running outside ticket)").addChannelTypes(discord_js_1.ChannelType.GuildText).setRequired(false))
             .addStringOption(o => o.setName("ticket_channel_id").setDescription("Optional ticket channel ID when channel picker does not show it").setRequired(false)),
@@ -263,16 +259,27 @@ function buildSlashCommands(input) {
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.ManageChannels),
         new discord_js_1.SlashCommandBuilder().setName("ticketanalytics").setDescription("Admin: ticket response/resolution medians and category insights")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator),
-        new discord_js_1.SlashCommandBuilder().setName("ticketsearch").setDescription("Staff: search tickets by owner, status, category, and text")
+        new discord_js_1.SlashCommandBuilder().setName("reportqueue").setDescription("Staff: view active report cases only")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.ManageChannels),
+        new discord_js_1.SlashCommandBuilder().setName("reportresolve").setDescription("Admin: close an open report case on a user")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addUserOption(o => o.setName("user").setDescription("User whose open report should be closed").setRequired(true))
+            .addStringOption(o => o.setName("action").setDescription("Disposition taken").setRequired(true)
+            .addChoices({ name: "warned", value: "warned" }, { name: "muted", value: "muted" }, { name: "kicked", value: "kicked" }, { name: "banned", value: "banned" }, { name: "no_action", value: "no_action" }, { name: "insufficient_evidence", value: "insufficient_evidence" }))
+            .addStringOption(o => o.setName("reason").setDescription("Resolution summary").setRequired(false))
+            .addIntegerOption(o => o.setName("report_id").setDescription("Optional specific report ID for this user (defaults to newest open)").setRequired(false)),
+        new discord_js_1.SlashCommandBuilder().setName("reportanalytics").setDescription("Admin: analytics for report cases only")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator),
+        new discord_js_1.SlashCommandBuilder().setName("reportsearch").setDescription("Staff: search report cases by owner, status, and text")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.ManageChannels)
-            .addStringOption(o => o.setName("query").setDescription("Search text in reason/category/internal notes").setRequired(false))
-            .addUserOption(o => o.setName("owner").setDescription("Filter by ticket owner").setRequired(false))
+            .addStringOption(o => o.setName("query").setDescription("Search text in report reason/notes").setRequired(false))
+            .addUserOption(o => o.setName("owner").setDescription("Filter by reporter").setRequired(false))
             .addStringOption(o => o.setName("status").setDescription("Filter by lifecycle status").setRequired(false)
             .addChoices({ name: "open", value: "open" }, { name: "claimed", value: "claimed" }, { name: "archived", value: "archived" }, { name: "resolved", value: "resolved" }))
-            .addStringOption(o => o.setName("category").setDescription("Filter by ticket category").setRequired(false)
-            .addChoices({ name: "general", value: "general" }, { name: "bug", value: "bug" }, { name: "appeal", value: "appeal" }, { name: "billing", value: "billing" }, { name: "account", value: "account" }, { name: "report", value: "report" }))
             .addIntegerOption(o => o.setName("page").setDescription("Result page number").setRequired(false))
             .addIntegerOption(o => o.setName("page_size").setDescription("Results per page (5-20)").setRequired(false)),
+        new discord_js_1.SlashCommandBuilder().setName("magicslots").setDescription("Play Magic Slots: 6 reels, enchanted symbols, and ultra bonus spin chances")
+            .addIntegerOption(o => o.setName("bet").setDescription("Single spin bet").setRequired(true)),
         new discord_js_1.SlashCommandBuilder().setName("ticketworkload").setDescription("Admin: handler workload and SLA risk distribution")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator),
         new discord_js_1.SlashCommandBuilder().setName("ticketnote").setDescription("Add a private handler note to a ticket")
@@ -298,6 +305,46 @@ function buildSlashCommands(input) {
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
             .addIntegerOption(o => o.setName("days").setDescription("Retention days for resolved tickets").setRequired(false))
             .addBooleanOption(o => o.setName("purge_now").setDescription("Run purge immediately").setRequired(false)),
+        new discord_js_1.SlashCommandBuilder().setName("giveaway").setDescription("Admin: create a button-entry giveaway")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addStringOption(o => o.setName("prize").setDescription("Prize title").setRequired(true))
+            .addStringOption(o => o.setName("duration").setDescription("Duration like 30m, 6h, 2d").setRequired(true))
+            .addIntegerOption(o => o.setName("winners").setDescription("Number of winners").setRequired(false))
+            .addStringOption(o => o.setName("description").setDescription("Optional giveaway description").setRequired(false))
+            .addChannelOption(o => o.setName("channel").setDescription("Channel to post giveaway in").addChannelTypes(discord_js_1.ChannelType.GuildText).setRequired(false))
+            .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false))
+            .addRoleOption(o => o.setName("mention_role").setDescription("Optional role mention for the giveaway alert").setRequired(false))
+            .addUserOption(o => o.setName("mention_user").setDescription("Optional user mention for the giveaway alert").setRequired(false))
+            .addBooleanOption(o => o.setName("ping_everyone").setDescription("Mention everyone when posting the giveaway").setRequired(false)),
+        new discord_js_1.SlashCommandBuilder().setName("itemgiveaway").setDescription("Admin: create a raid-item giveaway with automatic reward delivery")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addStringOption(o => o.setName("item").setDescription("Raid item id").setRequired(true).setAutocomplete(true))
+            .addIntegerOption(o => o.setName("quantity").setDescription("Quantity each winner receives").setRequired(true))
+            .addStringOption(o => o.setName("duration").setDescription("Duration like 30m, 6h, 2d").setRequired(true))
+            .addIntegerOption(o => o.setName("winners").setDescription("Number of winners").setRequired(false))
+            .addStringOption(o => o.setName("title").setDescription("Optional display title override").setRequired(false))
+            .addStringOption(o => o.setName("description").setDescription("Optional giveaway description").setRequired(false))
+            .addChannelOption(o => o.setName("channel").setDescription("Channel to post giveaway in").addChannelTypes(discord_js_1.ChannelType.GuildText).setRequired(false))
+            .addRoleOption(o => o.setName("role_required").setDescription("Optional role required to enter").setRequired(false))
+            .addRoleOption(o => o.setName("mention_role").setDescription("Optional role mention for the giveaway alert").setRequired(false))
+            .addUserOption(o => o.setName("mention_user").setDescription("Optional user mention for the giveaway alert").setRequired(false))
+            .addBooleanOption(o => o.setName("ping_everyone").setDescription("Mention everyone when posting the giveaway").setRequired(false)),
+        new discord_js_1.SlashCommandBuilder().setName("raidgiveawaypanel").setDescription("Post the admin raid-item giveaway panel in this channel")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.ManageChannels),
+        new discord_js_1.SlashCommandBuilder().setName("giveawayedit").setDescription("Admin: extend or shorten an active giveaway")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true))
+            .addStringOption(o => o.setName("duration").setDescription("Adjustment like 30m, 6h, 2d, -15m").setRequired(true)),
+        new discord_js_1.SlashCommandBuilder().setName("giveawayend").setDescription("Admin: end an active giveaway immediately")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true)),
+        new discord_js_1.SlashCommandBuilder().setName("giveawayreroll").setDescription("Admin: reroll winners for a finished giveaway")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true)),
+        new discord_js_1.SlashCommandBuilder().setName("giveawaylist").setDescription("Admin: list recent giveaways")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator),
+        new discord_js_1.SlashCommandBuilder().setName("giveaways").setDescription("Admin: alias for giveaway list")
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator),
         new discord_js_1.SlashCommandBuilder().setName("setmodlog").setDescription("Set the moderation log channel")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
             .addChannelOption(o => o.setName("channel").setDescription("Log channel").addChannelTypes(discord_js_1.ChannelType.GuildText).setRequired(true)),

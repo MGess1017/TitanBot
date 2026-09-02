@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node dist/bot.js",
     "start:src": "ts-node src/bot.ts",
-    "build": "tsc",
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "dev": "ts-node-dev src/bot.ts",
     "start:pm2": "npx pm2 start ecosystem.config.cjs --only titan-raid-bot --update-env",
     "restart:pm2": "npx pm2 restart titan-raid-bot --update-env",

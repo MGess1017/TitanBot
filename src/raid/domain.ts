@@ -52,6 +52,113 @@ export function resolveRaidApproach(approachRaw?: string | null): RaidApproach {
     return RAID_APPROACHES[key] || RAID_APPROACHES.balanced;
 }
 
+export type MapReputationTier = {
+    level: number;
+    label: string;
+    threshold: number;
+    successBonus: number;
+    tokenBonus: number;
+    bossKillBonus: number;
+    description: string;
+};
+
+export const MAP_REPUTATION_TIERS: MapReputationTier[] = [
+    { level: 0, label: "Unproven", threshold: 0, successBonus: 0, tokenBonus: 0, bossKillBonus: 0, description: "No local network established." },
+    { level: 1, label: "Pathfinder", threshold: 100, successBonus: 0.005, tokenBonus: 0.01, bossKillBonus: 0.005, description: "Reliable routes reveal safer entry points." },
+    { level: 2, label: "Fixer", threshold: 300, successBonus: 0.01, tokenBonus: 0.02, bossKillBonus: 0.01, description: "Local contacts improve extraction value and boss intelligence." },
+    { level: 3, label: "Vanguard", threshold: 700, successBonus: 0.015, tokenBonus: 0.03, bossKillBonus: 0.02, description: "Veteran map knowledge opens priority routes." },
+    { level: 4, label: "Map Legend", threshold: 1400, successBonus: 0.02, tokenBonus: 0.04, bossKillBonus: 0.03, description: "Complete territorial mastery grants elite operational intelligence." }
+];
+
+export function getMapReputationTier(points: number): MapReputationTier {
+    const safePoints = Math.max(0, Math.floor(points || 0));
+    return [...MAP_REPUTATION_TIERS].reverse().find(tier => safePoints >= tier.threshold) || MAP_REPUTATION_TIERS[0];
+}
+
+export function getMapReputationProgress(points: number): {
+    points: number;
+    tier: MapReputationTier;
+    nextTier: MapReputationTier | null;
+    progressPct: number;
+    pointsToNext: number;
+} {
+    const safePoints = Math.max(0, Math.floor(points || 0));
+    const tier = getMapReputationTier(safePoints);
+    const nextTier = MAP_REPUTATION_TIERS.find(entry => entry.level === tier.level + 1) || null;
+    if (!nextTier) return { points: safePoints, tier, nextTier: null, progressPct: 100, pointsToNext: 0 };
+    const tierSpan = Math.max(1, nextTier.threshold - tier.threshold);
+    const progressPct = Math.max(0, Math.min(100, Math.floor(((safePoints - tier.threshold) / tierSpan) * 100)));
+    return { points: safePoints, tier, nextTier, progressPct, pointsToNext: Math.max(0, nextTier.threshold - safePoints) };
+}
+
+export function calculateMapReputationGain(input: {
+    mapDifficulty: RaidDifficulty;
+    tension: string;
+    success: boolean;
+    bossSpawned: boolean;
+    bossDefeated: boolean;
+}): number {
+    const difficultyBonus = getRaidDifficultyIndex(input.mapDifficulty) * 2;
+    const tensionBonus = input.tension === "high" ? 5 : input.tension === "medium" ? 2 : 0;
+    const resultBonus = input.success ? 12 : 4;
+    return resultBonus + difficultyBonus + tensionBonus + (input.bossSpawned ? 3 : 0) + (input.bossDefeated ? 12 : 0);
+}
+
+export type BossTraitKey = "armored" | "relentless" | "elusive" | "berserker" | "tactician" | "hoarder";
+export type BossTrait = { key: BossTraitKey; label: string; description: string; killPenalty: number; counterApproach?: RaidApproachKey; counterBonus?: number; rewardMultiplier: number };
+
+export const BOSS_TRAITS: Record<BossTraitKey, BossTrait> = {
+    armored: { key: "armored", label: "Reactive Armor", description: "Layered plating resists direct fire; Assault breaches it more efficiently.", killPenalty: 0.035, counterApproach: "assault", counterBonus: 0.025, rewardMultiplier: 1.06 },
+    relentless: { key: "relentless", label: "Relentless", description: "Sustained pressure punishes prolonged engagements; Recon exposes safer windows.", killPenalty: 0.025, counterApproach: "recon", counterBonus: 0.02, rewardMultiplier: 1.05 },
+    elusive: { key: "elusive", label: "Phase Hunter", description: "Rapid repositioning breaks target locks; Recon predicts the movement pattern.", killPenalty: 0.03, counterApproach: "recon", counterBonus: 0.025, rewardMultiplier: 1.06 },
+    berserker: { key: "berserker", label: "Berserker", description: "Damage increases as health falls; Assault can end the final phase quickly.", killPenalty: 0.03, counterApproach: "assault", counterBonus: 0.025, rewardMultiplier: 1.08 },
+    tactician: { key: "tactician", label: "Battle Tactician", description: "Adaptive counters punish predictable pushes; Balanced operations limit openings.", killPenalty: 0.025, counterApproach: "balanced", counterBonus: 0.02, rewardMultiplier: 1.05 },
+    hoarder: { key: "hoarder", label: "Vault Keeper", description: "Guards reinforced caches; Scavenge teams identify weak points and richer spoils.", killPenalty: 0.02, counterApproach: "scavenge", counterBonus: 0.02, rewardMultiplier: 1.1 }
+};
+
+export type BossPhase = { name: string; thresholdPct: number; mechanic: string; killPenalty: number; rewardMultiplier: number };
+export type BossCombatProfile = { traits: BossTraitKey[]; phases: BossPhase[] };
+
+const DEFAULT_BOSS_PHASES: BossPhase[] = [
+    { name: "Contact", thresholdPct: 100, mechanic: "The boss establishes control of the combat zone.", killPenalty: 0, rewardMultiplier: 1 },
+    { name: "Enraged", thresholdPct: 45, mechanic: "The boss commits its signature attack pattern.", killPenalty: 0.025, rewardMultiplier: 1.08 }
+];
+
+export const BOSS_COMBAT_PROFILES: Record<string, BossCombatProfile> = {
+    "The Grave Warden": { traits: ["armored"], phases: DEFAULT_BOSS_PHASES },
+    "Sister Vell": { traits: ["elusive"], phases: DEFAULT_BOSS_PHASES },
+    "Morrow Fang": { traits: ["berserker"], phases: DEFAULT_BOSS_PHASES },
+    "Butcher Prime": { traits: ["relentless", "berserker"], phases: DEFAULT_BOSS_PHASES },
+    Shardjaw: { traits: ["armored", "relentless"], phases: DEFAULT_BOSS_PHASES },
+    "Hexline Rook": { traits: ["tactician", "armored"], phases: DEFAULT_BOSS_PHASES },
+    "Booger King Omega": { traits: ["hoarder", "berserker"], phases: [...DEFAULT_BOSS_PHASES, { name: "Omega Rupture", thresholdPct: 20, mechanic: "Unstable biomass floods every extraction lane.", killPenalty: 0.025, rewardMultiplier: 1.12 }] },
+    "Queen Sumphex": { traits: ["elusive", "hoarder"], phases: [...DEFAULT_BOSS_PHASES, { name: "Sovereign Bloom", thresholdPct: 20, mechanic: "Corrosive growth seals safe firing positions.", killPenalty: 0.025, rewardMultiplier: 1.12 }] },
+    "Warlord Nullhide": { traits: ["tactician", "relentless"], phases: [...DEFAULT_BOSS_PHASES, { name: "Null Barrage", thresholdPct: 20, mechanic: "Void artillery saturates the final approach.", killPenalty: 0.03, rewardMultiplier: 1.12 }] },
+    "Dreadwake Morvane": { traits: ["armored", "hoarder"], phases: [...DEFAULT_BOSS_PHASES, { name: "Dreadwake Protocol", thresholdPct: 20, mechanic: "The command deck locks down around a lethal hull breach.", killPenalty: 0.03, rewardMultiplier: 1.14 }] },
+    "Kraghoss the Ashen Standard": { traits: ["tactician", "berserker"], phases: [...DEFAULT_BOSS_PHASES, { name: "Ashen Last Stand", thresholdPct: 20, mechanic: "Artillery and war banners empower a final countercharge.", killPenalty: 0.035, rewardMultiplier: 1.15 }] },
+    "Thalrex Mourntide": { traits: ["relentless", "elusive", "hoarder"], phases: [...DEFAULT_BOSS_PHASES, { name: "Mourntide Ascendant", thresholdPct: 20, mechanic: "The drowned shrine awakens and the battlefield begins to flood.", killPenalty: 0.04, rewardMultiplier: 1.18 }] }
+};
+
+export function getBossCombatProfile(name: string): BossCombatProfile {
+    return BOSS_COMBAT_PROFILES[name] || { traits: ["relentless"], phases: DEFAULT_BOSS_PHASES };
+}
+
+export function getBossCombatModifiers(name: string, approachKey: RaidApproachKey): {
+    killPenalty: number;
+    counterBonus: number;
+    rewardMultiplier: number;
+    traits: BossTrait[];
+    phases: BossPhase[];
+} {
+    const profile = getBossCombatProfile(name);
+    const traits = profile.traits.map(key => BOSS_TRAITS[key]);
+    const killPenalty = traits.reduce((sum, trait) => sum + trait.killPenalty, 0) + profile.phases.reduce((sum, phase) => sum + phase.killPenalty, 0);
+    const counterBonus = traits.reduce((sum, trait) => sum + (trait.counterApproach === approachKey ? trait.counterBonus || 0 : 0), 0);
+    const traitReward = traits.reduce((multiplier, trait) => multiplier * trait.rewardMultiplier, 1);
+    const phaseReward = profile.phases.reduce((multiplier, phase) => multiplier * phase.rewardMultiplier, 1);
+    return { killPenalty, counterBonus, rewardMultiplier: Math.min(1.65, traitReward * phaseReward), traits, phases: profile.phases };
+}
+
 export type BossVariant = {
     name: string;
     title: string;
@@ -87,6 +194,8 @@ export type RolledBoss = {
     homeMapKey: RaidMapKey;
     homeMapLabel: string;
     spawnSharePct: number;
+    traits: BossTraitKey[];
+    phases: BossPhase[];
 };
 
 export type RaidMapConfig = {
@@ -391,6 +500,7 @@ export function rollRaidCondition(): RaidCondition {
 
 export function rollBossVariant(mapCfg: RaidMapConfig): RolledBoss {
     const variant = pickWeightedEntry(getBossRotationTable(mapCfg));
+    const combatProfile = getBossCombatProfile(variant.boss.name);
     return {
         name: variant.boss.name,
         title: variant.boss.title,
@@ -405,7 +515,9 @@ export function rollBossVariant(mapCfg: RaidMapConfig): RolledBoss {
         rareDropChance: variant.boss.rareDropChance,
         homeMapKey: variant.boss.homeMapKey,
         homeMapLabel: variant.boss.homeMapLabel,
-        spawnSharePct: variant.sharePct
+        spawnSharePct: variant.sharePct,
+        traits: combatProfile.traits,
+        phases: combatProfile.phases
     };
 }
 
@@ -461,13 +573,15 @@ export function rollBossSuccessRewards(input: {
     bossFerocity: number;
     bonusXpRange: [number, number];
     tokenRewardRange: [number, number];
+    combatRewardMultiplier?: number;
 }): { bossBonusXp: number; bossTokenBonus: number } {
     const tensionKey = input.tension === "high" ? "high" : input.tension === "low" ? "low" : "medium";
     const mapMult = BOSS_REWARD_BALANCE.mapDifficultyMultiplier[input.mapDifficulty] || 1;
     const tensionMult = BOSS_REWARD_BALANCE.tensionMultiplier[tensionKey] || 1;
     const ferocityMult = Math.max(0.9, Math.min(1.45, 0.86 + input.bossFerocity * 0.35));
     const rollVariance = 0.92 + Math.random() * 0.2;
-    const finalScale = mapMult * tensionMult * ferocityMult * rollVariance;
+    const combatRewardMultiplier = Math.max(1, Math.min(1.65, input.combatRewardMultiplier || 1));
+    const finalScale = mapMult * tensionMult * ferocityMult * rollVariance * combatRewardMultiplier;
     const [minBossXp, maxBossXp] = input.bonusXpRange;
     const [minBossToken, maxBossToken] = input.tokenRewardRange;
     const rawXp = Math.floor((Math.floor(Math.random() * (maxBossXp - minBossXp + 1)) + minBossXp) * finalScale);

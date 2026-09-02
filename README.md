@@ -1,10 +1,10 @@
 # Titan Raid Bot
 
 ## Overview
-Titan Raid Bot is a Discord bot designed to provide an engaging gaming experience inspired by Escape from Tarkov. Users can select their designated PMC characters and participate in raids, earning rewards based on their performance. The bot also features a points system, daily rewards, and various commands for managing user interactions.
+Titan Raid Bot is a Discord bot designed to provide an engaging gaming experience inspired by Escape from Tarkov. Users build persistent PMC progression through raids, earning rewards and map reputation based on performance. The bot also features an economy, daily rewards, moderation, tickets, giveaways, and casino games.
 
 ## Features
-- **PMC Character Selection**: Users can choose from a variety of PMC characters, each with unique attributes and abilities.
+- **PMC Progression**: Users advance through 50,000 levels and optional Prestige I-X with permanent raid bonuses.
 - **Raid System**: Initiate raids with random outcomes, where users can earn XP and FN Token$ based on their performance.
 - **Economy Management**: Users can manage their FN Token$ balance, earn daily rewards, and participate in games like crash.
 - **Leaderboard**: Track user progress and achievements through an XP leaderboard.
@@ -13,7 +13,7 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
 ## Installation
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/titan-raid-bot.git
+   git clone https://github.com/MGess1017/TitanBot.git
    ```
 2. Navigate to the project directory:
    ```
@@ -23,7 +23,11 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
    ```
    npm install
    ```
-4. Configure the bot by editing the `src/data/config.json` file with your Discord bot token and server ID.
+4. Copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, and the required deployment IDs.
+5. Build the production output:
+   ```
+   npm run build
+   ```
 
 ## Usage
 1. Start the bot:
@@ -31,7 +35,7 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
    npm start
    ```
 2. Use the following commands in your Discord server:
-   - `/selectCharacter`: Choose your PMC character.
+   - `/pmc`: View PMC levels, milestones, map mastery, and prestige.
    - `/raid`: Initiate a raid with your selected character.
    - `/daily`: Claim your daily rewards.
    - `/balance`: Check your FN Token$ balance.
@@ -63,6 +67,7 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
    - `npm run verify:runtime` for bounded bot startup checks.
    - `npm run test:runtime` for health helpers and economy/raid behavior tests.
    - `npm run verify:all` for full release gate coverage.
+   - `npm run health:strict` for the release gate plus a live Discord boot smoke test; valid production credentials are required.
 
 ## Security and Abuse Monitoring
 - Economy/XP anomaly telemetry:

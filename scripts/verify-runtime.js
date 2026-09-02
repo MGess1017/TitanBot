@@ -183,7 +183,7 @@ async function run() {
   const child = spawn(command, args, {
     cwd: ROOT,
     stdio: ["ignore", "pipe", "pipe"],
-    env: process.env,
+    env: { ...process.env, VERIFY_RUNTIME_NO_PERSIST: "1" },
     shell: false
   });
 

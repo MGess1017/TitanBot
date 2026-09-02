@@ -39,8 +39,11 @@ import {
     ensureUser,
     getBankTokens,
     getInventoryCount,
+    getMapReputationEntry,
     getPmcBuffs,
     getPmcLevel,
+    getPmcPrestigeBonuses,
+    getPmcPrestigeTier,
     getPmcProgress,
     getPmcTierForLevel,
     getGameStatsSummary,
@@ -48,6 +51,8 @@ import {
     getXpPersistenceSnapshot,
     formatProgressPercent,
     PMC_LEVEL_CAP,
+    PMC_PRESTIGE_CAP,
+    PMC_PRESTIGE_LEVEL_REQUIREMENT,
     pmcBar,
     getPoints,
     getTokens,
@@ -56,6 +61,8 @@ import {
     removeInventoryItem,
     removeTokens,
     recordGameResult,
+    recordMapReputation,
+    performPmcPrestige,
     savePoints,
     transferWalletTokens,
     withdrawFromBank,
@@ -565,6 +572,42 @@ const PRESTIGE_BADGES: PrestigeBadge[] = [
 
 const PMC_TIER_VISUALS: PmcTierVisual[] = [
     {
+        level: 50000,
+        label: "Ascendant Legend",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/2728.png",
+        color: 0xf59e0b
+    },
+    {
+        level: 45000,
+        label: "Paragon Prime",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f531.png",
+        color: 0x0891b2
+    },
+    {
+        level: 40000,
+        label: "Astral Conqueror",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/2604.png",
+        color: 0xdc2626
+    },
+    {
+        level: 35000,
+        label: "Eternal Warden",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f5ff.png",
+        color: 0x475569
+    },
+    {
+        level: 30000,
+        label: "Rift General",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4a0.png",
+        color: 0x2563eb
+    },
+    {
+        level: 25000,
+        label: "Void Commander",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f300.png",
+        color: 0x6d28d9
+    },
+    {
         level: 20000,
         label: "Mythic Overlord",
         iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f30c.png",
@@ -701,6 +744,11 @@ type BalanceTelemetryStore = {
         totalNet: number;
         bossSpawns: number;
         bossKills: number;
+        reputationAwarded: number;
+        reputationTierUps: number;
+        bossPhasesReached: number;
+        bossPhasesAvailable: number;
+        byBossTrait: Record<string, { encounters: number; kills: number }>;
         byTension: Record<string, BalanceSlice>;
         byMap: Record<string, BalanceSlice>;
         byCondition: Record<string, BalanceSlice>;
@@ -784,6 +832,11 @@ function defaultBalanceTelemetryStore(): BalanceTelemetryStore {
             totalNet: 0,
             bossSpawns: 0,
             bossKills: 0,
+            reputationAwarded: 0,
+            reputationTierUps: 0,
+            bossPhasesReached: 0,
+            bossPhasesAvailable: 0,
+            byBossTrait: {},
             byTension: {},
             byMap: {},
             byCondition: {},
@@ -926,6 +979,11 @@ function parseBalanceTelemetryStore(raw: unknown): BalanceTelemetryStore | null 
             totalNet: typeof raid.totalNet === "number" ? raid.totalNet : 0,
             bossSpawns: typeof raid.bossSpawns === "number" ? raid.bossSpawns : 0,
             bossKills: typeof raid.bossKills === "number" ? raid.bossKills : 0,
+            reputationAwarded: typeof raid.reputationAwarded === "number" ? raid.reputationAwarded : 0,
+            reputationTierUps: typeof raid.reputationTierUps === "number" ? raid.reputationTierUps : 0,
+            bossPhasesReached: typeof raid.bossPhasesReached === "number" ? raid.bossPhasesReached : 0,
+            bossPhasesAvailable: typeof raid.bossPhasesAvailable === "number" ? raid.bossPhasesAvailable : 0,
+            byBossTrait: raid.byBossTrait && typeof raid.byBossTrait === "object" ? raid.byBossTrait : {},
             byTension: normalizeBalanceSliceMap(raid.byTension),
             byMap: normalizeBalanceSliceMap(raid.byMap),
             byCondition: normalizeBalanceSliceMap(raid.byCondition),
@@ -951,6 +1009,7 @@ const runtimeMetrics = readRuntimeMetrics();
 let shutdownMetricMarked = false;
 
 function saveRuntimeMetrics(): void {
+    if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1") return;
     runtimeMetrics.updatedAt = Date.now();
     writeJsonAtomic(METRICS_DATA_FILE, runtimeMetrics);
 }
@@ -1022,6 +1081,7 @@ function formatMetricDuration(ms: number): string {
 }
 
 function appendAuditEvent(eventType: string, payload: Record<string, unknown>): void {
+    if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1") return;
     try {
         fs.ensureDirSync(path.dirname(EVENT_LOG_FILE));
         const line = JSON.stringify({
@@ -1386,6 +1446,11 @@ function recordRaidTelemetry(input: {
     loot: Array<{ id: string; qty: number }>;
     bossSpawned?: boolean;
     bossDefeated?: boolean;
+    mapReputationGain?: number;
+    mapReputationTierUnlocked?: boolean;
+    bossTraits?: string[];
+    bossPhasesReached?: number;
+    bossPhaseCount?: number;
 }): void {
     const raid = balanceTelemetry.raid;
     const safeBet = Math.max(0, Math.floor(input.bet));
@@ -1403,6 +1468,19 @@ function recordRaidTelemetry(input: {
     else raid.losses += 1;
     if (input.bossSpawned) raid.bossSpawns += 1;
     if (input.bossDefeated) raid.bossKills += 1;
+    raid.reputationAwarded += Math.max(0, Math.floor(input.mapReputationGain || 0));
+    if (input.mapReputationTierUnlocked) raid.reputationTierUps += 1;
+    raid.bossPhasesReached += Math.max(0, Math.floor(input.bossPhasesReached || 0));
+    raid.bossPhasesAvailable += Math.max(0, Math.floor(input.bossPhaseCount || 0));
+    if (input.bossSpawned) {
+        for (const trait of input.bossTraits || []) {
+            const traitKey = String(trait || "unknown").toLowerCase();
+            const traitEntry = raid.byBossTrait[traitKey] || { encounters: 0, kills: 0 };
+            traitEntry.encounters += 1;
+            if (input.bossDefeated) traitEntry.kills += 1;
+            raid.byBossTrait[traitKey] = traitEntry;
+        }
+    }
     raid.tokenSources.baseReward += safeBaseReward;
     raid.tokenSources.outcomeBonus += safeOutcomeBonus;
     raid.tokenSources.bossBonus += safeBossBonus;
@@ -3362,6 +3440,12 @@ const CASINO_UI_IDS = {
     prefix: "casino_ui"
 } as const;
 
+const PMC_PRESTIGE_IDS = {
+    request: "pmc_prestige_request",
+    confirm: "pmc_prestige_confirm",
+    cancel: "pmc_prestige_cancel"
+} as const;
+
 type CasinoGameKey = Exclude<GameStatKey, "raid">;
 type CasinoActionKind = "launch" | "replay" | "double" | "half" | "switch";
 
@@ -4293,7 +4377,7 @@ function helpPageRaids() {
             },
             { name: "🛡️ Trigger Buffs and Debuffs", value: "• Conditions: `storm`, `fog`, `night`, `heatwave`, `urban`, `radiation`, `drizzle`, `crosswind`, `low_power`, `ashfall`\n\n• Best owned weapon/armor auto-apply with condition-specific modifiers and loss mitigation.\n\n• Some armor pieces now fully negate their matching raid condition." },
             { name: "👑 Boss Mechanics", value: "• Maps pull from boss variants or apex signatures with unique names and ferocity.\n\n• Boss pressure scales with map, tension, and PMC progression.\n\n• Defeating bosses grants map-tuned gear drops, bonus Raid XP, extra token rewards, and permanent heart trophies." },
-            { name: "📈 PMC Progression", value: `• PMC XP is separate from chat XP.\n\n• Milestone tiers unlock at 1000 / 4000 / 8000 / 12000 / ${PMC_LEVEL_CAP} with escalating raid buffs.` },
+            { name: "📈 PMC Progression", value: `• PMC XP is separate from chat XP.\n\n• Legacy tiers unlock through Level 20,000, followed by mastery tiers every 5,000 levels up to ${PMC_LEVEL_CAP.toLocaleString()}.\n\n• At Level 20,000, choose optional Prestige I-X for permanent raid bonuses or continue overleveling.` },
             { name: "⏱️ Operation Rules", value: `Cooldown: 5s | Minimum bet: ${MIN_RAID_BET} FN Token$ | Raid XP saved to persistent PMC profile` }
         );
 }
@@ -5167,6 +5251,8 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     tension?: string;
     pmcLevel?: number;
     pmcXP?: number;
+    pmcPrestige?: number;
+    pmcPrestigeLabel?: string;
     mapLabel?: string;
     mapDifficulty?: string;
     conditionLabel?: string;
@@ -5192,6 +5278,18 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     bossBonusTokens?: number;
     failureMitigationTokens?: number;
     approachLabel?: string;
+    mapKey?: string;
+    mapReputationGain?: number;
+    mapReputationPoints?: number;
+    mapReputationTier?: string;
+    mapReputationTierUnlocked?: string;
+    mapReputationProgressPct?: number;
+    bossTraitLabels?: string[];
+    bossCounteredTraits?: string[];
+    bossPhaseNames?: string[];
+    bossPhasesReached?: number;
+    bossCurrentPhase?: string;
+    bossCombatRewardMultiplier?: number;
 } {
     const user = ensureUser(userId);
     const now = Date.now();
@@ -5205,6 +5303,8 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
 
     const mapCfg = RaidDomain.resolveRaidMap(mapKeyRaw);
     const approach = RaidDomain.resolveRaidApproach(approachRaw);
+    const mapReputationBefore = getMapReputationEntry(userId, mapCfg.key);
+    const mapReputationBeforeProgress = RaidDomain.getMapReputationProgress(mapReputationBefore.points);
     const table = {
         low: { successChance: 0.78, tokenMultiplier: 1.07, baseRxp: 5 },
         medium: { successChance: 0.53, tokenMultiplier: 1.42, baseRxp: 11 },
@@ -5219,7 +5319,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         : condition;
     const pmcLevelBeforeRaid = getPmcLevel(user.pmcXP);
     const pmcTierBeforeRaid = getPmcTierForLevel(pmcLevelBeforeRaid);
-    const pmcBuffs = getPmcBuffs(pmcLevelBeforeRaid);
+    const pmcBuffs = getPmcBuffs(pmcLevelBeforeRaid, user.pmcPrestige);
     const levelPressure = Math.max(0, Math.min(0.11, pmcLevelBeforeRaid * 0.00075));
     const tensionPressure = tension === "high" ? 0.05 : tension === "medium" ? 0.02 : -0.01;
     const difficultyScalar = 1 + levelPressure + Math.max(0, tensionPressure);
@@ -5236,12 +5336,13 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     );
     const bossSpawned = Math.random() < bossSpawnChance;
     const boss = bossSpawned ? RaidDomain.rollBossVariant(mapCfg) : null;
+    const bossCombat = boss ? RaidDomain.getBossCombatModifiers(boss.name, approach.key) : null;
     const bossPressurePenalty = bossSpawned
         ? (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure + (boss?.successPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * mapDifficultyBossScale * latePmcBossScale
         : 0;
     const finalSuccessChance = Math.max(
         0.06,
-        Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + approach.successDelta - bossPressurePenalty)
+        Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + approach.successDelta + mapReputationBeforeProgress.tier.successBonus - bossPressurePenalty)
     );
 
     const success = Math.random() < finalSuccessChance;
@@ -5249,7 +5350,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
 
     let rewardTokens = 0;
     if (success) {
-        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + approach.tokenMultiplierDelta;
+        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + approach.tokenMultiplierDelta + mapReputationBeforeProgress.tier.tokenBonus;
         rewardTokens = Math.max(1, Math.floor(bet * (conditionTokenBoost + (Math.random() * 0.12 - 0.07))));
         addTokens(userId, rewardTokens);
     }
@@ -5267,7 +5368,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
         const mapAndBossKillPenalty = (mapCfg.bossKillPenalty + mapCfg.bossRaidPressure + (boss?.killPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * (1 + mapDifficultyIndex * 0.05) * latePmcBossScale;
         const pmcRaidMastery = Math.max(0, Math.min(0.14, pmcLevelBeforeRaid * 0.00085));
-        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta + approach.bossKillDelta - mapAndBossKillPenalty));
+        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta + approach.bossKillDelta + mapReputationBeforeProgress.tier.bossKillBonus + (bossCombat?.counterBonus || 0) - mapAndBossKillPenalty - (bossCombat?.killPenalty || 0)));
         bossDefeated = Math.random() < bossKillChance;
         if (bossDefeated) {
             const rolledBossReward = RaidDomain.rollBossSuccessRewards({
@@ -5276,7 +5377,8 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
                 mapDifficulty: mapCfg.difficulty,
                 bossFerocity: boss?.ferocity || 1,
                 bonusXpRange: boss?.bonusXpRange || mapCfg.bossBonusXpRange,
-                tokenRewardRange: boss?.tokenRewardRange || [20, 55]
+                tokenRewardRange: boss?.tokenRewardRange || [20, 55],
+                combatRewardMultiplier: bossCombat?.rewardMultiplier || 1
             });
             bossBonusXp = Math.max(1, Math.floor(rolledBossReward.bossBonusXp * RaidDomain.RAID_BOSS_XP_SCALE));
             bossTokenBonus = rolledBossReward.bossTokenBonus;
@@ -5328,7 +5430,17 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         bossHpRemaining = Math.max(0, Math.min(bossHpMax, Math.round(bossHpMax * bossRemainingPct)));
     }
 
-    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls });
+    const bossPhasesReached = bossSpawned && bossCombat
+        ? bossDefeated
+            ? bossCombat.phases.length
+            : bossCombat.phases.filter(phase => bossHpMax > 0 && (bossHpRemaining / bossHpMax) * 100 <= phase.thresholdPct).length
+        : 0;
+    const bossCurrentPhase = bossCombat && bossPhasesReached > 0
+        ? bossCombat.phases[Math.min(bossPhasesReached, bossCombat.phases.length) - 1]
+        : null;
+
+    const bossPhaseLootRoll = bossDefeated && (bossCombat?.phases.length || 0) >= 3 ? 1 : 0;
+    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll });
     for (const drop of loot) {
         addInventoryItem(userId, drop.id, drop.qty);
     }
@@ -5360,10 +5472,17 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     const baseRewardTokens = rewardTokens;
     const outcomeBonusTokens = reward.tokens;
     const net = baseRewardTokens + outcomeBonusTokens + bossTokenBonus + failureMitigation - bet;
+    const mapReputationGain = RaidDomain.calculateMapReputationGain({ mapDifficulty: mapCfg.difficulty, tension, success, bossSpawned, bossDefeated });
+    const mapReputationResult = recordMapReputation({ userId, mapKey: mapCfg.key, points: mapReputationGain, success, bossSpawned, bossDefeated, timestamp: now });
+    const mapReputationAfterProgress = RaidDomain.getMapReputationProgress(mapReputationResult.entry.points);
+    const mapReputationTierUnlocked = mapReputationAfterProgress.tier.level > mapReputationBeforeProgress.tier.level
+        ? mapReputationAfterProgress.tier.label
+        : undefined;
     user.raidHistory.unshift({
         timestamp: now,
         tension,
         map: mapCfg.label,
+        mapKey: mapCfg.key,
         condition: gearBonus.negatedCondition ? `${condition.label} (Negated)` : condition.label,
         approach: approach.label,
         bet,
@@ -5374,6 +5493,11 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         bossSpawned,
         bossDefeated,
         bossName: bossSpawned ? (boss?.name || mapCfg.bossName) : undefined,
+        bossTraits: bossCombat?.traits.map(trait => trait.label),
+        bossPhasesReached,
+        bossPhaseCount: bossCombat?.phases.length,
+        mapReputationGain,
+        mapReputationPoints: mapReputationResult.entry.points,
         bossBonusXp,
         loot,
         successChance: Math.round(finalSuccessChance * 100)
@@ -5397,6 +5521,11 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         bossDefeated,
         bossName: boss?.name || mapCfg.bossName,
         bossTitle: boss?.title || null,
+        bossTraits: bossCombat?.traits.map(trait => trait.key) || [],
+        bossPhasesReached,
+        bossPhaseCount: bossCombat?.phases.length || 0,
+        bossCurrentPhase: bossCurrentPhase?.name || null,
+        bossCombatRewardMultiplier: bossCombat?.rewardMultiplier || 1,
         bossFerocity: boss?.ferocity || 0,
         bossSpawnChance: Math.round(bossSpawnChance * 100),
         bossKillChance: Math.round(bossKillChance * 100),
@@ -5405,9 +5534,14 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         progressionScale,
         baseRaidXpGain,
         scaledRaidXpGain,
+        mapReputationGain,
+        mapReputationPoints: mapReputationResult.entry.points,
+        mapReputationTier: mapReputationAfterProgress.tier.label,
+        mapReputationTierUnlocked: mapReputationTierUnlocked || null,
         net,
         raidXp: rxpGain,
         pmcXP: user.pmcXP,
+        pmcPrestige: user.pmcPrestige,
         pmcLevel: pmcLevelAfterRaid,
         pmcTierUnlockedLevel: pmcTierUnlocked?.level || null,
         pmcTierUnlockedLabel: pmcTierUnlocked?.label || null
@@ -5421,6 +5555,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         successChance: Math.round(finalSuccessChance * 100),
         bet,
         mapLabel: mapCfg.label,
+        mapKey: mapCfg.key,
         mapDifficulty: mapCfg.difficulty,
         conditionLabel: condition.label,
         bossSpawned,
@@ -5428,6 +5563,12 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         bossName: boss?.name || mapCfg.bossName,
         bossTitle: boss?.title,
         bossFerocity: boss?.ferocity,
+        bossTraitLabels: bossCombat?.traits.map(trait => trait.label),
+        bossCounteredTraits: bossCombat?.traits.filter(trait => trait.counterApproach === approach.key).map(trait => trait.label),
+        bossPhaseNames: bossCombat?.phases.map(phase => phase.name),
+        bossPhasesReached,
+        bossCurrentPhase: bossCurrentPhase?.name,
+        bossCombatRewardMultiplier: bossCombat?.rewardMultiplier,
         bossBonusXp,
         bossKillChance: Math.round(bossKillChance * 100),
         bossImageUrl: bossSpawned ? getBossPortraitUrl(boss?.name || mapCfg.bossName, boss?.title) || undefined : undefined,
@@ -5445,9 +5586,16 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         bossBonusTokens: bossTokenBonus,
         failureMitigationTokens: failureMitigation,
         approachLabel: approach.label,
+        mapReputationGain,
+        mapReputationPoints: mapReputationResult.entry.points,
+        mapReputationTier: mapReputationAfterProgress.tier.label,
+        mapReputationTierUnlocked,
+        mapReputationProgressPct: mapReputationAfterProgress.progressPct,
         tension: `${tension} | ${condition.label}`,
         pmcXP: user.pmcXP,
-        pmcLevel: pmcLevelAfterRaid
+        pmcLevel: pmcLevelAfterRaid,
+        pmcPrestige: user.pmcPrestige,
+        pmcPrestigeLabel: getPmcPrestigeTier(user.pmcPrestige).label
     };
 }
 
@@ -5468,7 +5616,8 @@ function formatRaidHistory(userId: string): string {
 }
 
 function buildRaidHistoryPayload(userId: string): string {
-    const history = ensureUser(userId).raidHistory.slice(0, 8);
+    const state = ensureUser(userId);
+    const history = state.raidHistory.slice(0, 8);
     if (!history.length) {
         return JSON.stringify({
             embed: new EmbedBuilder()
@@ -5483,6 +5632,14 @@ function buildRaidHistoryPayload(userId: string): string {
     const net = history.reduce((sum, entry) => sum + entry.net, 0);
     const totalBossSpawns = history.filter(entry => entry.bossSpawned).length;
     const totalBossKills = history.filter(entry => entry.bossDefeated).length;
+    const reputationLeaders = Object.values(RaidDomain.RAID_MAPS)
+        .map(map => ({ map, entry: getMapReputationEntry(userId, map.key) }))
+        .sort((a, b) => b.entry.points - a.entry.points)
+        .slice(0, 3)
+        .map(({ map, entry }) => {
+            const progress = RaidDomain.getMapReputationProgress(entry.points);
+            return `${RaidDomain.RAID_MAP_SHORT_LABELS[map.key]} • ${progress.tier.label} • ${entry.points} REP`;
+        });
     const recentLines = history.map(entry => {
         const status = entry.success ? "✅" : "❌";
         const boss = entry.bossSpawned
@@ -5506,12 +5663,64 @@ function buildRaidHistoryPayload(userId: string): string {
                 ].join("\n"),
                 inline: false
             },
+            {
+                name: "Territory Network",
+                value: reputationLeaders.join("\n") || "No map reputation established.",
+                inline: false
+            },
             ...chunkDetailLines(recentLines, 2).slice(0, 4).map((chunk, index) => ({
                 name: index === 0 ? "Mission Log" : `Mission Log ${index + 1}`,
                 value: chunk,
                 inline: false
             }))
         );
+
+    return JSON.stringify({ embed: embed.toJSON() });
+}
+
+function formatMapReputationBar(progressPct: number): string {
+    const width = 12;
+    const filled = Math.max(0, Math.min(width, Math.round((progressPct / 100) * width)));
+    return `[${"#".repeat(filled)}${"-".repeat(width - filled)}] ${progressPct}%`;
+}
+
+function buildMapMasteryPayload(userId: string, focusMapKey?: string): string {
+    const maps = Object.values(RaidDomain.RAID_MAPS)
+        .map(map => {
+            const entry = getMapReputationEntry(userId, map.key);
+            return { map, entry, progress: RaidDomain.getMapReputationProgress(entry.points) };
+        })
+        .sort((a, b) => (a.map.key === focusMapKey ? -1 : b.map.key === focusMapKey ? 1 : b.entry.points - a.entry.points));
+    const totalReputation = maps.reduce((sum, item) => sum + item.entry.points, 0);
+    const masteredMaps = maps.filter(item => !item.progress.nextTier).length;
+
+    const embed = new EmbedBuilder()
+        .setColor(0xeab308)
+        .setTitle("🗺️ Territory Network • Map Mastery")
+        .setDescription("Persistent local reputation earned through deployments, extractions, high-tension operations, and boss victories.")
+        .addFields({
+            name: "Network Status",
+            value: [
+                `Total Reputation: ${totalReputation.toLocaleString()} REP`,
+                `Mastered Territories: ${masteredMaps}/${maps.length}`,
+                `Highest Rank: ${maps[0]?.progress.tier.label || "Unproven"}`
+            ].join("\n"),
+            inline: false
+        });
+
+    for (const { map, entry, progress } of maps) {
+        embed.addFields({
+            name: `${map.key === focusMapKey ? "◆ " : ""}${map.label} • ${progress.tier.label}`,
+            value: [
+                `${formatMapReputationBar(progress.progressPct)}`,
+                progress.nextTier ? `${entry.points}/${progress.nextTier.threshold} REP • ${progress.pointsToNext} to ${progress.nextTier.label}` : `${entry.points} REP • Maximum rank achieved`,
+                `Deployments ${entry.raids} • Extracts ${entry.extracts} • Bosses ${entry.bossKills}/${entry.bossEncounters}`,
+                `Perks: +${(progress.tier.successBonus * 100).toFixed(1)}% extraction • +${(progress.tier.tokenBonus * 100).toFixed(1)}% tokens • +${(progress.tier.bossKillBonus * 100).toFixed(1)}% boss kill`,
+                progress.tier.description
+            ].join("\n"),
+            inline: false
+        });
+    }
 
     return JSON.stringify({ embed: embed.toJSON() });
 }
@@ -5539,17 +5748,20 @@ function buildBossRosterPayload(): string {
         );
 
     for (const boss of RaidDomain.RAID_BOSS_ROSTER) {
-        const portraitUrl = getBossPortraitUrl(boss.name, boss.title);
+        const combatProfile = RaidDomain.getBossCombatProfile(boss.name);
+        const traitLine = combatProfile.traits.map(key => {
+            const trait = RaidDomain.BOSS_TRAITS[key];
+            return `${trait.label}${trait.counterApproach ? ` [${RaidDomain.RAID_APPROACHES[trait.counterApproach].label}]` : ""}`;
+        }).join(" • ");
         embed.addFields({
             name: `${boss.name} (${boss.title})`,
             value: [
-                `Home Map: ${boss.homeMapLabel} (${boss.homeMapDifficulty})`,
-                `Threat Class: ${boss.ferocity >= 2 ? "Cataclysmic" : boss.ferocity >= 1.7 ? "Apex" : boss.ferocity >= 1.35 ? "Brutal" : boss.ferocity >= 1 ? "Elite" : "Veteran"}`,
-                `Ferocity: ${boss.ferocity.toFixed(2)} | Success Penalty: ${(boss.successPenalty * 100).toFixed(1)}% | Kill Penalty: ${(boss.killPenalty * 100).toFixed(1)}%`,
-                `Boss XP: ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} | Tokens: ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} | Rare Drop: ${(boss.rareDropChance * 100).toFixed(1)}%`,
-                `Drops: Wpn ${boss.weaponDrops.join(", ")} | Arm ${boss.armorDrops.join(", ")}`,
-                `Map Rotation: ${RaidDomain.formatBossRotationShares(boss)}`,
-                `Portrait: ${portraitUrl ? `[View](${portraitUrl})` : "Unavailable"}`
+                `Home: ${RaidDomain.RAID_MAP_SHORT_LABELS[boss.homeMapKey]} • ${boss.homeMapDifficulty}`,
+                `Threat: ${boss.ferocity >= 2 ? "Cataclysmic" : boss.ferocity >= 1.7 ? "Apex" : boss.ferocity >= 1.35 ? "Brutal" : boss.ferocity >= 1 ? "Elite" : "Veteran"} • Ferocity ${boss.ferocity.toFixed(2)}`,
+                `Traits: ${traitLine}`,
+                `Phases: ${combatProfile.phases.map(phase => phase.name).join(" → ")}`,
+                `Rewards: XP ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} • Tokens ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} • Rare ${(boss.rareDropChance * 100).toFixed(0)}%`,
+                `Signature Drops: ${boss.weaponDrops[0]} • ${boss.armorDrops[0]}`
             ].join("\n"),
             inline: false
         });
@@ -5605,7 +5817,11 @@ function buildPmcProfilePayload(user: User): string {
     const state = ensureUser(user.id);
     const gameStats = getGameStatsSummary(user.id);
     const progress = getPmcProgress(state.pmcXP);
-    const buffs = getPmcBuffs(progress.level);
+    const prestigeTier = getPmcPrestigeTier(state.pmcPrestige);
+    const prestigeBonuses = getPmcPrestigeBonuses(state.pmcPrestige);
+    const prestigeEligible = progress.level >= PMC_PRESTIGE_LEVEL_REQUIREMENT && state.pmcPrestige < PMC_PRESTIGE_CAP;
+    const nextPrestigeTier = getPmcPrestigeTier(Math.min(PMC_PRESTIGE_CAP, state.pmcPrestige + 1));
+    const buffs = getPmcBuffs(progress.level, state.pmcPrestige);
     const tier = getPmcTierForLevel(progress.level);
     const tierVisual = getPmcTierVisual(progress.level);
     const raids = Math.max(0, state.pmcRaids);
@@ -5613,6 +5829,12 @@ function buildPmcProfilePayload(user: User): string {
     const bossKills = Math.max(0, state.pmcBossKills || 0);
     const bossHeartNames = getUnlockedBossHeartNames(user.id);
     const bossHeartsUnlocked = bossHeartNames.length;
+    const mapMastery = Object.values(RaidDomain.RAID_MAPS)
+        .map(map => ({ map, entry: getMapReputationEntry(user.id, map.key) }))
+        .map(item => ({ ...item, progress: RaidDomain.getMapReputationProgress(item.entry.points) }))
+        .sort((a, b) => b.entry.points - a.entry.points);
+    const totalMapReputation = mapMastery.reduce((sum, item) => sum + item.entry.points, 0);
+    const masteredMapCount = mapMastery.filter(item => !item.progress.nextTier).length;
     const collectibleEntries = COLLECTIBLE_ITEM_IDS
         .map(id => ({ id, def: ITEM_DEFS[id], qty: getInventoryCount(user.id, id) }))
         .filter(entry => entry.def && entry.qty > 0)
@@ -5639,8 +5861,8 @@ function buildPmcProfilePayload(user: User): string {
 
     const embed = new EmbedBuilder()
         .setColor(tierVisual.color)
-        .setTitle(progress.capped ? "🪖 PMC Progression • 👑" : "🪖 PMC Progression")
-        .setDescription("Persistent raid profile with milestone progression, combat buffs, and first-kill trophy tracking.")
+        .setTitle(progress.capped ? `🪖 PMC Progression • Prestige ${prestigeTier.numeral} • 👑` : `🪖 PMC Progression • Prestige ${prestigeTier.numeral}`)
+        .setDescription("Persistent raid command profile with overlevels, permanent prestige bonuses, territory mastery, and boss trophies.")
         .setAuthor({ name: `${user.username} · Army Profile`, iconURL: tierVisual.iconUrl })
         .setThumbnail(tierVisual.iconUrl)
         .addFields(
@@ -5659,6 +5881,29 @@ function buildPmcProfilePayload(user: User): string {
             { name: "Tier Status", value: prestigeLine, inline: true },
             { name: "Raid Standing", value: `Raids ${raids} | Wins ${wins} | Boss Kills ${bossKills}`, inline: true },
             { name: "Progress Track", value: `${pmcBar(state.pmcXP)}\n${thresholdLine}`, inline: false },
+            {
+                name: `${prestigeTier.badge} Prestige Protocol`,
+                value: [
+                    `Current Rank: Prestige ${prestigeTier.numeral} • ${prestigeTier.label}`,
+                    state.pmcPrestige >= PMC_PRESTIGE_CAP
+                        ? "Status: Maximum PMC Prestige achieved"
+                        : prestigeEligible
+                            ? `Status: Ready for Prestige ${nextPrestigeTier.numeral}`
+                            : `Eligibility: PMC Level ${PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} • ${Math.max(0, PMC_PRESTIGE_LEVEL_REQUIREMENT - progress.level).toLocaleString()} levels remaining`,
+                    `Permanent: +${(prestigeBonuses.successBonus * 100).toFixed(1)}% success • +${(prestigeBonuses.tokenBonus * 100).toFixed(1)}% tokens • +${(prestigeBonuses.defenseBonus * 100).toFixed(1)}% defense • +${(prestigeBonuses.xpBonus * 100).toFixed(1)}% raid XP`,
+                    `Reset Scope: PMC Level and Raid XP only • Inventory, currency, map REP, trophies, and records preserved`,
+                    `Overlevel Option: Continue advancing to Level ${PMC_LEVEL_CAP.toLocaleString()} without prestiging`
+                ].join("\n"),
+                inline: false
+            },
+            {
+                name: "Territory Mastery",
+                value: [
+                    `Network REP: ${totalMapReputation.toLocaleString()} • Mastered ${masteredMapCount}/${mapMastery.length}`,
+                    ...mapMastery.slice(0, 3).map(item => `${RaidDomain.RAID_MAP_SHORT_LABELS[item.map.key]} • ${item.progress.tier.label} • ${item.entry.points} REP`)
+                ].join("\n"),
+                inline: false
+            },
             {
                 name: "Combat Buff Matrix",
                 value: [
@@ -5695,7 +5940,15 @@ function buildPmcProfilePayload(user: User): string {
             }
         );
 
-    return JSON.stringify({ embed: embed.toJSON() });
+    const prestigeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(PMC_PRESTIGE_IDS.request)
+            .setLabel(state.pmcPrestige >= PMC_PRESTIGE_CAP ? "Prestige X Achieved" : `Prestige to ${nextPrestigeTier.numeral}`)
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(!prestigeEligible)
+    );
+
+    return JSON.stringify({ embed: embed.toJSON(), components: [prestigeRow.toJSON()] });
 }
 
 function chunkDetailLines(lines: string[], maxLines = 8): string[] {
@@ -8311,6 +8564,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const badge = getAccessPointBadge(accessPoints);
         const prestigeBadge = getPrestigeBadge(user.prestige);
         const pmcLevel = getPmcLevel(user.pmcXP);
+        const pmcPrestigeTier = getPmcPrestigeTier(user.pmcPrestige);
         const tierVisual = getPmcTierVisual(pmcLevel);
         const engagementLevel = getXPLevel(user.xp);
         const currentThreshold = engagementLevel > 0 ? XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
@@ -8368,14 +8622,15 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                     value: [
                         `PMC Level: **${pmcLevel.toLocaleString()}**`,
                         `Raid XP: **${user.pmcXP.toLocaleString()}**`,
-                        `Tier: **${tierVisual.label}**`
+                        `Tier: **${tierVisual.label}**`,
+                        `PMC Prestige: **${pmcPrestigeTier.numeral} • ${pmcPrestigeTier.label}**`
                     ].join("\n"),
                     inline: true
                 },
                 {
                     name: "🌟 Status",
                     value: [
-                        `Prestige: **${user.prestige.toLocaleString()}**`,
+                        `Engagement Prestige: **${user.prestige.toLocaleString()}**`,
                         `Badge: **${prestigeBadge.label}**`,
                         `Access Tier: **${badge.label}**`
                     ].join("\n"),
@@ -8397,6 +8652,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const prestigeBadge = getPrestigeBadge(user.prestige);
         const engagementLevel = getXPLevel(user.xp);
         const pmcLevel = getPmcLevel(user.pmcXP);
+        const pmcPrestigeTier = getPmcPrestigeTier(user.pmcPrestige);
         const tierVisual = getPmcTierVisual(pmcLevel);
         const currentThreshold = engagementLevel > 0 ? XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
         const nextThreshold = XP_LEVEL_THRESHOLDS[engagementLevel] ?? currentThreshold;
@@ -8453,14 +8709,15 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                     value: [
                         `PMC Level: **${pmcLevel.toLocaleString()}**`,
                         `Raid XP: **${user.pmcXP.toLocaleString()}**`,
-                        `Next PMC Level: **${pmcProgress.needForNext.toLocaleString()} XP away**`
+                        `Next PMC Level: **${pmcProgress.needForNext.toLocaleString()} XP away**`,
+                        `PMC Prestige: **${pmcPrestigeTier.numeral} • ${pmcPrestigeTier.label}**`
                     ].join("\n"),
                     inline: true
                 },
                 {
                     name: "🌟 Status Badges",
                     value: [
-                        `Prestige: **${user.prestige.toLocaleString()}**`,
+                        `Engagement Prestige: **${user.prestige.toLocaleString()}**`,
                         `Prestige Badge: **${prestigeBadge.label}**`,
                         `PMC Tier: **${tierVisual.label}**`
                     ].join("\n"),
@@ -9582,6 +9839,8 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const selectedWeaponId = interaction.options.getString("weapon");
         const selectedArmorId = interaction.options.getString("armor");
         const mapCfg = RaidDomain.resolveRaidMap(mapRaw);
+        const mapReputation = getMapReputationEntry(interaction.user.id, mapCfg.key);
+        const mapReputationProgress = RaidDomain.getMapReputationProgress(mapReputation.points);
         const condition = RaidDomain.rollRaidCondition();
         const details = RaidRuntime.formatLoadoutSummary({ userId: interaction.user.id, condition, mapCfg, selectedWeaponId, selectedArmorId, getInventoryCount, getBestOwnedGear });
         if (details.startsWith("Selected weapon") || details.startsWith("Selected armor") || details.startsWith("You do not own")) {
@@ -9601,6 +9860,8 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             `Map Base Success Delta: ${(mapCfg.successDelta * 100).toFixed(1)}%`,
             `Map Token Delta: ${(mapCfg.tokenMultiplierDelta * 100).toFixed(1)}%`,
             `Map Raid XP Multiplier: ${mapCfg.xpMultiplier.toFixed(2)}x`,
+            `Territory Rank: ${mapReputationProgress.tier.label} • ${mapReputation.points} REP • ${formatMapReputationBar(mapReputationProgress.progressPct)}`,
+            `Mastery Perks: +${(mapReputationProgress.tier.successBonus * 100).toFixed(1)}% extraction | +${(mapReputationProgress.tier.tokenBonus * 100).toFixed(1)}% tokens | +${(mapReputationProgress.tier.bossKillBonus * 100).toFixed(1)}% boss kill`,
             `Boss Spawn Chance: ${(mapCfg.bossSpawnChance * 100).toFixed(1)}% | Favored Boss: ${mapCfg.bossName} | Rotation Pool: ${RaidDomain.RAID_BOSS_ROSTER.length} bosses`,
             `Projected Low: ${lowProj.successPct}% success | ~${lowProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${lowProj.xpBand[0]}-${lowProj.xpBand[1]} | EV@100 ${lowProj.expectedNetAt100 >= 0 ? `+${lowProj.expectedNetAt100}` : lowProj.expectedNetAt100} tokens | Boss kit ~${lowProj.bossKitDropChancePct}% | Boss bonus XP ~${lowProj.expectedBossBonusXp}`,
             `Projected Medium: ${medProj.successPct}% success | ~${medProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${medProj.xpBand[0]}-${medProj.xpBand[1]} | EV@100 ${medProj.expectedNetAt100 >= 0 ? `+${medProj.expectedNetAt100}` : medProj.expectedNetAt100} tokens | Boss kit ~${medProj.bossKitDropChancePct}% | Boss bonus XP ~${medProj.expectedBossBonusXp}`,
@@ -9645,7 +9906,12 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             failureMitigationTokens: result.failureMitigationTokens || 0,
             loot: result.loot || [],
             bossSpawned: result.bossSpawned,
-            bossDefeated: result.bossDefeated
+            bossDefeated: result.bossDefeated,
+            mapReputationGain: result.mapReputationGain,
+            mapReputationTierUnlocked: Boolean(result.mapReputationTierUnlocked),
+            bossTraits: result.bossTraitLabels,
+            bossPhasesReached: result.bossPhasesReached,
+            bossPhaseCount: result.bossPhaseNames?.length
         });
 
         const raidBroadcast = interaction.guild
@@ -10856,6 +11122,48 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
+    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.request) {
+        const state = ensureUser(interaction.user.id);
+        const level = getPmcLevel(state.pmcXP);
+        if (state.pmcPrestige >= PMC_PRESTIGE_CAP || level < PMC_PRESTIGE_LEVEL_REQUIREMENT) {
+            await interaction.reply({ content: state.pmcPrestige >= PMC_PRESTIGE_CAP ? "Maximum PMC Prestige X has already been achieved." : `PMC Level ${PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} is required to prestige.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const nextTier = getPmcPrestigeTier(state.pmcPrestige + 1);
+        const confirmEmbed = new EmbedBuilder()
+            .setColor(0xf59e0b)
+            .setTitle(`${nextTier.badge} Confirm PMC Prestige ${nextTier.numeral}`)
+            .setDescription("This is a permanent progression choice. Review the reset boundary before confirming.")
+            .addFields(
+                { name: "Will Reset", value: `PMC Level ${level.toLocaleString()} → 0\nRaid XP ${state.pmcXP.toLocaleString()} → 0`, inline: true },
+                { name: "Will Remain", value: "Inventory and currency\nMap reputation and raid records\nBoss hearts, kills, and achievements", inline: true },
+                { name: "Permanent Rank", value: `Prestige ${nextTier.numeral} • ${nextTier.label}\nHigher raid XP, success, token, and defense bonuses`, inline: false }
+            );
+        const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.confirm).setLabel(`Confirm Prestige ${nextTier.numeral}`).setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.cancel).setLabel("Cancel").setStyle(ButtonStyle.Secondary)
+        );
+        await interaction.reply({ embeds: [confirmEmbed], components: [confirmRow], flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.confirm) {
+        const result = performPmcPrestige(interaction.user.id);
+        if (result.error) {
+            await interaction.update({ content: result.error, embeds: [], components: [] }).catch(() => undefined);
+            return;
+        }
+        appendAuditEvent("pmc_prestige", { userId: interaction.user.id, prestige: result.prestige, label: result.tier?.label || null });
+        const payload = JSON.parse(buildPmcProfilePayload(interaction.user));
+        await interaction.update({ embeds: [embedFromPayload("pmc", payload.embed, interaction.user)], components: payload.components || [] }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.cancel) {
+        await interaction.update({ content: "PMC prestige cancelled. No progression was changed.", embeds: [], components: [] }).catch(() => undefined);
+        return;
+    }
+
     if (interaction.isButton() && interaction.customId === RAID_RESULT_ACTION_IDS.history) {
         const payload = JSON.parse(buildRaidHistoryPayload(interaction.user.id));
         await interaction.reply({
@@ -10869,6 +11177,16 @@ client.on("interactionCreate", async interaction => {
         const payload = JSON.parse(buildBossRosterPayload());
         await interaction.reply({
             embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
+            flags: MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === RAID_RESULT_ACTION_IDS.mastery) {
+        const latestMapKey = ensureUser(interaction.user.id).raidHistory[0]?.mapKey;
+        const payload = JSON.parse(buildMapMasteryPayload(interaction.user.id, latestMapKey));
+        await interaction.reply({
+            embeds: [embedFromPayload("raidintel", payload.embed, interaction.user)],
             flags: MessageFlags.Ephemeral
         }).catch(() => undefined);
         return;

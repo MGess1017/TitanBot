@@ -48,6 +48,7 @@ const path_1 = __importDefault(require("path"));
 const utils_1 = require("./utils");
 const ticketEnhancements_1 = require("./services/ticketEnhancements");
 const economy_1 = require("./game/economy");
+const casinoBalance_1 = require("./game/casinoBalance");
 const catalog_1 = require("./game/catalog");
 const bossHearts_1 = require("./game/bossHearts");
 const bossPortraits_1 = require("./game/bossPortraits");
@@ -115,7 +116,7 @@ const DEFAULT_GIVEAWAY_CHANNEL_ID = "1535059013912363008";
 const DEFAULT_REPORT_ADMIN_PANEL_CHANNEL_ID = "1535132577059307583";
 const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
-const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "1536822643414536333";
+const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
 const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
@@ -462,6 +463,42 @@ const PRESTIGE_BADGES = [
 ];
 const PMC_TIER_VISUALS = [
     {
+        level: 50000,
+        label: "Ascendant Legend",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/2728.png",
+        color: 0xf59e0b
+    },
+    {
+        level: 45000,
+        label: "Paragon Prime",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f531.png",
+        color: 0x0891b2
+    },
+    {
+        level: 40000,
+        label: "Astral Conqueror",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/2604.png",
+        color: 0xdc2626
+    },
+    {
+        level: 35000,
+        label: "Eternal Warden",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f5ff.png",
+        color: 0x475569
+    },
+    {
+        level: 30000,
+        label: "Rift General",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4a0.png",
+        color: 0x2563eb
+    },
+    {
+        level: 25000,
+        label: "Void Commander",
+        iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f300.png",
+        color: 0x6d28d9
+    },
+    {
         level: 20000,
         label: "Mythic Overlord",
         iconUrl: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f30c.png",
@@ -550,6 +587,11 @@ function defaultBalanceTelemetryStore() {
             totalNet: 0,
             bossSpawns: 0,
             bossKills: 0,
+            reputationAwarded: 0,
+            reputationTierUps: 0,
+            bossPhasesReached: 0,
+            bossPhasesAvailable: 0,
+            byBossTrait: {},
             byTension: {},
             byMap: {},
             byCondition: {},
@@ -686,6 +728,11 @@ function parseBalanceTelemetryStore(raw) {
             totalNet: typeof raid.totalNet === "number" ? raid.totalNet : 0,
             bossSpawns: typeof raid.bossSpawns === "number" ? raid.bossSpawns : 0,
             bossKills: typeof raid.bossKills === "number" ? raid.bossKills : 0,
+            reputationAwarded: typeof raid.reputationAwarded === "number" ? raid.reputationAwarded : 0,
+            reputationTierUps: typeof raid.reputationTierUps === "number" ? raid.reputationTierUps : 0,
+            bossPhasesReached: typeof raid.bossPhasesReached === "number" ? raid.bossPhasesReached : 0,
+            bossPhasesAvailable: typeof raid.bossPhasesAvailable === "number" ? raid.bossPhasesAvailable : 0,
+            byBossTrait: raid.byBossTrait && typeof raid.byBossTrait === "object" ? raid.byBossTrait : {},
             byTension: normalizeBalanceSliceMap(raid.byTension),
             byMap: normalizeBalanceSliceMap(raid.byMap),
             byCondition: normalizeBalanceSliceMap(raid.byCondition),
@@ -708,6 +755,8 @@ function readRuntimeMetrics() {
 const runtimeMetrics = readRuntimeMetrics();
 let shutdownMetricMarked = false;
 function saveRuntimeMetrics() {
+    if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1")
+        return;
     runtimeMetrics.updatedAt = Date.now();
     writeJsonAtomic(METRICS_DATA_FILE, runtimeMetrics);
 }
@@ -775,6 +824,8 @@ function formatMetricDuration(ms) {
     return `${days}d ${hours}h ${minutes}m ${secs}s`;
 }
 function appendAuditEvent(eventType, payload) {
+    if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1")
+        return;
     try {
         fs_extra_1.default.ensureDirSync(path_1.default.dirname(EVENT_LOG_FILE));
         const line = JSON.stringify({
@@ -1120,6 +1171,21 @@ function recordRaidTelemetry(input) {
         raid.bossSpawns += 1;
     if (input.bossDefeated)
         raid.bossKills += 1;
+    raid.reputationAwarded += Math.max(0, Math.floor(input.mapReputationGain || 0));
+    if (input.mapReputationTierUnlocked)
+        raid.reputationTierUps += 1;
+    raid.bossPhasesReached += Math.max(0, Math.floor(input.bossPhasesReached || 0));
+    raid.bossPhasesAvailable += Math.max(0, Math.floor(input.bossPhaseCount || 0));
+    if (input.bossSpawned) {
+        for (const trait of input.bossTraits || []) {
+            const traitKey = String(trait || "unknown").toLowerCase();
+            const traitEntry = raid.byBossTrait[traitKey] || { encounters: 0, kills: 0 };
+            traitEntry.encounters += 1;
+            if (input.bossDefeated)
+                traitEntry.kills += 1;
+            raid.byBossTrait[traitKey] = traitEntry;
+        }
+    }
     raid.tokenSources.baseReward += safeBaseReward;
     raid.tokenSources.outcomeBonus += safeOutcomeBonus;
     raid.tokenSources.bossBonus += safeBossBonus;
@@ -2072,6 +2138,20 @@ async function pruneInaccessibleOwnerTicketRecords(guild) {
     }
     return removed;
 }
+function purgeLegacyImportedTicketRecords(guildId) {
+    const legacyReasons = new Set([
+        "Imported existing ticket channel",
+        "Imported from known ticket button channel"
+    ]);
+    const before = ticketStore.tickets.length;
+    ticketStore.tickets = ticketStore.tickets.filter(ticket => !(ticket.guildId === guildId && legacyReasons.has(ticket.reason)));
+    const removed = before - ticketStore.tickets.length;
+    if (removed > 0) {
+        saveTicketStore();
+        appendAuditEvent("ticket_legacy_import_purge", { guildId, removed });
+    }
+    return removed;
+}
 function findChannelOwnerFromTopic(topic) {
     if (!topic)
         return null;
@@ -2080,56 +2160,11 @@ function findChannelOwnerFromTopic(topic) {
         return null;
     return match[1];
 }
-function importTicketEntryForChannel(guildId, ownerId, channelId, reason) {
+async function ensureTrackedTicketByChannelId(_guild, channelId, _fallbackOwnerId) {
     const existing = findTicketByChannel(channelId);
     if (existing)
         return existing;
-    const ticket = {
-        id: ticketStore.nextId++,
-        guildId,
-        ownerId,
-        channelId,
-        reason,
-        status: "open",
-        priority: "normal",
-        workflowStatus: "new",
-        claimedById: null,
-        assignedToId: null,
-        panelMessageId: null,
-        firstResponseAt: null,
-        archivedAt: null,
-        resolvedAt: null,
-        closedReason: null,
-        resolvedReason: null,
-        transcript: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-    };
-    ticketStore.tickets.push(ticket);
-    saveTicketStore();
-    return ticket;
-}
-async function ensureTrackedTicketByChannelId(guild, channelId, fallbackOwnerId) {
-    const existing = findTicketByChannel(channelId);
-    if (existing)
-        return existing;
-    const channel = await guild.channels.fetch(channelId).catch(() => null);
-    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
-        return null;
-    const ownerFromTopic = findChannelOwnerFromTopic(channel.topic);
-    const ownerId = ownerFromTopic || fallbackOwnerId;
-    const concurrentExisting = findTicketByChannel(channelId);
-    if (concurrentExisting)
-        return concurrentExisting;
-    const imported = importTicketEntryForChannel(guild.id, ownerId, channel.id, "Imported existing ticket channel");
-    appendAuditEvent("ticket_import", {
-        guildId: guild.id,
-        ticketId: imported.id,
-        channelId: imported.channelId,
-        ownerId: imported.ownerId,
-        importedByFallback: true
-    });
-    return imported;
+    return null;
 }
 function createTicketEntry(guildId, ownerId, channelId, reason, priority) {
     return (0, ticketState_1.createTicketEntry)(ticketStore, guildId, ownerId, channelId, reason, priority, saveTicketStore);
@@ -2223,14 +2258,33 @@ function buildTicketOpsEmbed(ticket) {
         : (sla.resolveOverdue ? "BREACHED" : "On Track");
     const status = normalizeTicketStatus(ticket.status);
     const nextAction = getTicketNextActionHint(ticket);
+    const intake = (0, ticketEnhancements_1.hydrateTicketIntakeFields)(ticket.reason, {
+        category: ticket.intakeCategory,
+        summary: ticket.intakeSummary,
+        details: ticket.intakeDetails,
+        platform: ticket.intakePlatform,
+        orderId: ticket.intakeOrderId,
+        evidence: ticket.intakeEvidence
+    });
+    const intakeSummary = intake.summary || "General support";
+    const intakeCategory = intake.category || String(ticket.category || "general");
+    const intakeDetails = intake.details || "No details provided.";
+    const intakePlatform = intake.platform || "Not provided";
+    const intakeEvidence = intake.evidence || "No evidence provided";
     const statusLabel = `${status === "open" ? "🟢" : status === "claimed" ? "🛠️" : status === "archived" ? "🗂️" : "✅"} ${status.toUpperCase()}`;
     const workflowLabel = `${ticket.workflowStatus === "new" ? "🆕" : ticket.workflowStatus === "responded" ? "💬" : ticket.workflowStatus === "waiting_user" ? "⏳" : ticket.workflowStatus === "escalated" ? "🚨" : "✅"} ${ticket.workflowStatus}`;
     const priorityLabel = `${ticket.priority === "low" ? "🟦" : ticket.priority === "normal" ? "🟨" : "🟥"} ${ticket.priority.toUpperCase()}`;
+    const intakeSnapshot = [
+        `Summary: ${intakeSummary.slice(0, 200)}`,
+        `Details: ${intakeDetails.slice(0, 450)}`,
+        `Platform / Order: ${intakePlatform === "Not provided" ? "Not provided" : intakePlatform.slice(0, 200)}`,
+        `Evidence: ${intakeEvidence.slice(0, 450)}`
+    ].join("\n");
     return brandLiveEmbed(new discord_js_1.EmbedBuilder()
         .setColor(0x14b8a6)
         .setTitle(`🏛️ FN Support • Case #${ticket.id} Command Deck`)
         .setDescription("Premium live operations panel for this case.\nStatus, assignment, workflow, and SLA indicators refresh automatically as handlers progress resolution.")
-        .addFields({ name: "👤 Requester", value: `<@${ticket.ownerId}>`, inline: true }, { name: "🕒 Opened At", value: `<t:${Math.floor(ticket.createdAt / 1000)}:f>`, inline: true }, { name: "📍 Ticket Thread", value: `<#${ticket.channelId}>`, inline: true }, { name: "⚡ Priority Tier", value: priorityLabel, inline: true }, { name: "🏷️ Category", value: String(ticket.category || "general"), inline: true }, { name: "🧭 Workflow Lane", value: workflowLabel, inline: true }, { name: "🛠️ Claim Lead", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed yet", inline: true }, { name: "🎯 Assigned Specialist", value: ticket.assignedToId ? `<@${ticket.assignedToId}>` : "Unassigned", inline: true }, { name: "📌 Lifecycle", value: statusLabel, inline: true }, { name: "📝 Case Brief", value: ticket.reason || "No reason provided", inline: false }, { name: "⏱️ SLA Clock", value: `• Policy: ${policy.name}\n• First response target: ${Math.round(policy.firstResponseMs / 60000)}m (${firstResponseStatus})\n• Resolution target: ${Math.round(policy.resolveMs / 3600000)}h (${resolveStatus})`, inline: false }, { name: "🧬 Case Graph", value: `Parent: ${ticket.parentTicketId ? `#${ticket.parentTicketId}` : "none"} | Linked: ${ticket.linkedTicketId ? `#${ticket.linkedTicketId}` : "none"} | Merged Into: ${ticket.mergedIntoTicketId ? `#${ticket.mergedIntoTicketId}` : "none"}`, inline: false }, { name: "➡️ Recommended Move", value: nextAction, inline: false }, { name: "🧰 Command Strip", value: "`/claimticket` ` /ticketassign` ` /ticketstatus` ` /reopenticket` ` /closeticket` ` /resolveticket`", inline: false })
+        .addFields({ name: "👤 Requester", value: `<@${ticket.ownerId}>`, inline: true }, { name: "🕒 Opened At", value: `<t:${Math.floor(ticket.createdAt / 1000)}:f>`, inline: true }, { name: "📍 Ticket Thread", value: `<#${ticket.channelId}>`, inline: true }, { name: "⚡ Priority Tier", value: priorityLabel, inline: true }, { name: "🏷️ Submitted Category", value: intakeCategory, inline: true }, { name: "🧭 Workflow Lane", value: workflowLabel, inline: true }, { name: "🛠️ Claim Lead", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed yet", inline: true }, { name: "🎯 Assigned Specialist", value: ticket.assignedToId ? `<@${ticket.assignedToId}>` : "Unassigned", inline: true }, { name: "📌 Lifecycle", value: statusLabel, inline: true }, { name: "📥 Intake Snapshot", value: intakeSnapshot, inline: false }, { name: "⏱️ SLA Clock", value: `• Policy: ${policy.name}\n• First response target: ${Math.round(policy.firstResponseMs / 60000)}m (${firstResponseStatus})\n• Resolution target: ${Math.round(policy.resolveMs / 3600000)}h (${resolveStatus})`, inline: false }, { name: "🧬 Case Graph", value: `Parent: ${ticket.parentTicketId ? `#${ticket.parentTicketId}` : "none"} | Linked: ${ticket.linkedTicketId ? `#${ticket.linkedTicketId}` : "none"} | Merged Into: ${ticket.mergedIntoTicketId ? `#${ticket.mergedIntoTicketId}` : "none"}`, inline: false }, { name: "➡️ Recommended Move", value: nextAction, inline: false }, { name: "🧰 Command Strip", value: "`/claimticket` ` /ticketassign` ` /ticketstatus` ` /reopenticket` ` /closeticket` ` /resolveticket`", inline: false })
         .setFooter({ text: `FN Support Tickets • Case #${ticket.id} • Live sync` }), "FN Support Command Deck", "Live case operations");
 }
 async function updateTicketOpsPanelMessage(guild, ticket) {
@@ -2674,12 +2728,17 @@ const SELL_UI_IDS = {
 const CASINO_UI_IDS = {
     prefix: "casino_ui"
 };
+const PMC_PRESTIGE_IDS = {
+    request: "pmc_prestige_request",
+    confirm: "pmc_prestige_confirm",
+    cancel: "pmc_prestige_cancel"
+};
 const CASINO_GAME_ORDER = [
     "dice",
     "roulette",
     "blackjack",
     "crash",
-    "slots",
+    "magicslots",
     "coinflip",
     "baccarat",
     "hilo",
@@ -3451,7 +3510,7 @@ function helpPageRaids() {
     }, {
         name: "🪖 Mission Commands",
         value: `• \`/raid bet:<amount> tension:<low|medium|high> map:<map_name> weapon:<optional> armor:<optional>\`\n\n• \`/raidhistory\` — recent results (map + boss outcomes)\n\n• \`/bosses\` — full boss roster, stats, and rotation weights\n\n• \`/conditions\` — every raid condition, deltas, and armor counters\n\n• \`/gearintel\` — raid gear stat and trait directory\n\n• \`/pmc\` — milestone PMC progression (up to Level ${utils_1.PMC_LEVEL_CAP})\n\n• \`/loadout\` — best auto-applied weapon/armor bonuses\n\n• \`/raidintel map:<map_name> weapon:<optional> armor:<optional>\``
-    }, { name: "🛡️ Trigger Buffs and Debuffs", value: "• Conditions: `storm`, `fog`, `night`, `heatwave`, `urban`, `radiation`, `drizzle`, `crosswind`, `low_power`, `ashfall`\n\n• Best owned weapon/armor auto-apply with condition-specific modifiers and loss mitigation.\n\n• Some armor pieces now fully negate their matching raid condition." }, { name: "👑 Boss Mechanics", value: "• Maps pull from boss variants or apex signatures with unique names and ferocity.\n\n• Boss pressure scales with map, tension, and PMC progression.\n\n• Defeating bosses grants map-tuned gear drops, bonus Raid XP, extra token rewards, and permanent heart trophies." }, { name: "📈 PMC Progression", value: `• PMC XP is separate from chat XP.\n\n• Milestone tiers unlock at 1000 / 4000 / 8000 / 12000 / ${utils_1.PMC_LEVEL_CAP} with escalating raid buffs.` }, { name: "⏱️ Operation Rules", value: `Cooldown: 5s | Minimum bet: ${MIN_RAID_BET} FN Token$ | Raid XP saved to persistent PMC profile` });
+    }, { name: "🛡️ Trigger Buffs and Debuffs", value: "• Conditions: `storm`, `fog`, `night`, `heatwave`, `urban`, `radiation`, `drizzle`, `crosswind`, `low_power`, `ashfall`\n\n• Best owned weapon/armor auto-apply with condition-specific modifiers and loss mitigation.\n\n• Some armor pieces now fully negate their matching raid condition." }, { name: "👑 Boss Mechanics", value: "• Maps pull from boss variants or apex signatures with unique names and ferocity.\n\n• Boss pressure scales with map, tension, and PMC progression.\n\n• Defeating bosses grants map-tuned gear drops, bonus Raid XP, extra token rewards, and permanent heart trophies." }, { name: "📈 PMC Progression", value: `• PMC XP is separate from chat XP.\n\n• Legacy tiers unlock through Level 20,000, followed by mastery tiers every 5,000 levels up to ${utils_1.PMC_LEVEL_CAP.toLocaleString()}.\n\n• At Level 20,000, choose optional Prestige I-X for permanent raid bonuses or continue overleveling.` }, { name: "⏱️ Operation Rules", value: `Cooldown: 5s | Minimum bet: ${MIN_RAID_BET} FN Token$ | Raid XP saved to persistent PMC profile` });
 }
 function helpPageShop() {
     return new discord_js_1.EmbedBuilder()
@@ -3465,7 +3524,7 @@ function helpPageGames() {
         .setColor(0x00ffea)
         .setTitle("🪖 War Games Command")
         .setDescription("High-risk tactical casino simulations powered by FN Token$ from raids and live operations rewards.")
-        .addFields({ name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/slots` — Magic Slots (6 reels, straight + zig-zag wins)\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" }, { name: "Rules of Engagement", value: "• Stake is committed before each round.\n\n• Result boards use mission colors: WIN=green, LOSS=red, PUSH=yellow.\n\n• Action buttons allow replay, bet scaling, and mode rotation." });
+        .addFields({ name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/magicslots` — enchanted reels, jackpot arcs, and bonus magic rounds\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" }, { name: "Interactive Casino", value: "• `/casino bet:<amount>` opens the full game floor.\n\n• Choose a game with one click, then replay, double, halve, or switch from every result." }, { name: "Fair Return Profile", value: "• Standard games target roughly 95% long-run return.\n\n• Standard-game wins have a disclosed 6% boost chance that never reduces payouts.\n\n• Magic Slots is calibrated near 94% with measured scatter and ultra-mode chances." }, { name: "Round Results", value: "• Every result shows bet, payout, net change, wallet, round details, risk, odds, bonus result, and player record.\n\n• WIN=green, LOSS=red, PUSH=yellow." });
 }
 function helpPageBank() {
     return new discord_js_1.EmbedBuilder()
@@ -3504,13 +3563,13 @@ function getAvatar(user) {
     return user.displayAvatarURL({ extension: "png", size: 256 });
 }
 const RAID_COMMAND_SET = new Set(["raid", "raidintel", "raidhistory", "bosses", "conditions", "gearintel", "loadout", "pmc"]);
-const GAME_COMMAND_SET = new Set(["dice", "roulette", "blackjack", "crash", "slots", "coinflip", "baccarat", "hilo", "keno"]);
+const GAME_COMMAND_SET = new Set(["dice", "roulette", "blackjack", "crash", "magicslots", "coinflip", "baccarat", "hilo", "keno"]);
 function resolveCommandTheme(commandName) {
     const cmd = commandName.toLowerCase();
     const raidCommands = new Set(["raid", "raidintel", "raidhistory", "bosses", "conditions", "gearintel", "loadout", "pmc"]);
     const xpCommands = new Set(["xp", "xpstats", "xproles", "xprolesync", "leaderboard", "daily", "xpverify"]);
     const economyCommands = new Set(["balance", "token", "bank", "deposit", "withdraw", "transfer", "shop", "inventory", "buy", "sell", "opencrate", "useitem", "tradeoffer", "trades", "tradeaccept", "tradedecline"]);
-    const gameCommands = new Set(["dice", "roulette", "blackjack", "crash", "slots", "coinflip", "baccarat", "hilo", "keno"]);
+    const gameCommands = new Set(["dice", "roulette", "blackjack", "crash", "magicslots", "coinflip", "baccarat", "hilo", "keno"]);
     const moderationCommands = new Set(["warn", "warnings", "clearwarnings", "tempban", "purge", "points", "pointsuser", "addpoints", "addtoken", "timeout", "kick", "ban", "setmodlog", "modconfig", "xprolesync", "health", "rolesanity", "ticketsanity", "xpverify", "incident"]);
     const ticketCommands = new Set([
         "ticket",
@@ -3756,497 +3815,6 @@ function formatInventory(userId) {
     if (!entries.length)
         return "Empty";
     return entries.map(([id, qty]) => `${qty}x ${catalog_1.ITEM_DEFS[id]?.name || id}`).join("\n");
-}
-const RAID_CONDITIONS = [
-    { key: "storm", label: "Storm Front", description: "Visibility drops and extraction lanes are unstable.", successDelta: -0.03, tokenMultiplierDelta: 0.08, xpMultiplier: 1.1 },
-    { key: "fog", label: "Dense Fog", description: "Long-range pressure is reduced, stealth routing improves.", successDelta: -0.01, tokenMultiplierDelta: 0.05, xpMultiplier: 1.06 },
-    { key: "night", label: "Night Operation", description: "High-risk engagement windows with stealth-focused paths.", successDelta: -0.02, tokenMultiplierDelta: 0.1, xpMultiplier: 1.14 },
-    { key: "heatwave", label: "Heatwave", description: "Thermal strain lowers heavy gear efficiency.", successDelta: -0.015, tokenMultiplierDelta: 0.06, xpMultiplier: 1.08 },
-    { key: "urban", label: "Urban Collapse", description: "Close-quarters terrain rewards mobility and fast weapons.", successDelta: 0.0, tokenMultiplierDelta: 0.04, xpMultiplier: 1.04 },
-    { key: "radiation", label: "Radiation Surge", description: "Hazard zones punish weak protection but increase rewards.", successDelta: -0.025, tokenMultiplierDelta: 0.12, xpMultiplier: 1.18 },
-    { key: "drizzle", label: "Cold Drizzle", description: "Minor moisture slicks lanes and softens sightlines without heavily disrupting tempo.", successDelta: -0.006, tokenMultiplierDelta: 0.025, xpMultiplier: 1.03 },
-    { key: "crosswind", label: "Crosswind Shear", description: "Light lateral wind nudges ranged consistency and extraction timing.", successDelta: -0.009, tokenMultiplierDelta: 0.03, xpMultiplier: 1.04 },
-    { key: "low_power", label: "Low Power Grid", description: "Flickering infrastructure causes subtle routing delays and weaker tactical reads.", successDelta: -0.012, tokenMultiplierDelta: 0.035, xpMultiplier: 1.05 },
-    { key: "ashfall", label: "Ashfall", description: "Airborne ash creates persistent low-grade interference across the operation.", successDelta: -0.018, tokenMultiplierDelta: 0.055, xpMultiplier: 1.08 }
-];
-const RAID_LOOT_TUNING_BY_DIFFICULTY = {
-    Beginner: {
-        successBaseRolls: 1,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 0,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.18,
-        gearFailureChance: 0.06,
-        fnCoinBaseChance: 0.006,
-        relicBaseChance: 0.018,
-        crateBaseChance: 0.026,
-        ultraRareBaseChance: 0.0003,
-        bossUltraRareBonusChance: 0.0028
-    },
-    Mid: {
-        successBaseRolls: 1,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 0,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.22,
-        gearFailureChance: 0.08,
-        fnCoinBaseChance: 0.009,
-        relicBaseChance: 0.024,
-        crateBaseChance: 0.035,
-        ultraRareBaseChance: 0.00075,
-        bossUltraRareBonusChance: 0.0035
-    },
-    Hard: {
-        successBaseRolls: 1,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 1,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.26,
-        gearFailureChance: 0.1,
-        fnCoinBaseChance: 0.012,
-        relicBaseChance: 0.03,
-        crateBaseChance: 0.042,
-        ultraRareBaseChance: 0.0014,
-        bossUltraRareBonusChance: 0.0042
-    },
-    Elite: {
-        successBaseRolls: 2,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 1,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.29,
-        gearFailureChance: 0.11,
-        fnCoinBaseChance: 0.014,
-        relicBaseChance: 0.034,
-        crateBaseChance: 0.052,
-        ultraRareBaseChance: 0.0019,
-        bossUltraRareBonusChance: 0.0049
-    },
-    Brutal: {
-        successBaseRolls: 2,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 1,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.31,
-        gearFailureChance: 0.115,
-        fnCoinBaseChance: 0.016,
-        relicBaseChance: 0.039,
-        crateBaseChance: 0.06,
-        ultraRareBaseChance: 0.0023,
-        bossUltraRareBonusChance: 0.0054
-    },
-    Cataclysmic: {
-        successBaseRolls: 2,
-        successHighTensionBonusRolls: 2,
-        successHardMapBonusRolls: 1,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.34,
-        gearFailureChance: 0.12,
-        fnCoinBaseChance: 0.018,
-        relicBaseChance: 0.044,
-        crateBaseChance: 0.075,
-        ultraRareBaseChance: 0.003,
-        bossUltraRareBonusChance: 0.0062
-    }
-};
-function pickOne(arr) {
-    return arr[Math.floor(Math.random() * arr.length)];
-}
-function pickWeightedEntry(arr) {
-    const eligible = arr.filter(entry => entry.weight > 0);
-    if (!eligible.length)
-        return arr[0];
-    const total = eligible.reduce((sum, entry) => sum + entry.weight, 0);
-    let roll = Math.random() * total;
-    for (const entry of eligible) {
-        roll -= entry.weight;
-        if (roll <= 0)
-            return entry;
-    }
-    return eligible[eligible.length - 1];
-}
-function rollBossVariant(mapCfg) {
-    const variant = pickWeightedEntry(getBossRotationTable(mapCfg));
-    return {
-        name: variant.boss.name,
-        title: variant.boss.title,
-        ferocity: variant.boss.ferocity,
-        successPenalty: variant.boss.successPenalty,
-        killPenalty: variant.boss.killPenalty,
-        raidPressure: variant.boss.raidPressure,
-        bonusXpRange: variant.boss.bonusXpRange,
-        tokenRewardRange: variant.boss.tokenRewardRange,
-        weaponDrop: pickOne(variant.boss.weaponDrops),
-        armorDrop: pickOne(variant.boss.armorDrops),
-        rareDropChance: variant.boss.rareDropChance,
-        homeMapKey: variant.boss.homeMapKey,
-        homeMapLabel: variant.boss.homeMapLabel,
-        spawnSharePct: variant.sharePct
-    };
-}
-function isAdvancedRaidDifficulty(difficulty) {
-    return difficulty !== "Beginner" && difficulty !== "Mid";
-}
-const RAID_MAPS = {
-    plagued_cemetary: {
-        key: "plagued_cemetary",
-        label: "FN Plagued Cemetery",
-        difficulty: "Beginner",
-        helpSummary: "Beginner map, higher extraction odds, low-mid loot.",
-        description: "Beginner route with calmer extraction lanes and low-mid tier loot opportunities.",
-        lootTier: "Low to Mid",
-        recommendedTension: "low",
-        successDelta: 0.12,
-        tokenMultiplierDelta: -0.12,
-        xpMultiplier: 0.88,
-        lootGearChanceBonus: -0.08,
-        resourceChanceBonus: 0.03,
-        legendaryChanceBonus: -0.025,
-        fnCoinChanceBonus: -0.02,
-        bossName: "The Grave Warden",
-        bossSpawnChance: 0.05,
-        bossSuccessPenalty: 0.05,
-        bossKillPenalty: 0.06,
-        bossRaidPressure: 0.01,
-        bossBonusXpRange: [24, 52],
-        bossPool: [
-            { name: "The Grave Warden", title: "Crypt Marshal", ferocity: 0.7, successPenalty: 0.03, killPenalty: 0.05, raidPressure: 0.012, bonusXpRange: [28, 58], tokenRewardRange: [18, 42], weaponDrops: ["marksman_dmr", "scav_smg"], armorDrops: ["guardian_plate", "storm_shell"], rareDropChance: 0.08 },
-            { name: "Sister Vell", title: "Bone Oracle", ferocity: 0.82, successPenalty: 0.04, killPenalty: 0.06, raidPressure: 0.013, bonusXpRange: [36, 72], tokenRewardRange: [26, 58], weaponDrops: ["thermal_lance", "marksman_dmr"], armorDrops: ["shadow_cloak", "guardian_plate"], rareDropChance: 0.1 },
-            { name: "Morrow Fang", title: "Pit Reaper", ferocity: 0.9, successPenalty: 0.05, killPenalty: 0.07, raidPressure: 0.015, bonusXpRange: [48, 86], tokenRewardRange: [30, 66], weaponDrops: ["mythic_hammer", "plasma_carbine"], armorDrops: ["adaptive_mesh", "juggernaut_frame"], rareDropChance: 0.12 }
-        ],
-        successWeapons: ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr"],
-        failureWeapons: ["rust_blade", "combat_knife", "scav_smg"],
-        successArmor: ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell"],
-        failureArmor: ["field_vest", "scout_weave", "tactical_armor"],
-        bossKit: { weaponId: "marksman_dmr", armorId: "guardian_plate" },
-        scrapBonus: 2,
-        bonusLootPool: [
-            { id: "field_ration", weight: 8 },
-            { id: "common_crate", weight: 3 },
-            { id: "rare_material_small", weight: 6 },
-            { id: "tactical_blueprint", weight: 2 }
-        ],
-        crateDropTable: [{ id: "tactical_crate", weight: 1 }],
-        bossCrateDropTable: [{ id: "tactical_crate", weight: 1 }]
-    },
-    slaughterhouse: {
-        key: "slaughterhouse",
-        label: "FN Slaughterhouse",
-        difficulty: "Mid",
-        helpSummary: "Mid map, harder extracts, better loot spread, 10% boss spawn.",
-        description: "Mid-tier combat map with harder extractions, stronger loot spread, and a 10% boss spawn chance.",
-        lootTier: "Mid to High",
-        recommendedTension: "medium",
-        successDelta: -0.04,
-        tokenMultiplierDelta: 0.14,
-        xpMultiplier: 1.16,
-        lootGearChanceBonus: 0.07,
-        resourceChanceBonus: 0.08,
-        legendaryChanceBonus: 0.03,
-        fnCoinChanceBonus: 0.012,
-        bossName: "Butcher Prime",
-        bossSpawnChance: 0.12,
-        bossSuccessPenalty: 0.09,
-        bossKillPenalty: 0.1,
-        bossRaidPressure: 0.013,
-        bossBonusXpRange: [60, 120],
-        bossPool: [
-            { name: "Butcher Prime", title: "Arena Tyrant", ferocity: 1.05, successPenalty: 0.06, killPenalty: 0.08, raidPressure: 0.016, bonusXpRange: [70, 132], tokenRewardRange: [48, 92], weaponDrops: ["mythic_hammer", "thermal_lance"], armorDrops: ["juggernaut_frame", "void_shield"], rareDropChance: 0.16 },
-            { name: "Shardjaw", title: "Steel Maw", ferocity: 1.12, successPenalty: 0.07, killPenalty: 0.09, raidPressure: 0.018, bonusXpRange: [84, 156], tokenRewardRange: [56, 108], weaponDrops: ["rail_sniper", "plasma_carbine"], armorDrops: ["adaptive_mesh", "aegis_exosuit"], rareDropChance: 0.2 },
-            { name: "Hexline Rook", title: "Execution Marshal", ferocity: 1.2, successPenalty: 0.08, killPenalty: 0.1, raidPressure: 0.02, bonusXpRange: [92, 168], tokenRewardRange: [62, 118], weaponDrops: ["reactor_blade", "rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.22 }
-        ],
-        successWeapons: ["combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer"],
-        failureWeapons: ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr"],
-        successArmor: ["scout_weave", "tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame"],
-        failureArmor: ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell"],
-        bossKit: { weaponId: "mythic_hammer", armorId: "juggernaut_frame" },
-        scrapBonus: 5,
-        bonusLootPool: [
-            { id: "weapon_bolts", weight: 7 },
-            { id: "repair_kit", weight: 5 },
-            { id: "rare_crate", weight: 2 },
-            { id: "reactor_matrix", weight: 2 }
-        ],
-        crateDropTable: [{ id: "tactical_crate", weight: 1 }],
-        bossCrateDropTable: [{ id: "tactical_crate", weight: 1 }]
-    },
-    boogerswoodz: {
-        key: "boogerswoodz",
-        label: "FN BoogersWoodZ",
-        difficulty: "Hard",
-        helpSummary: "Hard map, premium loot tables, harder boss pressure.",
-        description: "Highest-risk territory with elite loot tables, brutal extraction odds, and harder bosses.",
-        lootTier: "High to Legendary",
-        recommendedTension: "high",
-        successDelta: -0.16,
-        tokenMultiplierDelta: 0.28,
-        xpMultiplier: 1.34,
-        lootGearChanceBonus: 0.14,
-        resourceChanceBonus: 0.12,
-        legendaryChanceBonus: 0.07,
-        fnCoinChanceBonus: 0.04,
-        bossName: "Booger King Omega",
-        bossSpawnChance: 0.26,
-        bossSuccessPenalty: 0.16,
-        bossKillPenalty: 0.2,
-        bossRaidPressure: 0.016,
-        bossBonusXpRange: [140, 260],
-        bossPool: [
-            { name: "Booger King Omega", title: "Apex Monstrosity", ferocity: 1.4, successPenalty: 0.1, killPenalty: 0.12, raidPressure: 0.022, bonusXpRange: [160, 280], tokenRewardRange: [120, 210], weaponDrops: ["reactor_blade", "rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.28 },
-            { name: "Queen Sumphex", title: "Rot Sovereign", ferocity: 1.55, successPenalty: 0.12, killPenalty: 0.14, raidPressure: 0.024, bonusXpRange: [190, 320], tokenRewardRange: [140, 245], weaponDrops: ["reactor_blade", "mythic_hammer"], armorDrops: ["titan_carapace", "adaptive_mesh"], rareDropChance: 0.34 },
-            { name: "Warlord Nullhide", title: "Void Cannoneer", ferocity: 1.68, successPenalty: 0.14, killPenalty: 0.16, raidPressure: 0.026, bonusXpRange: [220, 360], tokenRewardRange: [160, 290], weaponDrops: ["rail_sniper", "plasma_carbine", "enhanced_plasma_carbine"], armorDrops: ["aegis_exosuit", "titan_carapace"], rareDropChance: 0.38 }
-        ],
-        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
-        failureWeapons: ["combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon"],
-        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
-        failureArmor: ["tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield"],
-        bossKit: { weaponId: "reactor_blade", armorId: "titan_carapace" },
-        scrapBonus: 8,
-        bonusLootPool: [
-            { id: "servo_motor", weight: 6 },
-            { id: "nanofiber_roll", weight: 4 },
-            { id: "black_ice_lens", weight: 2 },
-            { id: "epic_crate", weight: 2 },
-            { id: "spectral_fiber", weight: 2 }
-        ],
-        crateDropTable: [
-            { id: "tactical_crate", weight: 1 },
-            { id: "mythic_crate", weight: 3 }
-        ],
-        bossCrateDropTable: [
-            { id: "tactical_crate", weight: 1 },
-            { id: "mythic_crate", weight: 4 }
-        ]
-    },
-    megayachtolopolis: {
-        key: "megayachtolopolis",
-        label: "FN MegaYachtolopolis",
-        difficulty: "Elite",
-        helpSummary: "Elite yacht city, luxury-tech loot, punishing CQB bosses.",
-        description: "Skyline-sized superyacht district packed with luxury-tech vaults, tight interior kill lanes, and brutal command deck extracts.",
-        lootTier: "Luxury Tech / High-End",
-        recommendedTension: "high",
-        successDelta: -0.145,
-        tokenMultiplierDelta: 0.31,
-        xpMultiplier: 1.42,
-        lootGearChanceBonus: 0.17,
-        resourceChanceBonus: 0.15,
-        legendaryChanceBonus: 0.085,
-        fnCoinChanceBonus: 0.045,
-        bossName: "Dreadwake Morvane",
-        bossSpawnChance: 0.29,
-        bossSuccessPenalty: 0.18,
-        bossKillPenalty: 0.22,
-        bossRaidPressure: 0.019,
-        bossBonusXpRange: [210, 360],
-        bossPool: [
-            { name: "Dreadwake Morvane", title: "Hull Reaper", ferocity: 1.82, successPenalty: 0.15, killPenalty: 0.18, raidPressure: 0.03, bonusXpRange: [250, 390], tokenRewardRange: [180, 320], weaponDrops: ["reactor_blade", "rail_sniper", "enhanced_rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.42 }
-        ],
-        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
-        failureWeapons: ["pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine"],
-        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
-        failureArmor: ["guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh"],
-        bossKit: { weaponId: "reactor_blade", armorId: "titan_carapace" },
-        scrapBonus: 9,
-        bonusLootPool: [
-            { id: "encrypted_chip", weight: 12 },
-            { id: "nanofiber_roll", weight: 9 },
-            { id: "black_ice_lens", weight: 4 },
-            { id: "legendary_token", weight: 3 },
-            { id: "tactical_crate", weight: 3 },
-            { id: "quantum_logbook", weight: 3 }
-        ],
-        crateDropTable: [
-            { id: "epic_crate", weight: 1 },
-            { id: "tactical_crate", weight: 3 },
-            { id: "mythic_crate", weight: 2 }
-        ],
-        bossCrateDropTable: [
-            { id: "tactical_crate", weight: 2 },
-            { id: "mythic_crate", weight: 3 }
-        ]
-    },
-    warlords_warcamp: {
-        key: "warlords_warcamp",
-        label: "FN Warlords Warcamp",
-        difficulty: "Brutal",
-        helpSummary: "Brutal trench map, war salvage jackpots, relentless field pressure.",
-        description: "Fortified trench sprawl where roaming commanders, artillery scars, and open kill boxes crush sloppy pushes.",
-        lootTier: "War Salvage / High-End",
-        recommendedTension: "high",
-        successDelta: -0.155,
-        tokenMultiplierDelta: 0.34,
-        xpMultiplier: 1.48,
-        lootGearChanceBonus: 0.19,
-        resourceChanceBonus: 0.17,
-        legendaryChanceBonus: 0.09,
-        fnCoinChanceBonus: 0.05,
-        bossName: "Kraghoss the Ashen Standard",
-        bossSpawnChance: 0.31,
-        bossSuccessPenalty: 0.19,
-        bossKillPenalty: 0.23,
-        bossRaidPressure: 0.021,
-        bossBonusXpRange: [240, 390],
-        bossPool: [
-            { name: "Kraghoss the Ashen Standard", title: "Siegeblood Khan", ferocity: 1.96, successPenalty: 0.17, killPenalty: 0.2, raidPressure: 0.033, bonusXpRange: [290, 430], tokenRewardRange: [220, 360], weaponDrops: ["mythic_hammer", "plasma_carbine", "enhanced_thermal_lance"], armorDrops: ["aegis_exosuit", "juggernaut_frame"], rareDropChance: 0.46 }
-        ],
-        successWeapons: ["thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
-        failureWeapons: ["marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer"],
-        successArmor: ["adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
-        failureArmor: ["storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame"],
-        bossKit: { weaponId: "mythic_hammer", armorId: "aegis_exosuit" },
-        scrapBonus: 10,
-        bonusLootPool: [
-            { id: "weapon_bolts", weight: 12 },
-            { id: "servo_motor", weight: 10 },
-            { id: "combat_stim", weight: 8 },
-            { id: "relic_fragment", weight: 4 },
-            { id: "tactical_crate", weight: 4 },
-            { id: "mythic_crate", weight: 1 },
-            { id: "warbond_chip", weight: 2 }
-        ],
-        crateDropTable: [
-            { id: "epic_crate", weight: 1 },
-            { id: "tactical_crate", weight: 3 },
-            { id: "mythic_crate", weight: 2 }
-        ],
-        bossCrateDropTable: [
-            { id: "tactical_crate", weight: 2 },
-            { id: "mythic_crate", weight: 4 }
-        ]
-    },
-    sunken_village: {
-        key: "sunken_village",
-        label: "FN SUNKEN VILLAGE",
-        difficulty: "Cataclysmic",
-        helpSummary: "Cataclysmic ruins, varied crate economy, drowned apex boss.",
-        description: "Flood-choked ruins with submerged cache routes, ambush angles, and crate-rich shrines that reward disciplined clears.",
-        lootTier: "Crate Dense / Legendary",
-        recommendedTension: "high",
-        successDelta: -0.135,
-        tokenMultiplierDelta: 0.3,
-        xpMultiplier: 1.44,
-        lootGearChanceBonus: 0.16,
-        resourceChanceBonus: 0.14,
-        legendaryChanceBonus: 0.095,
-        fnCoinChanceBonus: 0.055,
-        bossName: "Thalrex Mourntide",
-        bossSpawnChance: 0.33,
-        bossSuccessPenalty: 0.2,
-        bossKillPenalty: 0.24,
-        bossRaidPressure: 0.023,
-        bossBonusXpRange: [270, 430],
-        bossPool: [
-            { name: "Thalrex Mourntide", title: "Drowned Godspeaker", ferocity: 2.08, successPenalty: 0.19, killPenalty: 0.22, raidPressure: 0.036, bonusXpRange: [340, 520], tokenRewardRange: [260, 420], weaponDrops: ["rail_sniper", "reactor_blade", "enhanced_reactor_blade", "enhanced_starforged_reaper"], armorDrops: ["titan_carapace", "adaptive_mesh"], rareDropChance: 0.5 }
-        ],
-        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
-        failureWeapons: ["marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "rail_sniper"],
-        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
-        failureArmor: ["shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit"],
-        bossKit: { weaponId: "rail_sniper", armorId: "titan_carapace" },
-        scrapBonus: 7,
-        bonusLootPool: [
-            { id: "common_crate", weight: 7 },
-            { id: "rare_crate", weight: 8 },
-            { id: "epic_crate", weight: 6 },
-            { id: "tactical_crate", weight: 4 },
-            { id: "mythic_crate", weight: 2 },
-            { id: "scav_beacon", weight: 6 },
-            { id: "relic_fragment", weight: 4 },
-            { id: "mythic_circuit", weight: 2 }
-        ],
-        crateDropTable: [
-            { id: "common_crate", weight: 4 },
-            { id: "rare_crate", weight: 5 },
-            { id: "epic_crate", weight: 5 },
-            { id: "tactical_crate", weight: 4 },
-            { id: "mythic_crate", weight: 3 }
-        ],
-        bossCrateDropTable: [
-            { id: "rare_crate", weight: 2 },
-            { id: "epic_crate", weight: 3 },
-            { id: "tactical_crate", weight: 4 },
-            { id: "mythic_crate", weight: 5 }
-        ]
-    }
-};
-const RAID_MAP_CHOICES = Object.values(RAID_MAPS).map(map => ({ name: map.label, value: map.key }));
-const RAID_DIFFICULTY_ORDER = ["Beginner", "Mid", "Hard", "Elite", "Brutal", "Cataclysmic"];
-const RAID_MAP_SHORT_LABELS = {
-    plagued_cemetary: "CEM",
-    slaughterhouse: "SLH",
-    boogerswoodz: "BGZ",
-    megayachtolopolis: "MYO",
-    warlords_warcamp: "WWC",
-    sunken_village: "SVL"
-};
-const RAID_BOSS_ROSTER = Object.values(RAID_MAPS).flatMap(mapCfg => mapCfg.bossPool.map(boss => ({
-    ...boss,
-    homeMapKey: mapCfg.key,
-    homeMapLabel: mapCfg.label,
-    homeMapDifficulty: mapCfg.difficulty
-})));
-function getRaidDifficultyIndex(difficulty) {
-    const idx = RAID_DIFFICULTY_ORDER.indexOf(difficulty);
-    return idx >= 0 ? idx : 0;
-}
-function getBossRotationWeight(boss, mapCfg) {
-    const difficultyDistance = Math.abs(getRaidDifficultyIndex(boss.homeMapDifficulty) - getRaidDifficultyIndex(mapCfg.difficulty));
-    const sameMapBonus = boss.homeMapKey === mapCfg.key ? 8 : 0;
-    const sameDifficultyBonus = boss.homeMapDifficulty === mapCfg.difficulty ? 3 : 0;
-    const distanceBonus = Math.max(0, 4 - difficultyDistance);
-    const ferocityBias = Math.max(1, Math.round(boss.ferocity * 1.8));
-    return Math.max(1, sameMapBonus + sameDifficultyBonus + distanceBonus + ferocityBias);
-}
-function getBossRotationTable(mapCfg) {
-    const weighted = RAID_BOSS_ROSTER.map(boss => ({
-        boss,
-        weight: getBossRotationWeight(boss, mapCfg)
-    }));
-    const total = weighted.reduce((sum, entry) => sum + entry.weight, 0) || 1;
-    return weighted.map(entry => ({
-        ...entry,
-        sharePct: Math.round((entry.weight / total) * 1000) / 10
-    }));
-}
-function formatBossRotationShares(boss) {
-    return Object.values(RAID_MAPS)
-        .map(mapCfg => {
-        const tableEntry = getBossRotationTable(mapCfg).find(entry => entry.boss.name === boss.name);
-        const share = tableEntry?.sharePct ?? 0;
-        return `${RAID_MAP_SHORT_LABELS[mapCfg.key]} ${share.toFixed(1)}%`;
-    })
-        .join(" | ");
-}
-function resolveRaidMap(mapKeyRaw) {
-    const key = (mapKeyRaw || "plagued_cemetary");
-    return RAID_MAPS[key] || RAID_MAPS.plagued_cemetary;
-}
-function mapProjection(mapCfg, tension) {
-    const base = {
-        low: { successChance: 0.8, tokenMultiplier: 1.15, xp: [14, 30] },
-        medium: { successChance: 0.56, tokenMultiplier: 1.6, xp: [22, 54] },
-        high: { successChance: 0.33, tokenMultiplier: 2.38, xp: [38, 88] }
-    };
-    const avgConditionSuccessDelta = -0.0167;
-    const avgConditionTokenDelta = 0.075;
-    const bossExpectedPenalty = mapCfg.bossSpawnChance * (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure);
-    const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
-    const baselineBossKillChance = Math.max(0.12, Math.min(0.88, 0.4 + tensionBossDelta - mapCfg.bossKillPenalty - mapCfg.bossRaidPressure * 0.5));
-    const avgBossBonusXp = Math.round((mapCfg.bossBonusXpRange[0] + mapCfg.bossBonusXpRange[1]) / 2);
-    const successPct = Math.round(Math.max(0.06, Math.min(0.93, base[tension].successChance + mapCfg.successDelta + avgConditionSuccessDelta - bossExpectedPenalty)) * 100);
-    const tokenMultiplier = Math.max(0.7, base[tension].tokenMultiplier + mapCfg.tokenMultiplierDelta + avgConditionTokenDelta);
-    const xpBand = [
-        Math.max(1, Math.floor(base[tension].xp[0] * mapCfg.xpMultiplier)),
-        Math.max(1, Math.floor(base[tension].xp[1] * mapCfg.xpMultiplier))
-    ];
-    const successProb = successPct / 100;
-    const expectedOutcomeTokens = 17;
-    const bet = 100;
-    const expectedNetAt100 = Math.round((successProb * bet * tokenMultiplier) + expectedOutcomeTokens - bet);
-    const expectedBossBonusXp = Math.round(successProb * mapCfg.bossSpawnChance * baselineBossKillChance * avgBossBonusXp);
-    const bossKitDropChancePct = Math.round(successProb * mapCfg.bossSpawnChance * baselineBossKillChance * 100);
-    return { successPct, tokenMultiplier, xpBand, expectedNetAt100, expectedBossBonusXp, bossKitDropChancePct };
 }
 function getInventoryAutocompleteOptions(input) {
     const focused = input.focusedRaw.trim().toLowerCase();
@@ -4763,7 +4331,7 @@ function useItem(userId, itemId, quantity) {
     (0, utils_1.addInventoryItem)(userId, itemId, qty);
     return { error: "Use action failed safely; item was restored." };
 }
-function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selectedArmorId) {
+function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selectedArmorId, approachRaw) {
     const user = (0, utils_1.ensureUser)(userId);
     const now = Date.now();
     if (now - user.lastRaid < RAID_COOLDOWN_MS) {
@@ -4774,7 +4342,10 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         return { error: `Minimum raid bet is ${MIN_RAID_BET} FN Token$.` };
     if (!(0, utils_1.canAffordTokens)(userId, bet))
         return { error: "Not enough FN Token$." };
-    const mapCfg = resolveRaidMap(mapKeyRaw);
+    const mapCfg = RaidDomain.resolveRaidMap(mapKeyRaw);
+    const approach = RaidDomain.resolveRaidApproach(approachRaw);
+    const mapReputationBefore = (0, utils_1.getMapReputationEntry)(userId, mapCfg.key);
+    const mapReputationBeforeProgress = RaidDomain.getMapReputationProgress(mapReputationBefore.points);
     const table = {
         low: { successChance: 0.78, tokenMultiplier: 1.07, baseRxp: 5 },
         medium: { successChance: 0.53, tokenMultiplier: 1.42, baseRxp: 11 },
@@ -4790,27 +4361,28 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         : condition;
     const pmcLevelBeforeRaid = (0, utils_1.getPmcLevel)(user.pmcXP);
     const pmcTierBeforeRaid = (0, utils_1.getPmcTierForLevel)(pmcLevelBeforeRaid);
-    const pmcBuffs = (0, utils_1.getPmcBuffs)(pmcLevelBeforeRaid);
+    const pmcBuffs = (0, utils_1.getPmcBuffs)(pmcLevelBeforeRaid, user.pmcPrestige);
     const levelPressure = Math.max(0, Math.min(0.11, pmcLevelBeforeRaid * 0.00075));
     const tensionPressure = tension === "high" ? 0.05 : tension === "medium" ? 0.02 : -0.01;
     const difficultyScalar = 1 + levelPressure + Math.max(0, tensionPressure);
-    const mapDifficultyIndex = getRaidDifficultyIndex(mapCfg.difficulty);
+    const mapDifficultyIndex = RaidDomain.getRaidDifficultyIndex(mapCfg.difficulty);
     const mapDifficultyBossScale = 1 + (mapDifficultyIndex * 0.055);
     const latePmcBossScale = pmcLevelBeforeRaid >= 8000
         ? 1 + Math.min(0.18, (pmcLevelBeforeRaid - 8000) / 60000)
         : 1;
-    const bossSpawnChance = Math.max(0.03, Math.min(0.82, mapCfg.bossSpawnChance + 0.02 + tensionPressure + levelPressure * 0.5 + mapCfg.bossRaidPressure * 0.35));
+    const bossSpawnChance = Math.max(0.03, Math.min(0.82, mapCfg.bossSpawnChance + 0.02 + tensionPressure + levelPressure * 0.5 + mapCfg.bossRaidPressure * 0.35 + approach.bossSpawnDelta));
     const bossSpawned = Math.random() < bossSpawnChance;
-    const boss = bossSpawned ? rollBossVariant(mapCfg) : null;
+    const boss = bossSpawned ? RaidDomain.rollBossVariant(mapCfg) : null;
+    const bossCombat = boss ? RaidDomain.getBossCombatModifiers(boss.name, approach.key) : null;
     const bossPressurePenalty = bossSpawned
         ? (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure + (boss?.successPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * mapDifficultyBossScale * latePmcBossScale
         : 0;
-    const finalSuccessChance = Math.max(0.06, Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus - bossPressurePenalty));
+    const finalSuccessChance = Math.max(0.06, Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + approach.successDelta + mapReputationBeforeProgress.tier.successBonus - bossPressurePenalty));
     const success = Math.random() < finalSuccessChance;
     (0, utils_1.removeTokens)(userId, bet);
     let rewardTokens = 0;
     if (success) {
-        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus;
+        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + approach.tokenMultiplierDelta + mapReputationBeforeProgress.tier.tokenBonus;
         rewardTokens = Math.max(1, Math.floor(bet * (conditionTokenBoost + (Math.random() * 0.12 - 0.07))));
         (0, utils_1.addTokens)(userId, rewardTokens);
     }
@@ -4827,7 +4399,7 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
         const mapAndBossKillPenalty = (mapCfg.bossKillPenalty + mapCfg.bossRaidPressure + (boss?.killPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * (1 + mapDifficultyIndex * 0.05) * latePmcBossScale;
         const pmcRaidMastery = Math.max(0, Math.min(0.14, pmcLevelBeforeRaid * 0.00085));
-        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta - mapAndBossKillPenalty));
+        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta + approach.bossKillDelta + mapReputationBeforeProgress.tier.bossKillBonus + (bossCombat?.counterBonus || 0) - mapAndBossKillPenalty - (bossCombat?.killPenalty || 0)));
         bossDefeated = Math.random() < bossKillChance;
         if (bossDefeated) {
             const rolledBossReward = RaidDomain.rollBossSuccessRewards({
@@ -4836,7 +4408,8 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
                 mapDifficulty: mapCfg.difficulty,
                 bossFerocity: boss?.ferocity || 1,
                 bonusXpRange: boss?.bonusXpRange || mapCfg.bossBonusXpRange,
-                tokenRewardRange: boss?.tokenRewardRange || [20, 55]
+                tokenRewardRange: boss?.tokenRewardRange || [20, 55],
+                combatRewardMultiplier: bossCombat?.rewardMultiplier || 1
             });
             bossBonusXp = Math.max(1, Math.floor(rolledBossReward.bossBonusXp * RaidDomain.RAID_BOSS_XP_SCALE));
             bossTokenBonus = rolledBossReward.bossTokenBonus;
@@ -4883,11 +4456,20 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         pmcHpRemaining = Math.max(0, Math.min(pmcHpMax, Math.round(pmcHpMax * pmcRemainingPct)));
         bossHpRemaining = Math.max(0, Math.min(bossHpMax, Math.round(bossHpMax * bossRemainingPct)));
     }
-    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar });
+    const bossPhasesReached = bossSpawned && bossCombat
+        ? bossDefeated
+            ? bossCombat.phases.length
+            : bossCombat.phases.filter(phase => bossHpMax > 0 && (bossHpRemaining / bossHpMax) * 100 <= phase.thresholdPct).length
+        : 0;
+    const bossCurrentPhase = bossCombat && bossPhasesReached > 0
+        ? bossCombat.phases[Math.min(bossPhasesReached, bossCombat.phases.length) - 1]
+        : null;
+    const bossPhaseLootRoll = bossDefeated && (bossCombat?.phases.length || 0) >= 3 ? 1 : 0;
+    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll });
     for (const drop of loot) {
         (0, utils_1.addInventoryItem)(userId, drop.id, drop.qty);
     }
-    const baseRaidXpGain = RaidDomain.rollRaidXpGain(tension, success, bet, effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus), mapCfg);
+    const baseRaidXpGain = RaidDomain.rollRaidXpGain(tension, success, bet, effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus) * approach.xpMultiplier, mapCfg);
     const progressionScale = RaidDomain.getPmcXpGainScale(pmcLevelBeforeRaid, mapCfg, tension, success);
     const scaledRaidXpGain = Math.max(1, Math.floor(baseRaidXpGain * progressionScale * RaidDomain.RAID_PMC_XP_SCALE));
     const rxpGain = scaledRaidXpGain + bossBonusXp;
@@ -4908,11 +4490,19 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
     const baseRewardTokens = rewardTokens;
     const outcomeBonusTokens = reward.tokens;
     const net = baseRewardTokens + outcomeBonusTokens + bossTokenBonus + failureMitigation - bet;
+    const mapReputationGain = RaidDomain.calculateMapReputationGain({ mapDifficulty: mapCfg.difficulty, tension, success, bossSpawned, bossDefeated });
+    const mapReputationResult = (0, utils_1.recordMapReputation)({ userId, mapKey: mapCfg.key, points: mapReputationGain, success, bossSpawned, bossDefeated, timestamp: now });
+    const mapReputationAfterProgress = RaidDomain.getMapReputationProgress(mapReputationResult.entry.points);
+    const mapReputationTierUnlocked = mapReputationAfterProgress.tier.level > mapReputationBeforeProgress.tier.level
+        ? mapReputationAfterProgress.tier.label
+        : undefined;
     user.raidHistory.unshift({
         timestamp: now,
         tension,
         map: mapCfg.label,
+        mapKey: mapCfg.key,
         condition: gearBonus.negatedCondition ? `${condition.label} (Negated)` : condition.label,
+        approach: approach.label,
         bet,
         success,
         rewardTokens: baseRewardTokens + outcomeBonusTokens + bossTokenBonus,
@@ -4921,6 +4511,11 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         bossSpawned,
         bossDefeated,
         bossName: bossSpawned ? (boss?.name || mapCfg.bossName) : undefined,
+        bossTraits: bossCombat?.traits.map(trait => trait.label),
+        bossPhasesReached,
+        bossPhaseCount: bossCombat?.phases.length,
+        mapReputationGain,
+        mapReputationPoints: mapReputationResult.entry.points,
         bossBonusXp,
         loot,
         successChance: Math.round(finalSuccessChance * 100)
@@ -4938,12 +4533,18 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         pmcBuffs,
         tension,
         condition: condition.label,
+        approach: approach.key,
         bet,
         success,
         bossSpawned,
         bossDefeated,
         bossName: boss?.name || mapCfg.bossName,
         bossTitle: boss?.title || null,
+        bossTraits: bossCombat?.traits.map(trait => trait.key) || [],
+        bossPhasesReached,
+        bossPhaseCount: bossCombat?.phases.length || 0,
+        bossCurrentPhase: bossCurrentPhase?.name || null,
+        bossCombatRewardMultiplier: bossCombat?.rewardMultiplier || 1,
         bossFerocity: boss?.ferocity || 0,
         bossSpawnChance: Math.round(bossSpawnChance * 100),
         bossKillChance: Math.round(bossKillChance * 100),
@@ -4952,9 +4553,14 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         progressionScale,
         baseRaidXpGain,
         scaledRaidXpGain,
+        mapReputationGain,
+        mapReputationPoints: mapReputationResult.entry.points,
+        mapReputationTier: mapReputationAfterProgress.tier.label,
+        mapReputationTierUnlocked: mapReputationTierUnlocked || null,
         net,
         raidXp: rxpGain,
         pmcXP: user.pmcXP,
+        pmcPrestige: user.pmcPrestige,
         pmcLevel: pmcLevelAfterRaid,
         pmcTierUnlockedLevel: pmcTierUnlocked?.level || null,
         pmcTierUnlockedLabel: pmcTierUnlocked?.label || null
@@ -4967,6 +4573,7 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         successChance: Math.round(finalSuccessChance * 100),
         bet,
         mapLabel: mapCfg.label,
+        mapKey: mapCfg.key,
         mapDifficulty: mapCfg.difficulty,
         conditionLabel: condition.label,
         bossSpawned,
@@ -4974,6 +4581,12 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         bossName: boss?.name || mapCfg.bossName,
         bossTitle: boss?.title,
         bossFerocity: boss?.ferocity,
+        bossTraitLabels: bossCombat?.traits.map(trait => trait.label),
+        bossCounteredTraits: bossCombat?.traits.filter(trait => trait.counterApproach === approach.key).map(trait => trait.label),
+        bossPhaseNames: bossCombat?.phases.map(phase => phase.name),
+        bossPhasesReached,
+        bossCurrentPhase: bossCurrentPhase?.name,
+        bossCombatRewardMultiplier: bossCombat?.rewardMultiplier,
         bossBonusXp,
         bossKillChance: Math.round(bossKillChance * 100),
         bossImageUrl: bossSpawned ? (0, bossPortraits_1.getBossPortraitUrl)(boss?.name || mapCfg.bossName, boss?.title) || undefined : undefined,
@@ -4990,9 +4603,17 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         outcomeBonusTokens,
         bossBonusTokens: bossTokenBonus,
         failureMitigationTokens: failureMitigation,
+        approachLabel: approach.label,
+        mapReputationGain,
+        mapReputationPoints: mapReputationResult.entry.points,
+        mapReputationTier: mapReputationAfterProgress.tier.label,
+        mapReputationTierUnlocked,
+        mapReputationProgressPct: mapReputationAfterProgress.progressPct,
         tension: `${tension} | ${condition.label}`,
         pmcXP: user.pmcXP,
-        pmcLevel: pmcLevelAfterRaid
+        pmcLevel: pmcLevelAfterRaid,
+        pmcPrestige: user.pmcPrestige,
+        pmcPrestigeLabel: (0, utils_1.getPmcPrestigeTier)(user.pmcPrestige).label
     };
 }
 function formatRaidHistory(userId) {
@@ -5004,14 +4625,16 @@ function formatRaidHistory(userId) {
         const status = entry.success ? "Success" : "Fail";
         const map = entry.map ? ` | Map ${entry.map}` : "";
         const condition = entry.condition ? ` | Cond ${entry.condition}` : "";
+        const approach = entry.approach ? ` | ${entry.approach}` : "";
         const boss = entry.bossSpawned
             ? ` | Boss ${entry.bossName || "Unknown"} ${entry.bossDefeated ? "defeated" : "engaged"}${entry.bossBonusXp ? ` (+${entry.bossBonusXp} XP)` : ""}`
             : "";
-        return `* [${time}] ${status} ${entry.tension}${map}${condition}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
+        return `* [${time}] ${status} ${entry.tension}${map}${condition}${approach}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
     }).join("\n");
 }
 function buildRaidHistoryPayload(userId) {
-    const history = (0, utils_1.ensureUser)(userId).raidHistory.slice(0, 8);
+    const state = (0, utils_1.ensureUser)(userId);
+    const history = state.raidHistory.slice(0, 8);
     if (!history.length) {
         return JSON.stringify({
             embed: new discord_js_1.EmbedBuilder()
@@ -5025,12 +4648,20 @@ function buildRaidHistoryPayload(userId) {
     const net = history.reduce((sum, entry) => sum + entry.net, 0);
     const totalBossSpawns = history.filter(entry => entry.bossSpawned).length;
     const totalBossKills = history.filter(entry => entry.bossDefeated).length;
+    const reputationLeaders = Object.values(RaidDomain.RAID_MAPS)
+        .map(map => ({ map, entry: (0, utils_1.getMapReputationEntry)(userId, map.key) }))
+        .sort((a, b) => b.entry.points - a.entry.points)
+        .slice(0, 3)
+        .map(({ map, entry }) => {
+        const progress = RaidDomain.getMapReputationProgress(entry.points);
+        return `${RaidDomain.RAID_MAP_SHORT_LABELS[map.key]} • ${progress.tier.label} • ${entry.points} REP`;
+    });
     const recentLines = history.map(entry => {
         const status = entry.success ? "✅" : "❌";
         const boss = entry.bossSpawned
             ? `${entry.bossName || "Unknown"}${entry.bossDefeated ? " • defeated" : " • escaped"}`
             : "No boss";
-        return `${status} ${entry.map || "Unknown Map"} • ${entry.tension} • Net ${entry.net >= 0 ? `+${entry.net}` : entry.net} • XP +${entry.rxpGain}\n${boss}`;
+        return `${status} ${entry.map || "Unknown Map"} • ${entry.approach || "Balanced"} • ${entry.tension} • Net ${entry.net >= 0 ? `+${entry.net}` : entry.net} • XP +${entry.rxpGain}\n${boss}`;
     });
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(0x7c3aed)
@@ -5045,11 +4676,57 @@ function buildRaidHistoryPayload(userId) {
             `Boss Contacts: ${totalBossSpawns} | Boss Kills: ${totalBossKills}`
         ].join("\n"),
         inline: false
+    }, {
+        name: "Territory Network",
+        value: reputationLeaders.join("\n") || "No map reputation established.",
+        inline: false
     }, ...chunkDetailLines(recentLines, 2).slice(0, 4).map((chunk, index) => ({
         name: index === 0 ? "Mission Log" : `Mission Log ${index + 1}`,
         value: chunk,
         inline: false
     })));
+    return JSON.stringify({ embed: embed.toJSON() });
+}
+function formatMapReputationBar(progressPct) {
+    const width = 12;
+    const filled = Math.max(0, Math.min(width, Math.round((progressPct / 100) * width)));
+    return `[${"#".repeat(filled)}${"-".repeat(width - filled)}] ${progressPct}%`;
+}
+function buildMapMasteryPayload(userId, focusMapKey) {
+    const maps = Object.values(RaidDomain.RAID_MAPS)
+        .map(map => {
+        const entry = (0, utils_1.getMapReputationEntry)(userId, map.key);
+        return { map, entry, progress: RaidDomain.getMapReputationProgress(entry.points) };
+    })
+        .sort((a, b) => (a.map.key === focusMapKey ? -1 : b.map.key === focusMapKey ? 1 : b.entry.points - a.entry.points));
+    const totalReputation = maps.reduce((sum, item) => sum + item.entry.points, 0);
+    const masteredMaps = maps.filter(item => !item.progress.nextTier).length;
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0xeab308)
+        .setTitle("🗺️ Territory Network • Map Mastery")
+        .setDescription("Persistent local reputation earned through deployments, extractions, high-tension operations, and boss victories.")
+        .addFields({
+        name: "Network Status",
+        value: [
+            `Total Reputation: ${totalReputation.toLocaleString()} REP`,
+            `Mastered Territories: ${masteredMaps}/${maps.length}`,
+            `Highest Rank: ${maps[0]?.progress.tier.label || "Unproven"}`
+        ].join("\n"),
+        inline: false
+    });
+    for (const { map, entry, progress } of maps) {
+        embed.addFields({
+            name: `${map.key === focusMapKey ? "◆ " : ""}${map.label} • ${progress.tier.label}`,
+            value: [
+                `${formatMapReputationBar(progress.progressPct)}`,
+                progress.nextTier ? `${entry.points}/${progress.nextTier.threshold} REP • ${progress.pointsToNext} to ${progress.nextTier.label}` : `${entry.points} REP • Maximum rank achieved`,
+                `Deployments ${entry.raids} • Extracts ${entry.extracts} • Bosses ${entry.bossKills}/${entry.bossEncounters}`,
+                `Perks: +${(progress.tier.successBonus * 100).toFixed(1)}% extraction • +${(progress.tier.tokenBonus * 100).toFixed(1)}% tokens • +${(progress.tier.bossKillBonus * 100).toFixed(1)}% boss kill`,
+                progress.tier.description
+            ].join("\n"),
+            inline: false
+        });
+    }
     return JSON.stringify({ embed: embed.toJSON() });
 }
 function buildBossRosterPayload() {
@@ -5059,29 +4736,32 @@ function buildBossRosterPayload() {
         .setDescription("Premium tactical index for all bosses, including home map, threat class, reward ranges, and rotation influence.")
         .addFields({
         name: "Rotation Key",
-        value: Object.values(RAID_MAPS).map(map => `${RAID_MAP_SHORT_LABELS[map.key]} = ${map.label}`).join("\n"),
+        value: Object.values(RaidDomain.RAID_MAPS).map(map => `${RaidDomain.RAID_MAP_SHORT_LABELS[map.key]} = ${map.label}`).join("\n"),
         inline: false
     }, {
         name: "Roster Summary",
         value: [
-            `Total Bosses: ${RAID_BOSS_ROSTER.length}`,
-            `Maps Covered: ${Object.keys(RAID_MAPS).length}`,
-            `Highest Threat: ${Math.max(...RAID_BOSS_ROSTER.map(boss => boss.ferocity)).toFixed(2)} ferocity`
+            `Total Bosses: ${RaidDomain.RAID_BOSS_ROSTER.length}`,
+            `Maps Covered: ${Object.keys(RaidDomain.RAID_MAPS).length}`,
+            `Highest Threat: ${Math.max(...RaidDomain.RAID_BOSS_ROSTER.map(boss => boss.ferocity)).toFixed(2)} ferocity`
         ].join("\n"),
         inline: false
     });
-    for (const boss of RAID_BOSS_ROSTER) {
-        const portraitUrl = (0, bossPortraits_1.getBossPortraitUrl)(boss.name, boss.title);
+    for (const boss of RaidDomain.RAID_BOSS_ROSTER) {
+        const combatProfile = RaidDomain.getBossCombatProfile(boss.name);
+        const traitLine = combatProfile.traits.map(key => {
+            const trait = RaidDomain.BOSS_TRAITS[key];
+            return `${trait.label}${trait.counterApproach ? ` [${RaidDomain.RAID_APPROACHES[trait.counterApproach].label}]` : ""}`;
+        }).join(" • ");
         embed.addFields({
             name: `${boss.name} (${boss.title})`,
             value: [
-                `Home Map: ${boss.homeMapLabel} (${boss.homeMapDifficulty})`,
-                `Threat Class: ${boss.ferocity >= 2 ? "Cataclysmic" : boss.ferocity >= 1.7 ? "Apex" : boss.ferocity >= 1.35 ? "Brutal" : boss.ferocity >= 1 ? "Elite" : "Veteran"}`,
-                `Ferocity: ${boss.ferocity.toFixed(2)} | Success Penalty: ${(boss.successPenalty * 100).toFixed(1)}% | Kill Penalty: ${(boss.killPenalty * 100).toFixed(1)}%`,
-                `Boss XP: ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} | Tokens: ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} | Rare Drop: ${(boss.rareDropChance * 100).toFixed(1)}%`,
-                `Drops: Wpn ${boss.weaponDrops.join(", ")} | Arm ${boss.armorDrops.join(", ")}`,
-                `Map Rotation: ${formatBossRotationShares(boss)}`,
-                `Portrait: ${portraitUrl ? `[View](${portraitUrl})` : "Unavailable"}`
+                `Home: ${RaidDomain.RAID_MAP_SHORT_LABELS[boss.homeMapKey]} • ${boss.homeMapDifficulty}`,
+                `Threat: ${boss.ferocity >= 2 ? "Cataclysmic" : boss.ferocity >= 1.7 ? "Apex" : boss.ferocity >= 1.35 ? "Brutal" : boss.ferocity >= 1 ? "Elite" : "Veteran"} • Ferocity ${boss.ferocity.toFixed(2)}`,
+                `Traits: ${traitLine}`,
+                `Phases: ${combatProfile.phases.map(phase => phase.name).join(" → ")}`,
+                `Rewards: XP ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} • Tokens ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} • Rare ${(boss.rareDropChance * 100).toFixed(0)}%`,
+                `Signature Drops: ${boss.weaponDrops[0]} • ${boss.armorDrops[0]}`
             ].join("\n"),
             inline: false
         });
@@ -5128,7 +4808,11 @@ function buildPmcProfilePayload(user) {
     const state = (0, utils_1.ensureUser)(user.id);
     const gameStats = (0, utils_1.getGameStatsSummary)(user.id);
     const progress = (0, utils_1.getPmcProgress)(state.pmcXP);
-    const buffs = (0, utils_1.getPmcBuffs)(progress.level);
+    const prestigeTier = (0, utils_1.getPmcPrestigeTier)(state.pmcPrestige);
+    const prestigeBonuses = (0, utils_1.getPmcPrestigeBonuses)(state.pmcPrestige);
+    const prestigeEligible = progress.level >= utils_1.PMC_PRESTIGE_LEVEL_REQUIREMENT && state.pmcPrestige < utils_1.PMC_PRESTIGE_CAP;
+    const nextPrestigeTier = (0, utils_1.getPmcPrestigeTier)(Math.min(utils_1.PMC_PRESTIGE_CAP, state.pmcPrestige + 1));
+    const buffs = (0, utils_1.getPmcBuffs)(progress.level, state.pmcPrestige);
     const tier = (0, utils_1.getPmcTierForLevel)(progress.level);
     const tierVisual = getPmcTierVisual(progress.level);
     const raids = Math.max(0, state.pmcRaids);
@@ -5136,6 +4820,12 @@ function buildPmcProfilePayload(user) {
     const bossKills = Math.max(0, state.pmcBossKills || 0);
     const bossHeartNames = (0, bossHearts_1.getUnlockedBossHeartNames)(user.id);
     const bossHeartsUnlocked = bossHeartNames.length;
+    const mapMastery = Object.values(RaidDomain.RAID_MAPS)
+        .map(map => ({ map, entry: (0, utils_1.getMapReputationEntry)(user.id, map.key) }))
+        .map(item => ({ ...item, progress: RaidDomain.getMapReputationProgress(item.entry.points) }))
+        .sort((a, b) => b.entry.points - a.entry.points);
+    const totalMapReputation = mapMastery.reduce((sum, item) => sum + item.entry.points, 0);
+    const masteredMapCount = mapMastery.filter(item => !item.progress.nextTier).length;
     const collectibleEntries = catalog_1.COLLECTIBLE_ITEM_IDS
         .map(id => ({ id, def: catalog_1.ITEM_DEFS[id], qty: (0, utils_1.getInventoryCount)(user.id, id) }))
         .filter(entry => entry.def && entry.qty > 0)
@@ -5161,8 +4851,8 @@ function buildPmcProfilePayload(user) {
         : "No badge yet";
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(tierVisual.color)
-        .setTitle(progress.capped ? "🪖 PMC Progression • 👑" : "🪖 PMC Progression")
-        .setDescription("Persistent raid profile with milestone progression, combat buffs, and first-kill trophy tracking.")
+        .setTitle(progress.capped ? `🪖 PMC Progression • Prestige ${prestigeTier.numeral} • 👑` : `🪖 PMC Progression • Prestige ${prestigeTier.numeral}`)
+        .setDescription("Persistent raid command profile with overlevels, permanent prestige bonuses, territory mastery, and boss trophies.")
         .setAuthor({ name: `${user.username} · Army Profile`, iconURL: tierVisual.iconUrl })
         .setThumbnail(tierVisual.iconUrl)
         .addFields({
@@ -5175,6 +4865,27 @@ function buildPmcProfilePayload(user) {
         ].join("\n"),
         inline: false
     }, { name: "Milestone Badge", value: tierProgressLine, inline: true }, { name: "Badge Visual", value: tierVisual.label, inline: true }, { name: "Tier Status", value: prestigeLine, inline: true }, { name: "Raid Standing", value: `Raids ${raids} | Wins ${wins} | Boss Kills ${bossKills}`, inline: true }, { name: "Progress Track", value: `${(0, utils_1.pmcBar)(state.pmcXP)}\n${thresholdLine}`, inline: false }, {
+        name: `${prestigeTier.badge} Prestige Protocol`,
+        value: [
+            `Current Rank: Prestige ${prestigeTier.numeral} • ${prestigeTier.label}`,
+            state.pmcPrestige >= utils_1.PMC_PRESTIGE_CAP
+                ? "Status: Maximum PMC Prestige achieved"
+                : prestigeEligible
+                    ? `Status: Ready for Prestige ${nextPrestigeTier.numeral}`
+                    : `Eligibility: PMC Level ${utils_1.PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} • ${Math.max(0, utils_1.PMC_PRESTIGE_LEVEL_REQUIREMENT - progress.level).toLocaleString()} levels remaining`,
+            `Permanent: +${(prestigeBonuses.successBonus * 100).toFixed(1)}% success • +${(prestigeBonuses.tokenBonus * 100).toFixed(1)}% tokens • +${(prestigeBonuses.defenseBonus * 100).toFixed(1)}% defense • +${(prestigeBonuses.xpBonus * 100).toFixed(1)}% raid XP`,
+            `Reset Scope: PMC Level and Raid XP only • Inventory, currency, map REP, trophies, and records preserved`,
+            `Overlevel Option: Continue advancing to Level ${utils_1.PMC_LEVEL_CAP.toLocaleString()} without prestiging`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: "Territory Mastery",
+        value: [
+            `Network REP: ${totalMapReputation.toLocaleString()} • Mastered ${masteredMapCount}/${mapMastery.length}`,
+            ...mapMastery.slice(0, 3).map(item => `${RaidDomain.RAID_MAP_SHORT_LABELS[item.map.key]} • ${item.progress.tier.label} • ${item.entry.points} REP`)
+        ].join("\n"),
+        inline: false
+    }, {
         name: "Combat Buff Matrix",
         value: [
             `Success: +${(buffs.successBonus * 100).toFixed(2)}%`,
@@ -5205,7 +4916,12 @@ function buildPmcProfilePayload(user) {
         value: `Wagered: ${gameStats.raid.wagered} | Payout: ${gameStats.raid.payout} | Net: ${gameStats.raid.net >= 0 ? `+${gameStats.raid.net}` : gameStats.raid.net} FN Token$`,
         inline: false
     });
-    return JSON.stringify({ embed: embed.toJSON() });
+    const prestigeRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(PMC_PRESTIGE_IDS.request)
+        .setLabel(state.pmcPrestige >= utils_1.PMC_PRESTIGE_CAP ? "Prestige X Achieved" : `Prestige to ${nextPrestigeTier.numeral}`)
+        .setStyle(discord_js_1.ButtonStyle.Primary)
+        .setDisabled(!prestigeEligible));
+    return JSON.stringify({ embed: embed.toJSON(), components: [prestigeRow.toJSON()] });
 }
 function chunkDetailLines(lines, maxLines = 8) {
     const chunks = [];
@@ -5281,24 +4997,6 @@ function validateCasinoBet(userId, bet) {
         return `You need at least ${bet} FN Token$.`;
     return null;
 }
-function rollLuckyMultiplier() {
-    const r = Math.random();
-    if (r < 0.18)
-        return { multiplier: 0.7, label: "Cold 0.70x" };
-    if (r < 0.4)
-        return { multiplier: 0.85, label: "Low 0.85x" };
-    if (r < 0.7)
-        return { multiplier: 1.0, label: "Standard 1.0x" };
-    if (r < 0.9)
-        return { multiplier: 1.15, label: "Boost 1.15x" };
-    if (r < 0.98)
-        return { multiplier: 1.35, label: "Rare 1.35x" };
-    if (r < 0.998)
-        return { multiplier: 1.75, label: "Epic 1.75x" };
-    if (r <= 1.0)
-        return { multiplier: 2.5, label: "Legendary 2.5x" };
-    return { multiplier: 1.0, label: "Standard 1.0x" };
-}
 function formatTokenAmount(value) {
     return `${value} FN Token$`;
 }
@@ -5306,23 +5004,16 @@ function formatNetAmount(value) {
     return `${value >= 0 ? `+${value}` : value} FN Token$`;
 }
 function getCasinoOddsSnapshot(gameKey) {
-    if (gameKey === "dice")
-        return "Exact number pays highest (5.00x base), range calls are safer (2.00x base).";
-    if (gameKey === "roulette")
-        return "Number call is highest variance (36.00x base), color/parity offers steadier hit rates (2.00x base).";
-    if (gameKey === "blackjack")
-        return "Safe style lowers bust risk, aggressive style raises upside volatility.";
-    if (gameKey === "crash")
-        return "Lower targets cash more often, higher targets spike multiplier but fail more often.";
-    if (gameKey === "slots")
-        return "Magic Slots uses regular-casino reel odds, with ultra jackpots unlocked only on Ultra Bonus Win Spins.";
-    if (gameKey === "coinflip")
-        return "Pure 50/50 call before lucky modifier influence.";
-    if (gameKey === "baccarat")
-        return "Tie has the largest payout but lowest consistency; player/banker are steadier.";
-    if (gameKey === "hilo")
-        return "Large card-distance wins pay more; close outcomes are safer but lower yield.";
-    return "More picks reduce hit chance but can unlock larger multiplier ladders.";
+    const strategy = gameKey === "dice" ? `Exact: ${casinoBalance_1.DICE_PAYOUTS.exact.toFixed(2)}x | Band/parity: ${casinoBalance_1.DICE_PAYOUTS.band.toFixed(2)}x`
+        : gameKey === "roulette" ? `Straight/green: ${casinoBalance_1.ROULETTE_PAYOUTS.straight.toFixed(2)}x | Color/parity: ${casinoBalance_1.ROULETTE_PAYOUTS.evenMoney.toFixed(2)}x`
+            : gameKey === "blackjack" ? "Safe lowers bust risk; aggressive increases volatility."
+                : gameKey === "crash" ? "Hit chance is 95% divided by your selected target."
+                    : gameKey === "magicslots" ? "Scatter and ultra-bonus events are included in the slot return profile."
+                        : gameKey === "coinflip" ? `50% hit chance | ${casinoBalance_1.COINFLIP_PAYOUT.toFixed(2)}x payout`
+                            : gameKey === "baccarat" ? "Tie is rare and high variance; player/banker are steadier."
+                                : gameKey === "hilo" ? "Larger card distance pays a higher multiplier."
+                                    : "More picks increase variance and unlock larger payout ladders.";
+    return `${(0, casinoBalance_1.getCasinoProfileLine)(gameKey)}\n${strategy}`;
 }
 function getCasinoRiskBand(bet, walletBefore) {
     const base = Math.max(1, walletBefore);
@@ -5375,7 +5066,7 @@ function defaultCasinoArgForGame(gameKey) {
         return "safe";
     if (gameKey === "crash")
         return "1.50";
-    if (gameKey === "slots")
+    if (gameKey === "magicslots")
         return "single";
     if (gameKey === "coinflip")
         return "heads";
@@ -5408,7 +5099,7 @@ function parseCasinoActionCustomId(customId) {
     const bet = Math.max(1, Math.floor(Number.parseInt(parts[3], 10) || 1));
     const ownerId = String(parts[4] || "").replace(/\D/g, "");
     const arg = sanitizeCasinoActionArg(parts.slice(5).join(":"));
-    if (!["replay", "double", "half", "switch"].includes(action))
+    if (!["launch", "replay", "double", "half", "switch"].includes(action))
         return null;
     if (!CASINO_GAME_ORDER.includes(gameKey))
         return null;
@@ -5437,49 +5128,67 @@ function buildCasinoActionComponents(meta) {
         .setStyle(discord_js_1.ButtonStyle.Secondary));
     return [row.toJSON()];
 }
+function buildCasinoLobbyPayload(userId, bet) {
+    const stake = Math.max(MIN_BET, Math.floor(bet));
+    const games = [
+        { key: "dice", label: "Dice", emoji: "🎲" },
+        { key: "roulette", label: "Roulette", emoji: "🎡" },
+        { key: "blackjack", label: "Blackjack", emoji: "🃏" },
+        { key: "crash", label: "Crash", emoji: "📈" },
+        { key: "magicslots", label: "Magic Slots", emoji: "🎰" },
+        { key: "coinflip", label: "Coinflip", emoji: "🪙" },
+        { key: "baccarat", label: "Baccarat", emoji: "🂡" },
+        { key: "hilo", label: "High-Low", emoji: "🔺" },
+        { key: "keno", label: "Keno", emoji: "🎟️" }
+    ];
+    const rows = [games.slice(0, 5), games.slice(5)].map(group => new discord_js_1.ActionRowBuilder().addComponents(...group.map(game => new discord_js_1.ButtonBuilder()
+        .setCustomId(buildCasinoActionCustomIdForUser("launch", game.key, stake, userId, defaultCasinoArgForGame(game.key)))
+        .setLabel(game.label)
+        .setEmoji(game.emoji)
+        .setStyle(game.key === "magicslots" ? discord_js_1.ButtonStyle.Primary : discord_js_1.ButtonStyle.Secondary))).toJSON());
+    const profileLines = games.map(game => `${game.emoji} **${game.label}** • ${casinoBalance_1.CASINO_PROFILES[game.key].rtp} • ${casinoBalance_1.CASINO_PROFILES[game.key].volatility}`);
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0xd4af37)
+        .setTitle("🎰 FN Casino Floor")
+        .setDescription("Choose a table below. Results include the outcome, payout, net change, wallet balance, odds, and replay controls.")
+        .addFields({ name: "Your Stake", value: `${formatTokenAmount(stake)}\nWallet: ${formatTokenAmount((0, utils_1.getTokens)(userId))}`, inline: true }, { name: "Win Bonus", value: `${(casinoBalance_1.STANDARD_WIN_BONUS_CHANCE * 100).toFixed(0)}% chance on standard-game wins\nBonuses only increase payouts.`, inline: true }, { name: "Game Profiles", value: profileLines.join("\n"), inline: false })
+        .setFooter({ text: "Long-run return is not a guarantee for any session. Play within your wallet." });
+    return JSON.stringify({ embed: embed.toJSON(), components: rows });
+}
 function formatCasinoResult(options) {
     const net = options.payout - options.bet;
     const outcomePayload = getCasinoOutcomePayload(options.outcome);
     const riskBand = getCasinoRiskBand(options.bet, options.walletBefore);
     const oddsSnapshot = getCasinoOddsSnapshot(options.gameKey);
     const detailLines = (options.details || []).map(detail => `• ${detail.label}: ${detail.value}`);
-    const notes = options.notes?.length
-        ? options.notes
-        : options.outcome === "loss"
-            ? ["Reduce risk size or move to lower-variance calls for steadier bankroll control."]
-            : ["Bank partial gains to protect long-run bankroll consistency."];
+    const notes = options.notes || [];
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(outcomePayload.color)
         .setTitle(`${options.gameIcon} ${options.gameName} • ${outcomePayload.label}`)
-        .setDescription([
-        "Casino round summary with direct payout and bankroll telemetry.",
-        "Outcome colors: WIN=green, LOSS=red, PUSH=yellow."
-    ].join("\n"))
+        .setDescription(options.outcome === "win" ? "Payout secured." : options.outcome === "push" ? "Stake returned." : "No return this round.")
         .addFields({
-        name: "Round Ledger",
+        name: "Result",
         value: [
             `Bet: ${formatTokenAmount(options.bet)}`,
             `Payout: ${formatTokenAmount(options.payout)}`,
             `Net: ${formatNetAmount(net)}`,
-            `Wallet: ${formatTokenAmount(options.walletBefore)} -> ${formatTokenAmount(options.walletAfter)}`,
-            `Risk Band: ${riskBand}`,
-            `Lucky Multiplier: ${options.luckyLabel || "Standard 1.0x"}`
+            `Wallet: ${formatTokenAmount(options.walletAfter)}`
         ].join("\n"),
         inline: true
     }, {
-        name: "Performance Intel",
+        name: "Odds & Bonus",
         value: [
-            oddsSnapshot,
-            buildCasinoStatLine(options.userId, options.gameKey),
-            buildCasinoSessionLine(options.userId)
+            `Risk: ${riskBand}`,
+            `Bonus Result: ${options.luckyLabel || "No bonus"}`,
+            oddsSnapshot
         ].join("\n"),
-        inline: false
+        inline: true
     });
     if (detailLines.length) {
         const chunks = chunkLines(detailLines, 950).slice(0, 2);
         for (let i = 0; i < chunks.length; i++) {
             embed.addFields({
-                name: i === 0 ? "Round Breakdown" : `Round Breakdown ${i + 1}`,
+                name: i === 0 ? "What Happened" : `What Happened ${i + 1}`,
                 value: chunks[i],
                 inline: false
             });
@@ -5491,6 +5200,7 @@ function formatCasinoResult(options) {
     for (const section of options.sections || []) {
         embed.addFields({ name: section.title, value: section.value, inline: false });
     }
+    embed.setFooter({ text: `${buildCasinoStatLine(options.userId, options.gameKey)} | ${buildCasinoSessionLine(options.userId)}` });
     const payload = {
         embed: embed.toJSON()
     };
@@ -5520,42 +5230,57 @@ function magicSlotSymbolEmoji(symbol) {
 function formatMagicSlotsResult(options) {
     const outcomePayload = getCasinoOutcomePayload(options.outcome);
     const net = options.payout - options.bet;
+    const resultLabel = options.jackpotRows > 0 && options.outcome === "win"
+        ? "JACKPOT"
+        : options.outcome.toUpperCase();
+    const resultEmoji = options.jackpotRows > 0 && options.outcome === "win"
+        ? "💥"
+        : options.outcome === "win"
+            ? "✅"
+            : options.outcome === "push"
+                ? "🟨"
+                : "❌";
+    const heatScore = options.baseMultiplier + (options.totalHits * 0.65) + (options.totalBonusSymbols * 0.35);
+    const reelHeat = heatScore >= 7 ? "🔥" : heatScore >= 3.4 ? "⚡" : "🧊";
+    const modeTag = options.ultraBonusMode ? "✨ ULTRA BONUS" : "🎰 STANDARD";
     const winSummary = options.winningLines.length
         ? options.winningLines
             .slice(0, 4)
-            .map(win => `• ${win.pattern}: ${win.emojiLine} -> ${win.multiplier.toFixed(2)}x (${win.rule})`)
+            .map(win => `• ${win.pattern} ${win.emojiLine}  ${win.multiplier.toFixed(2)}x`)
             .join("\n")
-        : "No winning paths this spin.";
+        : "• No line hit";
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(outcomePayload.color)
-        .setTitle(`🎰 Magic Slots • ${outcomePayload.label}`)
-        .setDescription("Single-bet rune board spin. Straight rows and zig-zag paths are auto-scored.")
+        .setTitle(`${resultEmoji} Magic Slots • ${resultLabel}`)
+        .setDescription(`${modeTag}  ${reelHeat}  ✨x${options.totalBonusSymbols}`)
         .addFields({
-        name: "Spin",
+        name: "💰 Spin",
         value: [
             `Bet: ${formatTokenAmount(options.bet)}`,
-            `Payout: ${formatTokenAmount(options.payout)}`,
+            `Win: ${formatTokenAmount(options.payout)}`,
             `Net: ${formatNetAmount(net)}`,
-            `Wallet: ${formatTokenAmount(options.walletBefore)} -> ${formatTokenAmount(options.walletAfter)}`,
-            `Lucky: ${options.luckyLabel}`,
-            `Effective Return: ${options.scaledMultiplier.toFixed(2)}x`,
-            `Bonus Hits: ${options.totalBonusHits}`,
-            `Base Multiplier: ${options.baseMultiplier.toFixed(2)}x`,
-            `Paid Paths: ${options.winningLines.length}/${options.totalHits}`,
-            `Bonus-Row Jackpot Hits: ${options.jackpotRows}`
+            `Bank: ${formatTokenAmount(options.walletAfter)}`,
+            `Lines: ${options.winningLines.length}/${options.totalHits}`,
+            `Bonus: ${options.totalBonusHits}  |  Jackpot: ${options.jackpotRows}`,
+            `Scatter: ${options.scatterMultiplier > 0 ? `${options.scatterMultiplier.toFixed(2)}x` : "-"}`
         ].join("\n"),
         inline: false
     }, {
-        name: "Machine",
+        name: "🎛️ Reels",
         value: `\`\`\`\n${options.boardRows.join("\n")}\n\`\`\``,
         inline: false
     }, {
-        name: "Winning Paths",
+        name: "🏆 Winning Lines",
         value: winSummary,
         inline: false
     }, {
-        name: "Legend",
-        value: "🪄 Wand  🧪 Potion  🐉 Dragon  📘 Spellbook  🔮 Crystal  ✨ Bonus",
+        name: "✨ Bonus Chances",
+        value: [
+            "Scatter (3+ BONUS): ~0.47% per spin",
+            "Ultra mode: ~0.16% per spin",
+            "Full BONUS row: exceptionally rare jackpot",
+            `Return profile: ${casinoBalance_1.CASINO_PROFILES.magicslots.rtp}`
+        ].join("\n"),
         inline: false
     })
         .setFooter({ text: buildCasinoSessionLine(options.userId) })
@@ -5564,7 +5289,7 @@ function formatMagicSlotsResult(options) {
         embed: embed.toJSON(),
         components: buildCasinoActionComponents({
             userId: options.userId,
-            gameKey: "slots",
+            gameKey: "magicslots",
             bet: Math.max(1, Math.floor(options.bet)),
             arg: "single"
         })
@@ -5574,10 +5299,13 @@ function playDice(userId, bet, choice) {
     const betError = validateCasinoBet(userId, bet);
     if (betError)
         return betError;
+    const c = choice.toLowerCase();
+    if (!["1", "2", "3", "4", "5", "6", "high", "low", "odd", "even"].includes(c)) {
+        return "Choose 1-6, high, low, odd, or even.";
+    }
     const walletBefore = (0, utils_1.getTokens)(userId);
     (0, utils_1.removeTokens)(userId, bet);
     const roll = Math.floor(Math.random() * 6) + 1;
-    const c = choice.toLowerCase();
     const exact = c === roll.toString();
     const win = exact || (c === "high" && roll >= 4) || (c === "low" && roll <= 3) || (c === "odd" && roll % 2 === 1) || (c === "even" && roll % 2 === 0);
     if (!win) {
@@ -5601,8 +5329,8 @@ function playDice(userId, bet, choice) {
             actionMeta: { bet, arg: c }
         });
     }
-    const lucky = rollLuckyMultiplier();
-    const baseMultiplier = exact ? 5 : 2;
+    const lucky = (0, casinoBalance_1.rollWinBonus)();
+    const baseMultiplier = exact ? casinoBalance_1.DICE_PAYOUTS.exact : casinoBalance_1.DICE_PAYOUTS.band;
     const payout = Math.max(1, Math.floor(bet * baseMultiplier * lucky.multiplier));
     (0, utils_1.addTokens)(userId, payout);
     (0, utils_1.recordGameResult)(userId, "dice", "win", bet, payout);
@@ -5630,20 +5358,25 @@ function playRoulette(userId, bet, choice) {
     const betError = validateCasinoBet(userId, bet);
     if (betError)
         return betError;
+    const c = choice.toLowerCase();
+    const straightNumber = Number.parseInt(c, 10);
+    const validChoice = ["red", "black", "green", "odd", "even"].includes(c)
+        || (/^\d{1,2}$/.test(c) && straightNumber >= 0 && straightNumber <= 36);
+    if (!validChoice)
+        return "Choose red, black, green, odd, even, or a number from 0-36.";
     const walletBefore = (0, utils_1.getTokens)(userId);
     (0, utils_1.removeTokens)(userId, bet);
     const number = Math.floor(Math.random() * 37);
     const color = number === 0 ? "green" : number % 2 === 0 ? "black" : "red";
-    const c = choice.toLowerCase();
     let payoutMultiplier = 0;
     if (c === color)
-        payoutMultiplier = color === "green" ? 14 : 2;
+        payoutMultiplier = color === "green" ? casinoBalance_1.ROULETTE_PAYOUTS.straight : casinoBalance_1.ROULETTE_PAYOUTS.evenMoney;
     else if (c === "odd" && number % 2 === 1)
-        payoutMultiplier = 2;
+        payoutMultiplier = casinoBalance_1.ROULETTE_PAYOUTS.evenMoney;
     else if (c === "even" && number % 2 === 0 && number !== 0)
-        payoutMultiplier = 2;
+        payoutMultiplier = casinoBalance_1.ROULETTE_PAYOUTS.evenMoney;
     else if (!Number.isNaN(Number.parseInt(c, 10)) && Number.parseInt(c, 10) === number)
-        payoutMultiplier = 36;
+        payoutMultiplier = casinoBalance_1.ROULETTE_PAYOUTS.straight;
     if (payoutMultiplier <= 0) {
         (0, utils_1.recordGameResult)(userId, "roulette", "loss", bet, 0);
         return formatCasinoResult({
@@ -5664,7 +5397,7 @@ function playRoulette(userId, bet, choice) {
             actionMeta: { bet, arg: c }
         });
     }
-    const lucky = rollLuckyMultiplier();
+    const lucky = (0, casinoBalance_1.rollWinBonus)();
     const payout = Math.max(1, Math.floor(bet * payoutMultiplier * lucky.multiplier));
     (0, utils_1.addTokens)(userId, payout);
     (0, utils_1.recordGameResult)(userId, "roulette", "win", bet, payout);
@@ -5770,8 +5503,9 @@ function playBlackjack(userId, bet, style) {
         });
     }
     if (d > 21 || p > d) {
-        const lucky = rollLuckyMultiplier();
-        const payout = Math.max(1, Math.floor(bet * 1.9 * lucky.multiplier));
+        const lucky = (0, casinoBalance_1.rollWinBonus)();
+        const baseMultiplier = style === "aggressive" ? casinoBalance_1.BLACKJACK_PAYOUTS.aggressive : casinoBalance_1.BLACKJACK_PAYOUTS.safe;
+        const payout = Math.max(1, Math.floor(bet * baseMultiplier * lucky.multiplier));
         (0, utils_1.addTokens)(userId, payout);
         (0, utils_1.recordGameResult)(userId, "blackjack", "win", bet, payout);
         return formatCasinoResult({
@@ -5789,7 +5523,7 @@ function playBlackjack(userId, bet, style) {
                 { label: "Style", value: style },
                 { label: "Player", value: `${player.join(" ")} (${p})` },
                 { label: "Dealer", value: `${dealer.join(" ")} (${d})` },
-                { label: "Base Multiplier", value: "1.90x" }
+                { label: "Base Multiplier", value: `${baseMultiplier.toFixed(2)}x` }
             ],
             actionMeta: { bet, arg: style }
         });
@@ -5815,8 +5549,9 @@ function playBlackjack(userId, bet, style) {
 }
 const MAGIC_SLOT_REELS = 6;
 const MAGIC_SLOT_ROWS = 6;
-const MAGIC_SLOT_RETURN_SCALE = 0.25;
+const MAGIC_SLOT_RETURN_SCALE = 0.93;
 const MAGIC_SLOT_MAX_PAID_PATTERNS = 3;
+const MAGIC_SLOT_ULTRA_MAX_PAID_PATTERNS = 4;
 const MAGIC_SLOT_BONUS_ROW_JACKPOT_MULTIPLIER = 220;
 const MAGIC_SLOT_ULTRA_BONUS_ROW_JACKPOT_MULTIPLIER = 1500;
 const MAGIC_SLOT_ZIGZAG_PAYOUT_FACTOR = 0.88;
@@ -5918,6 +5653,17 @@ function detectUltraBonusWinSpin(grid, preliminaryWins) {
     const bonusAssistedPremiumLine = preliminaryWins.some(win => win.streak >= 4 && win.bonusHits >= 1);
     return totalBonusSymbols >= 3 && bonusAssistedPremiumLine;
 }
+function getMagicSlotScatterMultiplier(totalBonusSymbols) {
+    if (totalBonusSymbols >= 6)
+        return 7.0;
+    if (totalBonusSymbols === 5)
+        return 2.4;
+    if (totalBonusSymbols === 4)
+        return 0.9;
+    if (totalBonusSymbols === 3)
+        return 0.35;
+    return 0;
+}
 function scoreMagicPattern(symbols, kind) {
     const allBonus = symbols.every(symbol => symbol === "BONUS");
     if (allBonus) {
@@ -6006,6 +5752,7 @@ function playSlots(userId, bet) {
     const walletBefore = (0, utils_1.getTokens)(userId);
     (0, utils_1.removeTokens)(userId, totalBet);
     const machineGrid = Array.from({ length: MAGIC_SLOT_ROWS }, () => Array.from({ length: MAGIC_SLOT_REELS }, (_, reelIndex) => spinMagicSlotSymbol(reelIndex)));
+    const totalBonusSymbols = machineGrid.flat().filter(symbol => symbol === "BONUS").length;
     const activePatterns = MAGIC_SLOT_PATTERNS;
     const preliminaryWins = [];
     for (const pattern of activePatterns) {
@@ -6052,18 +5799,20 @@ function playSlots(userId, bet) {
             bonusHits: scored.bonusHits
         });
     }
+    const paidLineLimit = ultraBonusMode ? MAGIC_SLOT_ULTRA_MAX_PAID_PATTERNS : MAGIC_SLOT_MAX_PAID_PATTERNS;
     const paidWins = [...lineWins]
         .sort((a, b) => b.multiplier - a.multiplier)
-        .slice(0, MAGIC_SLOT_MAX_PAID_PATTERNS);
+        .slice(0, paidLineLimit);
     const baseMultiplier = paidWins.reduce((sum, win) => sum + win.multiplier, 0);
     const totalBonusHits = paidWins.reduce((sum, win) => sum + win.bonusHits, 0);
-    const totalMultiplier = Math.max(0, baseMultiplier);
+    const scatterMultiplier = getMagicSlotScatterMultiplier(totalBonusSymbols);
+    const totalMultiplier = Math.max(0, baseMultiplier + scatterMultiplier);
     const scaledMultiplier = totalMultiplier * MAGIC_SLOT_RETURN_SCALE;
     const payout = totalMultiplier > 0 ? Math.max(1, Math.floor(totalBet * scaledMultiplier)) : 0;
     if (payout > 0)
         (0, utils_1.addTokens)(userId, payout);
     const outcome = payout > totalBet ? "win" : payout === totalBet ? "push" : "loss";
-    (0, utils_1.recordGameResult)(userId, "slots", outcome, totalBet, payout);
+    (0, utils_1.recordGameResult)(userId, "magicslots", outcome, totalBet, payout);
     const boardRows = machineGrid.map((row, idx) => `R${idx + 1} ${row.map(symbol => `[${magicSlotSymbolEmoji(symbol)}]`).join("")}`);
     const winningEmojiLines = paidWins.map(win => ({
         pattern: win.pattern,
@@ -6085,7 +5834,10 @@ function playSlots(userId, bet) {
         totalBonusHits,
         totalHits: lineWins.length,
         jackpotRows,
-        scaledMultiplier
+        scaledMultiplier,
+        ultraBonusMode,
+        totalBonusSymbols,
+        scatterMultiplier
     });
 }
 function playCoinflip(userId, bet, side) {
@@ -6117,8 +5869,8 @@ function playCoinflip(userId, bet, side) {
             actionMeta: { bet, arg: pick }
         });
     }
-    const lucky = rollLuckyMultiplier();
-    const payout = Math.max(1, Math.floor(bet * 2 * lucky.multiplier));
+    const lucky = (0, casinoBalance_1.rollWinBonus)();
+    const payout = Math.max(1, Math.floor(bet * casinoBalance_1.COINFLIP_PAYOUT * lucky.multiplier));
     (0, utils_1.addTokens)(userId, payout);
     (0, utils_1.recordGameResult)(userId, "coinflip", "win", bet, payout);
     return formatCasinoResult({
@@ -6135,7 +5887,7 @@ function playCoinflip(userId, bet, side) {
         details: [
             { label: "Your Pick", value: pick },
             { label: "Landed", value: landed },
-            { label: "Base Multiplier", value: "2.00x" }
+            { label: "Base Multiplier", value: `${casinoBalance_1.COINFLIP_PAYOUT.toFixed(2)}x` }
         ],
         actionMeta: { bet, arg: pick }
     });
@@ -6181,8 +5933,8 @@ function playBaccarat(userId, bet, side) {
             actionMeta: { bet, arg: pick }
         });
     }
-    const lucky = rollLuckyMultiplier();
-    const base = outcome === "tie" ? 9 : outcome === "banker" ? 1.95 : 2;
+    const lucky = (0, casinoBalance_1.rollWinBonus)();
+    const base = casinoBalance_1.BACCARAT_PAYOUTS[outcome];
     const payout = Math.max(1, Math.floor(bet * base * lucky.multiplier));
     (0, utils_1.addTokens)(userId, payout);
     (0, utils_1.recordGameResult)(userId, "baccarat", "win", bet, payout);
@@ -6265,8 +6017,8 @@ function playHiLo(userId, bet, call) {
         });
     }
     const distance = Math.abs(second - first);
-    const base = distance >= 8 ? 2.4 : distance >= 5 ? 2.1 : 1.85;
-    const lucky = rollLuckyMultiplier();
+    const base = distance >= 8 ? casinoBalance_1.HILO_PAYOUTS.extreme : distance >= 5 ? casinoBalance_1.HILO_PAYOUTS.strong : casinoBalance_1.HILO_PAYOUTS.standard;
+    const lucky = (0, casinoBalance_1.rollWinBonus)();
     const payout = Math.max(1, Math.floor(bet * base * lucky.multiplier));
     (0, utils_1.addTokens)(userId, payout);
     (0, utils_1.recordGameResult)(userId, "hilo", "win", bet, payout);
@@ -6314,18 +6066,7 @@ function playKeno(userId, bet, picksRaw) {
     const hits = picks.filter(n => draw.includes(n));
     const hitCount = hits.length;
     const spots = picks.length;
-    const baseTable = {
-        2: [0, 0.3, 2.8],
-        3: [0, 0.2, 1.2, 5.2],
-        4: [0, 0.1, 0.5, 2.1, 10.5],
-        5: [0, 0.1, 0.4, 1.2, 4.4, 15.5],
-        6: [0, 0, 0.3, 0.9, 2.2, 8.8, 23],
-        7: [0, 0, 0.2, 0.7, 1.6, 4.1, 12.5, 31],
-        8: [0, 0, 0.15, 0.55, 1.25, 3.2, 7.8, 18.2, 42],
-        9: [0, 0, 0.1, 0.45, 1.05, 2.5, 6.1, 12.9, 27, 56],
-        10: [0, 0, 0.1, 0.35, 0.8, 1.9, 4.4, 9.5, 19.5, 37, 74]
-    };
-    const baseMultiplier = baseTable[spots]?.[hitCount] || 0;
+    const baseMultiplier = casinoBalance_1.KENO_PAYOUTS[spots]?.[hitCount] || 0;
     const picksText = picks.sort((a, b) => a - b).join(", ");
     const drawText = draw.sort((a, b) => a - b).join(", ");
     const hitsText = hits.sort((a, b) => a - b).join(", ") || "none";
@@ -6350,16 +6091,17 @@ function playKeno(userId, bet, picksRaw) {
             actionMeta: { bet, arg: picks.sort((a, b) => a - b).join(",") }
         });
     }
-    const lucky = rollLuckyMultiplier();
+    const lucky = (0, casinoBalance_1.rollWinBonus)();
     const payout = Math.max(1, Math.floor(bet * baseMultiplier * lucky.multiplier));
     (0, utils_1.addTokens)(userId, payout);
-    (0, utils_1.recordGameResult)(userId, "keno", "win", bet, payout);
+    const resultOutcome = payout > bet ? "win" : payout === bet ? "push" : "loss";
+    (0, utils_1.recordGameResult)(userId, "keno", resultOutcome, bet, payout);
     return formatCasinoResult({
         userId,
         gameKey: "keno",
         gameIcon: "🎟️",
         gameName: "Keno",
-        outcome: "win",
+        outcome: resultOutcome,
         bet,
         payout,
         walletBefore,
@@ -6384,7 +6126,7 @@ async function playCrash(userId, bet, target) {
     (0, utils_1.removeTokens)(userId, bet);
     const result = (await Promise.resolve().then(() => __importStar(require("./game/economy")))).resolveCrash(bet, target);
     if (result.win) {
-        const lucky = rollLuckyMultiplier();
+        const lucky = (0, casinoBalance_1.rollWinBonus)();
         const payout = Math.max(1, Math.floor(result.payout * lucky.multiplier));
         (0, utils_1.addTokens)(userId, payout);
         (0, utils_1.recordGameResult)(userId, "crash", "win", bet, payout);
@@ -6450,7 +6192,7 @@ async function runCasinoQuickAction(input) {
         const target = Number.parseFloat(arg || "1.50");
         return { gameKey: resolvedGame, payload: await playCrash(input.userId, effectiveBet, Number.isFinite(target) ? target : 1.5) };
     }
-    if (resolvedGame === "slots") {
+    if (resolvedGame === "magicslots") {
         return { gameKey: resolvedGame, payload: playSlots(input.userId, effectiveBet) };
     }
     if (resolvedGame === "coinflip")
@@ -6983,6 +6725,9 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
         return { error: "Ticket creation is already in progress for your account. Please wait a moment and try again." };
     }
     try {
+        purgeLegacyImportedTicketRecords(guild.id);
+        await pruneDeletedTicketRecords(guild);
+        await pruneInaccessibleOwnerTicketRecords(guild);
         if (!bypassDeflection) {
             const deflection = evaluateTicketDeflection(guild.id, ownerId, reason);
             if (deflection.blocked) {
@@ -6990,8 +6735,6 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
                 return { error: deflection.message || "Potential duplicate ticket detected." };
             }
         }
-        await pruneDeletedTicketRecords(guild);
-        await pruneInaccessibleOwnerTicketRecords(guild);
         // Self-heal stale owner records caused by manual/deleted/inaccessible channels so /ticket works immediately.
         // Iterate until we either find a valid active ticket or no owner-open tickets remain.
         let existing = findOpenTicketByOwnerInBucket(guild.id, ownerId, requestedBucket);
@@ -7091,8 +6834,22 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
             recordTicketCreateFailure("ticket_store_save_conflict");
             return { error: "Ticket persistence conflict detected. Please retry in a moment." };
         }
+        const intake = (0, ticketEnhancements_1.hydrateTicketIntakeFields)(reason, {
+            category: ticket.intakeCategory,
+            summary: ticket.intakeSummary,
+            details: ticket.intakeDetails,
+            platform: ticket.intakePlatform,
+            orderId: ticket.intakeOrderId,
+            evidence: ticket.intakeEvidence
+        });
+        ticket.intakeSummary = intake.summary;
+        ticket.intakeCategory = intake.category;
+        ticket.intakeDetails = intake.details;
+        ticket.intakePlatform = intake.platform;
+        ticket.intakeOrderId = intake.orderId;
+        ticket.intakeEvidence = intake.evidence;
         applyTicketMetadata(ticket, reason);
-        appendAuditEvent("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason });
+        appendAuditEvent("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason, intake });
         const intro = buildTicketOpsEmbed(ticket);
         const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
             .setCustomId(TICKET_IDS.claim)
@@ -7128,8 +6885,34 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
 }
 async function ensureArchiveCategory(guild) {
     const cfg = ensureTicketConfig(guild.id);
-    if (cfg.archiveCategoryId && guild.channels.cache.has(cfg.archiveCategoryId)) {
-        return cfg.archiveCategoryId;
+    const fetched = await guild.channels.fetch().catch(() => null);
+    const channels = fetched ? Array.from(fetched.values()) : Array.from(guild.channels.cache.values());
+    const archiveCategories = channels
+        .filter(channel => channel?.type === discord_js_1.ChannelType.GuildCategory && channel.name === "ticket-archive-hold")
+        .sort((a, b) => a.id.localeCompare(b.id));
+    const configured = archiveCategories.find(channel => channel.id === cfg.archiveCategoryId);
+    const canonical = configured || archiveCategories[0];
+    if (canonical) {
+        cfg.archiveCategoryId = canonical.id;
+        saveTicketStore();
+        for (const duplicate of archiveCategories) {
+            if (!duplicate || duplicate.id === canonical.id)
+                continue;
+            const children = channels.filter(channel => channel?.parentId === duplicate.id);
+            for (const child of children) {
+                if (child && "setParent" in child) {
+                    await child.setParent(canonical.id, { lockPermissions: false }).catch(() => undefined);
+                }
+            }
+            const remainingChildren = await guild.channels.fetch().catch(() => null);
+            const stillHasChildren = remainingChildren
+                ? Array.from(remainingChildren.values()).some(channel => channel?.parentId === duplicate.id)
+                : children.length > 0;
+            if (!stillHasChildren) {
+                await duplicate.delete("Remove empty duplicate ticket archive category").catch(() => undefined);
+            }
+        }
+        return canonical.id;
     }
     const created = await guild.channels.create({
         name: "ticket-archive-hold",
@@ -7154,6 +6937,7 @@ async function closeTicketChannel(guild, channelId, closedById, closeReason) {
     const archiveCategoryId = await ensureArchiveCategory(guild);
     if (channel && channel.type === discord_js_1.ChannelType.GuildText) {
         await channel.setParent(archiveCategoryId, { lockPermissions: false }).catch(() => undefined);
+        await channel.setTopic(`${channel.topic || `Support ticket (${ticket.ownerId})`} [ticket-archived]`).catch(() => undefined);
         await channel.permissionOverwrites.edit(ticket.ownerId, {
             ViewChannel: true,
             ReadMessageHistory: true,
@@ -7178,17 +6962,9 @@ async function closeTicketChannel(guild, channelId, closedById, closeReason) {
     return `Archived ticket #${ticket.id} in hold queue. Reason: ${closeReason}`;
 }
 async function claimTicketChannel(guild, channelId, claimerId) {
-    let ticket = await ensureTrackedTicketByChannelId(guild, channelId, claimerId);
+    const ticket = await ensureTrackedTicketByChannelId(guild, channelId, claimerId);
     if (!ticket) {
-        // Permanent QoL fallback: if channel is already in this guild cache, force-import it
-        // so button/command claim does not fail with a false "not tracked" on valid ticket channels.
-        const cached = guild.channels.cache.get(channelId);
-        if (cached && cached.type === discord_js_1.ChannelType.GuildText) {
-            ticket = ensureTrackedTicketFromKnownChannel(guild, cached, claimerId);
-        }
-    }
-    if (!ticket) {
-        return "This channel is not a tracked ticket and could not be imported. Provide ticket_channel_id or run /tickets to verify the channel.";
+        return "This channel is not an active tracked ticket. Open a fresh ticket from the support panel.";
     }
     const status = normalizeTicketStatus(ticket.status);
     if (status === "resolved")
@@ -7217,22 +6993,6 @@ async function claimTicketChannel(guild, channelId, claimerId) {
         channelId: claimed.channelId
     });
     return `Ticket #${claimed.id} claimed by <@${claimerId}>.`;
-}
-function ensureTrackedTicketFromKnownChannel(guild, channel, fallbackOwnerId) {
-    const existing = findTicketByChannel(channel.id);
-    if (existing)
-        return existing;
-    const ownerFromTopic = findChannelOwnerFromTopic(channel.topic);
-    const ownerId = ownerFromTopic || fallbackOwnerId;
-    const imported = importTicketEntryForChannel(guild.id, ownerId, channel.id, "Imported from known ticket button channel");
-    appendAuditEvent("ticket_import", {
-        guildId: guild.id,
-        ticketId: imported.id,
-        channelId: imported.channelId,
-        ownerId: imported.ownerId,
-        importedFromKnownChannel: true
-    });
-    return imported;
 }
 async function resolveTicketChannel(guild, channelId, resolverId, resolvedReason) {
     const tracked = findTicketByChannel(channelId);
@@ -7320,7 +7080,8 @@ async function resolveTicketChannel(guild, channelId, resolverId, resolvedReason
 }
 const slashCommands = (0, slashCatalog_1.buildSlashCommands)({
     raidConditionChoices: RAID_CONDITION_CHOICES,
-    raidMapChoices: RAID_MAP_CHOICES
+    raidMapChoices: RaidDomain.RAID_MAP_CHOICES,
+    raidApproachChoices: RaidDomain.RAID_APPROACH_CHOICES
 });
 const ticketCommandHandlers = (0, ticketCommands_1.buildTicketCommandHandlers)({
     requireGuild,
@@ -7566,6 +7327,7 @@ const commandHandlers = {
         const badge = getAccessPointBadge(accessPoints);
         const prestigeBadge = getPrestigeBadge(user.prestige);
         const pmcLevel = (0, utils_1.getPmcLevel)(user.pmcXP);
+        const pmcPrestigeTier = (0, utils_1.getPmcPrestigeTier)(user.pmcPrestige);
         const tierVisual = getPmcTierVisual(pmcLevel);
         const engagementLevel = (0, utils_1.getXPLevel)(user.xp);
         const currentThreshold = engagementLevel > 0 ? utils_1.XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
@@ -7619,13 +7381,14 @@ const commandHandlers = {
             value: [
                 `PMC Level: **${pmcLevel.toLocaleString()}**`,
                 `Raid XP: **${user.pmcXP.toLocaleString()}**`,
-                `Tier: **${tierVisual.label}**`
+                `Tier: **${tierVisual.label}**`,
+                `PMC Prestige: **${pmcPrestigeTier.numeral} • ${pmcPrestigeTier.label}**`
             ].join("\n"),
             inline: true
         }, {
             name: "🌟 Status",
             value: [
-                `Prestige: **${user.prestige.toLocaleString()}**`,
+                `Engagement Prestige: **${user.prestige.toLocaleString()}**`,
                 `Badge: **${prestigeBadge.label}**`,
                 `Access Tier: **${badge.label}**`
             ].join("\n"),
@@ -7645,6 +7408,7 @@ const commandHandlers = {
         const prestigeBadge = getPrestigeBadge(user.prestige);
         const engagementLevel = (0, utils_1.getXPLevel)(user.xp);
         const pmcLevel = (0, utils_1.getPmcLevel)(user.pmcXP);
+        const pmcPrestigeTier = (0, utils_1.getPmcPrestigeTier)(user.pmcPrestige);
         const tierVisual = getPmcTierVisual(pmcLevel);
         const currentThreshold = engagementLevel > 0 ? utils_1.XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
         const nextThreshold = utils_1.XP_LEVEL_THRESHOLDS[engagementLevel] ?? currentThreshold;
@@ -7697,13 +7461,14 @@ const commandHandlers = {
             value: [
                 `PMC Level: **${pmcLevel.toLocaleString()}**`,
                 `Raid XP: **${user.pmcXP.toLocaleString()}**`,
-                `Next PMC Level: **${pmcProgress.needForNext.toLocaleString()} XP away**`
+                `Next PMC Level: **${pmcProgress.needForNext.toLocaleString()} XP away**`,
+                `PMC Prestige: **${pmcPrestigeTier.numeral} • ${pmcPrestigeTier.label}**`
             ].join("\n"),
             inline: true
         }, {
             name: "🌟 Status Badges",
             value: [
-                `Prestige: **${user.prestige.toLocaleString()}**`,
+                `Engagement Prestige: **${user.prestige.toLocaleString()}**`,
                 `Prestige Badge: **${prestigeBadge.label}**`,
                 `PMC Tier: **${tierVisual.label}**`
             ].join("\n"),
@@ -8738,7 +8503,7 @@ const commandHandlers = {
     loadout: async (interaction) => {
         trackRaidCommandUsage("loadout");
         const condition = RaidDomain.rollRaidCondition();
-        const mapCfg = resolveRaidMap("plagued_cemetary");
+        const mapCfg = RaidDomain.resolveRaidMap("plagued_cemetary");
         return RaidRuntime.formatLoadoutSummary({ userId: interaction.user.id, condition, mapCfg, getInventoryCount: utils_1.getInventoryCount, getBestOwnedGear });
     },
     bosses: async () => {
@@ -8760,15 +8525,17 @@ const commandHandlers = {
         const mapRaw = interaction.options.getString("map") || "plagued_cemetary";
         const selectedWeaponId = interaction.options.getString("weapon");
         const selectedArmorId = interaction.options.getString("armor");
-        const mapCfg = resolveRaidMap(mapRaw);
+        const mapCfg = RaidDomain.resolveRaidMap(mapRaw);
+        const mapReputation = (0, utils_1.getMapReputationEntry)(interaction.user.id, mapCfg.key);
+        const mapReputationProgress = RaidDomain.getMapReputationProgress(mapReputation.points);
         const condition = RaidDomain.rollRaidCondition();
         const details = RaidRuntime.formatLoadoutSummary({ userId: interaction.user.id, condition, mapCfg, selectedWeaponId, selectedArmorId, getInventoryCount: utils_1.getInventoryCount, getBestOwnedGear });
         if (details.startsWith("Selected weapon") || details.startsWith("Selected armor") || details.startsWith("You do not own")) {
             return details;
         }
-        const lowProj = mapProjection(mapCfg, "low");
-        const medProj = mapProjection(mapCfg, "medium");
-        const highProj = mapProjection(mapCfg, "high");
+        const lowProj = RaidDomain.mapProjection(mapCfg, "low");
+        const medProj = RaidDomain.mapProjection(mapCfg, "medium");
+        const highProj = RaidDomain.mapProjection(mapCfg, "high");
         const previewBonus = RaidRuntime.getRaidLoadoutBonus({ userId: interaction.user.id, condition, selectedWeaponId, selectedArmorId, getInventoryCount: utils_1.getInventoryCount, getBestOwnedGear });
         const effectiveConditionSuccess = previewBonus.error || !previewBonus.negatedCondition ? condition.successDelta : 0;
         const effectiveConditionToken = previewBonus.error || !previewBonus.negatedCondition ? condition.tokenMultiplierDelta : 0;
@@ -8780,7 +8547,9 @@ const commandHandlers = {
             `Map Base Success Delta: ${(mapCfg.successDelta * 100).toFixed(1)}%`,
             `Map Token Delta: ${(mapCfg.tokenMultiplierDelta * 100).toFixed(1)}%`,
             `Map Raid XP Multiplier: ${mapCfg.xpMultiplier.toFixed(2)}x`,
-            `Boss Spawn Chance: ${(mapCfg.bossSpawnChance * 100).toFixed(1)}% | Favored Boss: ${mapCfg.bossName} | Rotation Pool: ${RAID_BOSS_ROSTER.length} bosses`,
+            `Territory Rank: ${mapReputationProgress.tier.label} • ${mapReputation.points} REP • ${formatMapReputationBar(mapReputationProgress.progressPct)}`,
+            `Mastery Perks: +${(mapReputationProgress.tier.successBonus * 100).toFixed(1)}% extraction | +${(mapReputationProgress.tier.tokenBonus * 100).toFixed(1)}% tokens | +${(mapReputationProgress.tier.bossKillBonus * 100).toFixed(1)}% boss kill`,
+            `Boss Spawn Chance: ${(mapCfg.bossSpawnChance * 100).toFixed(1)}% | Favored Boss: ${mapCfg.bossName} | Rotation Pool: ${RaidDomain.RAID_BOSS_ROSTER.length} bosses`,
             `Projected Low: ${lowProj.successPct}% success | ~${lowProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${lowProj.xpBand[0]}-${lowProj.xpBand[1]} | EV@100 ${lowProj.expectedNetAt100 >= 0 ? `+${lowProj.expectedNetAt100}` : lowProj.expectedNetAt100} tokens | Boss kit ~${lowProj.bossKitDropChancePct}% | Boss bonus XP ~${lowProj.expectedBossBonusXp}`,
             `Projected Medium: ${medProj.successPct}% success | ~${medProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${medProj.xpBand[0]}-${medProj.xpBand[1]} | EV@100 ${medProj.expectedNetAt100 >= 0 ? `+${medProj.expectedNetAt100}` : medProj.expectedNetAt100} tokens | Boss kit ~${medProj.bossKitDropChancePct}% | Boss bonus XP ~${medProj.expectedBossBonusXp}`,
             `Projected High: ${highProj.successPct}% success | ~${highProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${highProj.xpBand[0]}-${highProj.xpBand[1]} | EV@100 ${highProj.expectedNetAt100 >= 0 ? `+${highProj.expectedNetAt100}` : highProj.expectedNetAt100} tokens | Boss kit ~${highProj.bossKitDropChancePct}% | Boss bonus XP ~${highProj.expectedBossBonusXp}`,
@@ -8803,10 +8572,11 @@ const commandHandlers = {
         const mapRaw = interaction.options.getString("map") || "plagued_cemetary";
         const selectedWeaponId = interaction.options.getString("weapon");
         const selectedArmorId = interaction.options.getString("armor");
-        const mapCfg = resolveRaidMap(mapRaw);
+        const approachRaw = interaction.options.getString("approach") || "balanced";
+        const mapCfg = RaidDomain.resolveRaidMap(mapRaw);
         if (!["low", "medium", "high"].includes(tension))
             return "Tension must be low, medium, or high.";
-        const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId);
+        const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId, approachRaw);
         if (result.error)
             return result.error;
         const [tensionLabel] = (result.tension || tension).split(" | ");
@@ -8825,7 +8595,12 @@ const commandHandlers = {
             failureMitigationTokens: result.failureMitigationTokens || 0,
             loot: result.loot || [],
             bossSpawned: result.bossSpawned,
-            bossDefeated: result.bossDefeated
+            bossDefeated: result.bossDefeated,
+            mapReputationGain: result.mapReputationGain,
+            mapReputationTierUnlocked: Boolean(result.mapReputationTierUnlocked),
+            bossTraits: result.bossTraitLabels,
+            bossPhasesReached: result.bossPhasesReached,
+            bossPhaseCount: result.bossPhaseNames?.length
         });
         const raidBroadcast = interaction.guild
             ? buildRaidUnlockBroadcastEmbed({ user: interaction.user, result })
@@ -8984,6 +8759,10 @@ const commandHandlers = {
             adjustmentNote: adjustmentNote || undefined
         });
     },
+    casino: async (interaction) => {
+        const bet = interaction.options.getInteger("bet") || Math.max(MIN_BET, 10);
+        return buildCasinoLobbyPayload(interaction.user.id, bet);
+    },
     dice: async (interaction) => {
         const bet = interaction.options.getInteger("bet", true);
         const choice = interaction.options.getString("choice", true);
@@ -9003,10 +8782,6 @@ const commandHandlers = {
         const bet = interaction.options.getInteger("bet", true);
         const target = interaction.options.getNumber("target", true);
         return await playCrash(interaction.user.id, bet, target);
-    },
-    slots: async (interaction) => {
-        const bet = interaction.options.getInteger("bet", true);
-        return playSlots(interaction.user.id, bet);
     },
     magicslots: async (interaction) => {
         const bet = interaction.options.getInteger("bet", true);
@@ -9216,6 +8991,8 @@ client.once("clientReady", async () => {
         if (guild) {
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
+            purgeLegacyImportedTicketRecords(guild.id);
+            await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await removeLegacyReportPanelForGuild(guild);
                 await ensureAdminReportPanelForGuild(guild);
@@ -9235,6 +9012,8 @@ client.once("clientReady", async () => {
     if (client.guilds.cache.size > 0) {
         for (const guild of client.guilds.cache.values()) {
             await guild.commands.set(slashCommands).catch(() => undefined);
+            purgeLegacyImportedTicketRecords(guild.id);
+            await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 await removeLegacyReportPanelForGuild(guild);
                 await ensureAdminReportPanelForGuild(guild);
@@ -9456,10 +9235,14 @@ client.on("interactionCreate", async (interaction) => {
             return;
         }
         const ticket = created.channelId ? findTicketByChannel(created.channelId) : null;
+        const intake = (0, ticketEnhancements_1.parseTicketIntakeSnapshot)(reason);
         await interaction.reply({
             embeds: [buildTicketCommandEmbed("🎫 Intake Submitted", "Your structured support request was submitted successfully.", ticket || undefined, [
                     { name: "Category", value: (0, ticketEnhancements_1.classifyTicketCategory)(category), inline: true },
-                    { name: "Summary", value: summary.slice(0, 120), inline: false },
+                    { name: "Summary", value: (intake.summary || summary || "General support").slice(0, 180), inline: false },
+                    { name: "Details", value: (intake.details || details || "No details provided.").slice(0, 600), inline: false },
+                    { name: "Platform / Order", value: (intake.platform || intake.orderId || platform || "Not provided").slice(0, 200), inline: false },
+                    { name: "Evidence", value: (intake.evidence || evidence || "No evidence provided.").slice(0, 600), inline: false },
                     { name: "KB References", value: (0, ticketEnhancements_1.getKbSuggestions)(reason).map(item => `• ${item}`).join("\n"), inline: false }
                 ])],
             flags: discord_js_1.MessageFlags.Ephemeral
@@ -9878,16 +9661,7 @@ client.on("interactionCreate", async (interaction) => {
             await interaction.reply({ content: "Only admins or the handler role can claim tickets.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return;
         }
-        // QoL hardening: if this is a valid ticket channel context, ensure it is tracked
-        // before claim to avoid false "not tracked" responses from stale/missing store rows.
-        if (interaction.channel.isTextBased() && interaction.channel.type === discord_js_1.ChannelType.GuildText) {
-            ensureTrackedTicketFromKnownChannel(guild, interaction.channel, interaction.user.id);
-        }
-        let msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
-        if (msg.includes("not a tracked ticket") && interaction.channel.isTextBased() && interaction.channel.type === discord_js_1.ChannelType.GuildText) {
-            ensureTrackedTicketFromKnownChannel(guild, interaction.channel, interaction.user.id);
-            msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
-        }
+        const msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
         const claimed = findTicketByChannel(interaction.channel.id);
         if (claimed && msg.toLowerCase().includes("claimed")) {
             await interaction.reply({
@@ -9950,6 +9724,38 @@ client.on("interactionCreate", async (interaction) => {
         }).catch(() => undefined);
         return;
     }
+    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.request) {
+        const state = (0, utils_1.ensureUser)(interaction.user.id);
+        const level = (0, utils_1.getPmcLevel)(state.pmcXP);
+        if (state.pmcPrestige >= utils_1.PMC_PRESTIGE_CAP || level < utils_1.PMC_PRESTIGE_LEVEL_REQUIREMENT) {
+            await interaction.reply({ content: state.pmcPrestige >= utils_1.PMC_PRESTIGE_CAP ? "Maximum PMC Prestige X has already been achieved." : `PMC Level ${utils_1.PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} is required to prestige.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const nextTier = (0, utils_1.getPmcPrestigeTier)(state.pmcPrestige + 1);
+        const confirmEmbed = new discord_js_1.EmbedBuilder()
+            .setColor(0xf59e0b)
+            .setTitle(`${nextTier.badge} Confirm PMC Prestige ${nextTier.numeral}`)
+            .setDescription("This is a permanent progression choice. Review the reset boundary before confirming.")
+            .addFields({ name: "Will Reset", value: `PMC Level ${level.toLocaleString()} → 0\nRaid XP ${state.pmcXP.toLocaleString()} → 0`, inline: true }, { name: "Will Remain", value: "Inventory and currency\nMap reputation and raid records\nBoss hearts, kills, and achievements", inline: true }, { name: "Permanent Rank", value: `Prestige ${nextTier.numeral} • ${nextTier.label}\nHigher raid XP, success, token, and defense bonuses`, inline: false });
+        const confirmRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.confirm).setLabel(`Confirm Prestige ${nextTier.numeral}`).setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.cancel).setLabel("Cancel").setStyle(discord_js_1.ButtonStyle.Secondary));
+        await interaction.reply({ embeds: [confirmEmbed], components: [confirmRow], flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.confirm) {
+        const result = (0, utils_1.performPmcPrestige)(interaction.user.id);
+        if (result.error) {
+            await interaction.update({ content: result.error, embeds: [], components: [] }).catch(() => undefined);
+            return;
+        }
+        appendAuditEvent("pmc_prestige", { userId: interaction.user.id, prestige: result.prestige, label: result.tier?.label || null });
+        const payload = JSON.parse(buildPmcProfilePayload(interaction.user));
+        await interaction.update({ embeds: [embedFromPayload("pmc", payload.embed, interaction.user)], components: payload.components || [] }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.cancel) {
+        await interaction.update({ content: "PMC prestige cancelled. No progression was changed.", embeds: [], components: [] }).catch(() => undefined);
+        return;
+    }
     if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.history) {
         const payload = JSON.parse(buildRaidHistoryPayload(interaction.user.id));
         await interaction.reply({
@@ -9962,6 +9768,15 @@ client.on("interactionCreate", async (interaction) => {
         const payload = JSON.parse(buildBossRosterPayload());
         await interaction.reply({
             embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
+            flags: discord_js_1.MessageFlags.Ephemeral
+        }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.mastery) {
+        const latestMapKey = (0, utils_1.ensureUser)(interaction.user.id).raidHistory[0]?.mapKey;
+        const payload = JSON.parse(buildMapMasteryPayload(interaction.user.id, latestMapKey));
+        await interaction.reply({
+            embeds: [embedFromPayload("raidintel", payload.embed, interaction.user)],
             flags: discord_js_1.MessageFlags.Ephemeral
         }).catch(() => undefined);
         return;

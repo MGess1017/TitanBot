@@ -4,7 +4,8 @@ import { getVendorSellPrice, ITEM_DEFS, type ItemDef } from "./catalog";
 export const RAID_RESULT_ACTION_IDS = {
     inventory: "raid_result_inventory",
     history: "raid_result_history",
-    bosses: "raid_result_bosses"
+    bosses: "raid_result_bosses",
+    mastery: "raid_result_mastery"
 } as const;
 
 function kindLabel(kind?: ItemDef["kind"]): string {
@@ -427,9 +428,22 @@ export function buildRaidResultPayload(input: {
         bossHeartUnlockedName?: string;
         pmcTierUnlockedLabel?: string;
         pmcTierUnlockedBadge?: string;
+        pmcPrestige?: number;
+        pmcPrestigeLabel?: string;
         selectedWeaponName?: string;
         selectedArmorName?: string;
         approachLabel?: string;
+        mapReputationGain?: number;
+        mapReputationPoints?: number;
+        mapReputationTier?: string;
+        mapReputationTierUnlocked?: string;
+        mapReputationProgressPct?: number;
+        bossTraitLabels?: string[];
+        bossCounteredTraits?: string[];
+        bossPhaseNames?: string[];
+        bossPhasesReached?: number;
+        bossCurrentPhase?: string;
+        bossCombatRewardMultiplier?: number;
     };
     mapCfg: { label: string; bossName: string; lootTier: string };
     fallbackTension: string;
@@ -472,6 +486,7 @@ export function buildRaidResultPayload(input: {
     const specialMoments = [
         result.bossHeartUnlockedName ? `Boss Heart: ${result.bossHeartUnlockedName}` : null,
         result.pmcTierUnlockedLabel ? `${result.pmcTierUnlockedBadge || "🏅"} ${result.pmcTierUnlockedLabel}` : null,
+        result.mapReputationTierUnlocked ? `Territory Rank: ${result.mapReputationTierUnlocked}` : null,
         enhancedDrops.length ? `Enhanced: ${enhancedDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null,
         mythicDrops.length ? `Mythic: ${mythicDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null
     ].filter(Boolean) as string[];
@@ -491,7 +506,9 @@ export function buildRaidResultPayload(input: {
                     `Status: ${result.success ? "Extracted" : "Failed"}`,
                     `Success Chance: ${result.successChance || 0}%`,
                     `Approach: ${result.approachLabel || "Balanced"}`,
-                    `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}`
+                    `PMC: Prestige ${result.pmcPrestige || 0} • ${result.pmcPrestigeLabel || "Unprestiged"}`,
+                    `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}`,
+                    `Territory: ${result.mapReputationTier || "Unproven"} • ${result.mapReputationPoints || 0} REP`
                 ].join("\n"),
                 inline: false
             },
@@ -501,7 +518,8 @@ export function buildRaidResultPayload(input: {
                     `Net: ${signedNet} FN Token$`,
                     `Raid XP: +${result.rxpGain || 0}`,
                     `Boss XP: +${result.bossBonusXp || 0}`,
-                    `Loot: ${lootEntries.length} item${lootEntries.length === 1 ? "" : "s"}`
+                    `Loot: ${lootEntries.length} item${lootEntries.length === 1 ? "" : "s"}`,
+                    `Map REP: +${result.mapReputationGain || 0}`
                 ].join("\n"),
                 inline: true
             },
@@ -510,10 +528,22 @@ export function buildRaidResultPayload(input: {
                 value: [
                     result.bossSpawned ? `${result.bossName || mapCfg.bossName}` : "Boss: No boss detected",
                     bossResolution,
-                    heartLine
-                ].join("\n"),
+                    heartLine,
+                    result.bossSpawned ? `Traits: ${result.bossTraitLabels?.join(" • ") || "Unknown"}` : null
+                ].filter(Boolean).join("\n"),
                 inline: true
             },
+            ...(result.bossSpawned ? [{
+                name: "Combat Sequence",
+                value: [
+                    `Phases Cleared: ${result.bossPhasesReached || 0}/${result.bossPhaseNames?.length || 0}`,
+                    `Active/Final Phase: ${result.bossCurrentPhase || "Contact"}`,
+                    `Sequence: ${result.bossPhaseNames?.join(" → ") || "Contact"}`,
+                    `Counter Intel: ${result.bossCounteredTraits?.length ? result.bossCounteredTraits.join(", ") : "No trait counter matched"}`,
+                    `Threat Reward Scale: ${(result.bossCombatRewardMultiplier || 1).toFixed(2)}x`
+                ].join("\n"),
+                inline: false
+            }] : []),
             {
                 name: "Recovered Loot",
                 value: prominentLoot,
@@ -538,6 +568,10 @@ export function buildRaidResultPayload(input: {
         new ButtonBuilder()
             .setCustomId(RAID_RESULT_ACTION_IDS.bosses)
             .setLabel("Boss Roster")
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(RAID_RESULT_ACTION_IDS.mastery)
+            .setLabel("Map Mastery")
             .setStyle(ButtonStyle.Secondary)
     );
 

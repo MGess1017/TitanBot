@@ -8,6 +8,7 @@ exports.claimDaily = claimDaily;
 exports.resolveCrash = resolveCrash;
 exports.canStartRaid = canStartRaid;
 const utils_1 = require("../utils");
+const casinoBalance_1 = require("./casinoBalance");
 function getTokens(userId) {
     return (0, utils_1.getTokens)(userId);
 }
@@ -45,14 +46,7 @@ function claimDaily(userId) {
     return { bonus, tokenBonus, streak: user.dailyStreak };
 }
 function resolveCrash(bet, target) {
-    const crashPoint = 1 + Math.random() * 9;
-    const rounded = crashPoint.toFixed(2);
-    const win = crashPoint >= target;
-    if (win) {
-        const payout = Math.max(1, Math.floor(bet * target));
-        return { win: true, crashPoint: rounded, payout, loss: 0 };
-    }
-    return { win: false, crashPoint: rounded, payout: 0, loss: bet };
+    return (0, casinoBalance_1.resolveFairCrash)(bet, target);
 }
 function canStartRaid(userId, cost = 10) {
     return (0, utils_1.canAffordTokens)(userId, cost);

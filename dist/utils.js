@@ -3,10 +3,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PMC_LEVEL_THRESHOLDS = exports.PMC_TIER_MILESTONES = exports.PMC_LEVEL_CAP = exports.XP_LEVEL_THRESHOLDS = exports.points = exports.GAME_STAT_KEYS = void 0;
+exports.PMC_LEVEL_THRESHOLDS = exports.PMC_PRESTIGE_TIERS = exports.PMC_TIER_MILESTONES = exports.PMC_PRESTIGE_CAP = exports.PMC_PRESTIGE_LEVEL_REQUIREMENT = exports.PMC_LEVEL_CAP = exports.XP_LEVEL_THRESHOLDS = exports.points = exports.GAME_STAT_KEYS = void 0;
 exports.savePoints = savePoints;
 exports.getXpPersistenceSnapshot = getXpPersistenceSnapshot;
 exports.ensureUser = ensureUser;
+exports.getMapReputationEntry = getMapReputationEntry;
+exports.recordMapReputation = recordMapReputation;
 exports.getPoints = getPoints;
 exports.addPoints = addPoints;
 exports.getTokens = getTokens;
@@ -21,12 +23,15 @@ exports.addXP = addXP;
 exports.getXPLevel = getXPLevel;
 exports.formatProgressPercent = formatProgressPercent;
 exports.xpBar = xpBar;
+exports.getPmcPrestigeTier = getPmcPrestigeTier;
+exports.getPmcPrestigeBonuses = getPmcPrestigeBonuses;
 exports.getPmcTierForLevel = getPmcTierForLevel;
 exports.getPmcLevel = getPmcLevel;
 exports.getPmcProgress = getPmcProgress;
 exports.pmcBar = pmcBar;
 exports.getPmcBuffs = getPmcBuffs;
 exports.getPmcBuffsForXP = getPmcBuffsForXP;
+exports.performPmcPrestige = performPmcPrestige;
 exports.getRandomInt = getRandomInt;
 exports.getInventoryCount = getInventoryCount;
 exports.addInventoryItem = addInventoryItem;
@@ -41,7 +46,7 @@ exports.GAME_STAT_KEYS = [
     "roulette",
     "blackjack",
     "crash",
-    "slots",
+    "magicslots",
     "coinflip",
     "baccarat",
     "hilo",
@@ -72,9 +77,14 @@ const anomalyLogFile = path_1.default.resolve(__dirname, "../src/data/anomalies.
 const TOKEN_SPIKE_THRESHOLD = Math.max(1, Number(process.env.TOKEN_SPIKE_THRESHOLD || 25000));
 const XP_SPIKE_THRESHOLD = Math.max(1, Number(process.env.XP_SPIKE_THRESHOLD || 5000));
 const ANOMALY_COOLDOWN_MS = Math.max(5000, Number(process.env.ANOMALY_COOLDOWN_MS || 60000));
+const ANOMALY_RETENTION_MS = Math.max(60 * 60 * 1000, ANOMALY_COOLDOWN_MS * 8);
 const anomalyLastLogged = new Map();
 function shouldLogAnomaly(key) {
     const now = Date.now();
+    for (const [entryKey, ts] of anomalyLastLogged.entries()) {
+        if (now - ts > ANOMALY_RETENTION_MS)
+            anomalyLastLogged.delete(entryKey);
+    }
     const last = anomalyLastLogged.get(key) || 0;
     if (now - last < ANOMALY_COOLDOWN_MS)
         return false;
@@ -100,6 +110,7 @@ function defaultUserState() {
         pmcRaids: 0,
         pmcRaidWins: 0,
         pmcBossKills: 0,
+        pmcPrestige: 0,
         lastXP: 0,
         prestige: 0,
         lastDaily: 0,
@@ -110,6 +121,7 @@ function defaultUserState() {
         bankTokens: 0,
         bankUpdatedAt: Date.now(),
         selectedCharacter: null,
+        mapReputation: {},
         raidHistory: [],
         lastRaid: 0,
         inventory: {},
@@ -232,6 +244,8 @@ function ensureUser(userId) {
         user.pmcRaidWins = 0;
     if (user.pmcBossKills === undefined)
         user.pmcBossKills = 0;
+    if (user.pmcPrestige === undefined)
+        user.pmcPrestige = 0;
     if (user.lastXP === undefined)
         user.lastXP = 0;
     if (user.prestige === undefined)
@@ -252,6 +266,8 @@ function ensureUser(userId) {
         user.bankUpdatedAt = Date.now();
     if (user.selectedCharacter === undefined)
         user.selectedCharacter = null;
+    if (!user.mapReputation || typeof user.mapReputation !== "object")
+        user.mapReputation = {};
     if (!Array.isArray(user.raidHistory))
         user.raidHistory = [];
     if (user.lastRaid === undefined)
@@ -284,6 +300,34 @@ function ensureUser(userId) {
     }
     exports.points[userId] = user;
     return exports.points[userId];
+}
+function getMapReputationEntry(userId, mapKey) {
+    const user = ensureUser(userId);
+    const existing = user.mapReputation[mapKey];
+    const normalized = {
+        points: Math.max(0, Math.floor(existing?.points || 0)),
+        raids: Math.max(0, Math.floor(existing?.raids || 0)),
+        extracts: Math.max(0, Math.floor(existing?.extracts || 0)),
+        bossEncounters: Math.max(0, Math.floor(existing?.bossEncounters || 0)),
+        bossKills: Math.max(0, Math.floor(existing?.bossKills || 0)),
+        lastRaidAt: Math.max(0, Math.floor(existing?.lastRaidAt || 0))
+    };
+    user.mapReputation[mapKey] = normalized;
+    return normalized;
+}
+function recordMapReputation(input) {
+    const entry = getMapReputationEntry(input.userId, input.mapKey);
+    const beforePoints = entry.points;
+    entry.points += Math.max(0, Math.floor(input.points || 0));
+    entry.raids += 1;
+    if (input.success)
+        entry.extracts += 1;
+    if (input.bossSpawned)
+        entry.bossEncounters += 1;
+    if (input.bossDefeated)
+        entry.bossKills += 1;
+    entry.lastRaidAt = Math.max(entry.lastRaidAt, Math.floor(input.timestamp || 0));
+    return { beforePoints, entry };
 }
 function getPoints(userId) {
     return ensureUser(userId).modPoints;
@@ -452,14 +496,48 @@ function xpBar(xp) {
     const emptySlots = "⬜".repeat(width - filled);
     return `${solidGreen}${emptySlots} ${formatProgressPercent(ratio)}`;
 }
-exports.PMC_LEVEL_CAP = 20000;
+exports.PMC_LEVEL_CAP = 50000;
+exports.PMC_PRESTIGE_LEVEL_REQUIREMENT = 20000;
+exports.PMC_PRESTIGE_CAP = 10;
 exports.PMC_TIER_MILESTONES = [
     { level: 1000, badge: "🛡️", label: "Iron Vanguard", bonusScalar: 0.004 },
     { level: 4000, badge: "⚔️", label: "Steel Warlord", bonusScalar: 0.009 },
     { level: 8000, badge: "👑", label: "Apex Sovereign", bonusScalar: 0.015 },
     { level: 12000, badge: "🔥", label: "Cataclysm Marshal", bonusScalar: 0.023 },
-    { level: 20000, badge: "🌌", label: "Mythic Overlord", bonusScalar: 0.034 }
+    { level: 20000, badge: "🌌", label: "Mythic Overlord", bonusScalar: 0.034 },
+    { level: 25000, badge: "🌀", label: "Void Commander", bonusScalar: 0.039 },
+    { level: 30000, badge: "💠", label: "Rift General", bonusScalar: 0.044 },
+    { level: 35000, badge: "🗿", label: "Eternal Warden", bonusScalar: 0.049 },
+    { level: 40000, badge: "☄️", label: "Astral Conqueror", bonusScalar: 0.054 },
+    { level: 45000, badge: "🔱", label: "Paragon Prime", bonusScalar: 0.059 },
+    { level: 50000, badge: "✨", label: "Ascendant Legend", bonusScalar: 0.064 }
 ];
+exports.PMC_PRESTIGE_TIERS = [
+    { rank: 0, numeral: "0", label: "Unprestiged", badge: "🪖" },
+    { rank: 1, numeral: "I", label: "Veteran", badge: "🎖️" },
+    { rank: 2, numeral: "II", label: "Elite Veteran", badge: "⚔️" },
+    { rank: 3, numeral: "III", label: "Vanguard", badge: "🛡️" },
+    { rank: 4, numeral: "IV", label: "Warlord", badge: "🔥" },
+    { rank: 5, numeral: "V", label: "Mythic", badge: "💎" },
+    { rank: 6, numeral: "VI", label: "Voidforged", badge: "🌀" },
+    { rank: 7, numeral: "VII", label: "Star Marshal", badge: "☄️" },
+    { rank: 8, numeral: "VIII", label: "Eternal", badge: "🌠" },
+    { rank: 9, numeral: "IX", label: "Transcendent", badge: "🔱" },
+    { rank: 10, numeral: "X", label: "Celestial", badge: "🌌" }
+];
+function getPmcPrestigeTier(prestige) {
+    const rank = Math.max(0, Math.min(exports.PMC_PRESTIGE_CAP, Math.floor(prestige || 0)));
+    return exports.PMC_PRESTIGE_TIERS[rank] || exports.PMC_PRESTIGE_TIERS[0];
+}
+function getPmcPrestigeBonuses(prestige) {
+    const rank = getPmcPrestigeTier(prestige).rank;
+    return {
+        successBonus: rank * 0.0015,
+        tokenBonus: rank * 0.003,
+        defenseBonus: rank * 0.002,
+        xpBonus: rank * 0.015
+    };
+}
 exports.PMC_LEVEL_THRESHOLDS = (() => {
     const thresholds = [];
     let total = 0;
@@ -469,7 +547,10 @@ exports.PMC_LEVEL_THRESHOLDS = (() => {
             + (level > 4000 ? 1800 + Math.floor(Math.pow(level - 4000, 1.14) * 3.9) : 0)
             + (level > 8000 ? 4200 + Math.floor(Math.pow(level - 8000, 1.22) * 6.6) : 0)
             + (level > 12000 ? 7000 + Math.floor(Math.pow(level - 12000, 1.28) * 8.2) : 0);
-        const requirement = scaledCore + tierPressure;
+        const overlevel = Math.max(0, level - exports.PMC_PRESTIGE_LEVEL_REQUIREMENT);
+        const requirement = overlevel > 0
+            ? 250000 + (overlevel * 25)
+            : scaledCore + tierPressure;
         total += requirement;
         thresholds.push(total);
     }
@@ -522,22 +603,38 @@ function pmcBar(pmcXP) {
     const open = "⬛".repeat(Math.max(0, width - filled));
     return `${solid}${open} ${p.progressPct}%`;
 }
-function getPmcBuffs(level) {
+function getPmcBuffs(level, prestige = 0) {
     const lv = Math.max(0, Math.min(exports.PMC_LEVEL_CAP, Math.floor(level)));
-    const progress = Math.max(0, Math.min(1, lv / exports.PMC_LEVEL_CAP));
+    const progress = Math.max(0, Math.min(1, lv / exports.PMC_PRESTIGE_LEVEL_REQUIREMENT));
     const progressionScale = Math.pow(progress, 0.74);
     const tier = getPmcTierForLevel(lv);
     const tierBonus = tier?.bonusScalar || 0;
+    const prestigeBonuses = getPmcPrestigeBonuses(prestige);
     return {
-        // Buffs stay moderate but meaningful across long progression.
-        successBonus: Math.min(0.13, (0.052 * progressionScale) + tierBonus),
-        tokenBonus: Math.min(0.11, (0.044 * progressionScale) + (tierBonus * 0.9)),
-        defenseBonus: Math.min(0.095, (0.04 * progressionScale) + (tierBonus * 0.85)),
-        xpBonus: Math.min(0.12, (0.048 * progressionScale) + (tierBonus * 0.75))
+        successBonus: Math.min(0.15, (0.052 * progressionScale) + tierBonus + prestigeBonuses.successBonus),
+        tokenBonus: Math.min(0.15, (0.044 * progressionScale) + (tierBonus * 0.9) + prestigeBonuses.tokenBonus),
+        defenseBonus: Math.min(0.125, (0.04 * progressionScale) + (tierBonus * 0.85) + prestigeBonuses.defenseBonus),
+        xpBonus: Math.min(0.3, (0.048 * progressionScale) + (tierBonus * 0.75) + prestigeBonuses.xpBonus)
     };
 }
-function getPmcBuffsForXP(pmcXP) {
-    return getPmcBuffs(getPmcLevel(pmcXP));
+function getPmcBuffsForXP(pmcXP, prestige = 0) {
+    return getPmcBuffs(getPmcLevel(pmcXP), prestige);
+}
+function performPmcPrestige(userId) {
+    const user = ensureUser(userId);
+    const currentPrestige = Math.max(0, Math.floor(user.pmcPrestige || 0));
+    if (currentPrestige >= exports.PMC_PRESTIGE_CAP)
+        return { error: "Maximum PMC Prestige X has already been achieved." };
+    if (getPmcLevel(user.pmcXP) < exports.PMC_PRESTIGE_LEVEL_REQUIREMENT) {
+        return { error: `PMC Level ${exports.PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} is required to prestige.` };
+    }
+    user.pmcPrestige = currentPrestige + 1;
+    user.pmcXP = 0;
+    user.rxp = 0;
+    const tier = getPmcPrestigeTier(user.pmcPrestige);
+    user.achievements.push(`${tier.badge} PMC Prestige ${tier.numeral}: ${tier.label}`);
+    savePoints();
+    return { prestige: user.pmcPrestige, tier };
 }
 function getRandomInt(min, max) {
     const lo = Math.ceil(min);

@@ -177,7 +177,8 @@ function rollRaidLoot(input) {
         : tuning.failureBaseRolls;
     const bonusDifficultyRolls = success ? Math.max(0, Math.floor((effectiveScalar - 1) * 1.5)) : 0;
     const failureCompensationRoll = !success && tension === "high" && Math.random() < 0.2 ? 1 : 0;
-    const totalRollCount = Math.max(1, rollCount + bonusDifficultyRolls + failureCompensationRoll + (bossDefeated ? 1 : 0));
+    const tacticalBonusRolls = Math.max(0, Math.min(2, Math.floor(input.bonusRolls || 0)));
+    const totalRollCount = Math.max(1, rollCount + bonusDifficultyRolls + failureCompensationRoll + tacticalBonusRolls + (bossDefeated ? 1 : 0));
     const commonPool = [
         { id: "rusted_dogtag", weight: 22 },
         { id: "rare_material_small", weight: 28 + mapCfg.resourceChanceBonus * 100 },

@@ -1,4 +1,5 @@
 import {
+    getBossCombatModifiers,
     getBossRotationTable,
     mapProjection,
     RAID_APPROACHES,
@@ -50,7 +51,8 @@ function simulateMap(mapCfg: RaidMapConfig, tension: Tension, approach: (typeof 
         let bossTokenBonus = 0;
         if (bossSpawned && success) {
             const boss = bossRotation[Math.floor(Math.random() * bossRotation.length)].boss;
-            const bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + (tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0) + approach.bossKillDelta - mapCfg.bossKillPenalty - mapCfg.bossRaidPressure - boss.killPenalty - boss.raidPressure));
+            const bossCombat = getBossCombatModifiers(boss.name, approach.key);
+            const bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + (tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0) + approach.bossKillDelta + bossCombat.counterBonus - mapCfg.bossKillPenalty - mapCfg.bossRaidPressure - boss.killPenalty - boss.raidPressure - bossCombat.killPenalty));
             const bossDefeated = Math.random() < bossKillChance;
             if (bossDefeated) {
                 bossKills += 1;
@@ -60,7 +62,8 @@ function simulateMap(mapCfg: RaidMapConfig, tension: Tension, approach: (typeof 
                     mapDifficulty: mapCfg.difficulty,
                     bossFerocity: boss.ferocity,
                     bonusXpRange: boss.bonusXpRange,
-                    tokenRewardRange: boss.tokenRewardRange
+                    tokenRewardRange: boss.tokenRewardRange,
+                    combatRewardMultiplier: bossCombat.rewardMultiplier
                 });
                 bossBonusXp = bossRewards.bossBonusXp;
                 bossTokenBonus = bossRewards.bossTokenBonus;
@@ -94,7 +97,7 @@ function main() {
     const tensions: Tension[] = ["low", "medium", "high"];
     const approaches = Object.values(RAID_APPROACHES);
 
-    console.log(`Titan Raid Balance Simulator | iterations=${iterations} | bet=${bet}`);
+    console.log(`Titan Raid Balance Simulator | iterations=${iterations} | bet=${bet} | reputation=Unproven`);
     for (const mapCfg of Object.values(RAID_MAPS)) {
         console.log(`\n=== ${mapCfg.label} (${mapCfg.difficulty}) ===`);
         for (const approach of approaches) {
