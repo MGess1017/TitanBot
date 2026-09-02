@@ -53,6 +53,10 @@ export type TicketRecord = {
     internalNotes?: Array<{ byId: string; at: number; note: string }>;
     csat?: { rating: number; submittedAt: number; submittedById: string; comment?: string } | null;
     slaPolicy?: { name: string; firstResponseMs: number; resolveMs: number };
+    watchers?: string[];
+    events?: Array<{ at: number; actorId: string; type: string; detail: string }>;
+    slaPausedAt?: number | null;
+    slaPausedMs?: number;
 };
 
 export type TicketStoreState = {
@@ -72,6 +76,10 @@ function cloneTicket(ticket: TicketRecord): TicketRecord {
 
 function restoreTicket(target: TicketRecord, snapshot: TicketRecord): void {
     Object.assign(target, snapshot);
+}
+
+function recordEvent(ticket: TicketRecord, actorId: string, type: string, detail: string): void {
+    ticket.events = [...(ticket.events || []), { at: Date.now(), actorId, type, detail }].slice(-100);
 }
 
 export function normalizeTicketStatus(status: unknown): TicketStatus {
@@ -156,6 +164,10 @@ export function createTicketEntry(
         reopenUntilAt: null,
         reopenedCount: 0,
         internalNotes: [],
+        watchers: [],
+        events: [{ at: Date.now(), actorId: ownerId, type: "created", detail: "Ticket created" }],
+        slaPausedAt: null,
+        slaPausedMs: 0,
         csat: null
     };
 
@@ -180,6 +192,7 @@ export function archiveTicketByChannel(tickets: TicketRecord[], channelId: strin
     ticket.archivedAt = Date.now();
     ticket.closedReason = closeReason;
     ticket.updatedAt = Date.now();
+    recordEvent(ticket, closeReason || "system", "archived", closeReason || "Ticket archived");
 
     if (save()) {
         return ticket;
@@ -201,6 +214,7 @@ export function claimTicketByChannel(tickets: TicketRecord[], channelId: string,
     if (!ticket.assignedToId) ticket.assignedToId = claimedById;
     if (!ticket.firstResponseAt) ticket.firstResponseAt = Date.now();
     ticket.updatedAt = Date.now();
+    recordEvent(ticket, claimedById, "claimed", `Ticket claimed by ${claimedById}.`);
 
     if (save()) {
         return ticket;
@@ -228,6 +242,7 @@ export function resolveTicketByChannel(
     ticket.resolvedReason = resolvedReason;
     ticket.transcript = transcript;
     ticket.updatedAt = Date.now();
+    recordEvent(ticket, resolvedReason || "system", "resolved", resolvedReason || "Ticket resolved");
 
     if (save()) {
         return ticket;
@@ -250,8 +265,14 @@ export function setTicketWorkflowStatus(
 
     const snapshot = cloneTicket(ticket);
     ticket.workflowStatus = workflowStatus;
+    if (workflowStatus === "waiting_user" && !ticket.slaPausedAt) ticket.slaPausedAt = Date.now();
+    if (workflowStatus !== "waiting_user" && ticket.slaPausedAt) {
+        ticket.slaPausedMs = Math.max(0, (ticket.slaPausedMs || 0) + Date.now() - ticket.slaPausedAt);
+        ticket.slaPausedAt = null;
+    }
     if (workflowStatus === "responded" && !ticket.firstResponseAt) ticket.firstResponseAt = Date.now();
     ticket.updatedAt = Date.now();
+    recordEvent(ticket, "system", "workflow_changed", `Workflow changed to ${workflowStatus}.`);
 
     if (save()) {
         return ticket;
@@ -274,6 +295,7 @@ export function assignTicketToUser(tickets: TicketRecord[], channelId: string, a
     ticket.workflowStatus = "responded";
     if (!ticket.firstResponseAt) ticket.firstResponseAt = Date.now();
     ticket.updatedAt = Date.now();
+    recordEvent(ticket, assigneeId, "assigned", `Ticket assigned to ${assigneeId}.`);
 
     if (save()) {
         return ticket;
@@ -284,12 +306,14 @@ export function assignTicketToUser(tickets: TicketRecord[], channelId: string, a
 }
 
 export function getTicketSlaState(
-    ticket: Pick<TicketRecord, "firstResponseAt" | "createdAt" | "status">,
+    ticket: Pick<TicketRecord, "firstResponseAt" | "createdAt" | "status" | "workflowStatus" | "slaPausedAt" | "slaPausedMs">,
     now = Date.now(),
     thresholds: TicketSlaThresholdsMs = TICKET_SLA_THRESHOLDS_MS
 ): { firstResponseOverdue: boolean; resolveOverdue: boolean } {
-    const firstResponseOverdue = !ticket.firstResponseAt && now - ticket.createdAt > thresholds.firstResponseBreachMs;
-    const resolveOverdue = normalizeTicketStatus(ticket.status) !== "resolved" && now - ticket.createdAt > thresholds.resolveBreachMs;
+    const pausedMs = Math.max(0, ticket.slaPausedMs || 0) + (ticket.workflowStatus === "waiting_user" && ticket.slaPausedAt ? Math.max(0, now - ticket.slaPausedAt) : 0);
+    const effectiveAge = Math.max(0, now - ticket.createdAt - pausedMs);
+    const firstResponseOverdue = !ticket.firstResponseAt && effectiveAge > thresholds.firstResponseBreachMs;
+    const resolveOverdue = normalizeTicketStatus(ticket.status) !== "resolved" && effectiveAge > thresholds.resolveBreachMs;
     return { firstResponseOverdue, resolveOverdue };
 }
 
@@ -333,6 +357,7 @@ export function reopenTicketByChannel(
     ticket.resolvedReason = null;
     ticket.reopenedCount = (ticket.reopenedCount || 0) + 1;
     ticket.updatedAt = Date.now();
+    recordEvent(ticket, reopenedById, "reopened", reopenReason || "Ticket reopened.");
 
     if (save()) {
         return ticket;

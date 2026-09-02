@@ -115,6 +115,7 @@ import { handleCoreCommand } from "./commands/coreCommands";
 import { buildSlashCommands } from "./commands/slashCatalog";
 import { buildStartupSummary, buildStatusLines } from "./runtime/health";
 import { rejectIfRateLimited } from "./runtime/rateLimit";
+import { sanitizeTranscriptLine } from "./services/ticketText";
 import {
     archiveTicketByChannel as stateArchiveTicketByChannel,
     assignTicketToUser as stateAssignTicketToUser,
@@ -2062,6 +2063,10 @@ type TicketRowLike = {
     reopenUntilAt?: unknown;
     reopenedCount?: unknown;
     internalNotes?: unknown;
+    watchers?: unknown;
+    events?: unknown;
+    slaPausedAt?: unknown;
+    slaPausedMs?: unknown;
     csat?: unknown;
     slaPolicy?: unknown;
 };
@@ -2173,6 +2178,13 @@ function normalizeTicketFromRaw(ticketRaw: TicketRowLike): TicketEntry | null {
         reopenUntilAt: typeof ticketRaw.reopenUntilAt === "number" ? ticketRaw.reopenUntilAt : null,
         reopenedCount: typeof ticketRaw.reopenedCount === "number" ? ticketRaw.reopenedCount : 0,
         internalNotes,
+        watchers: Array.isArray(ticketRaw.watchers) ? ticketRaw.watchers.map(id => String(id)).filter(Boolean).slice(0, 25) : [],
+        events: Array.isArray(ticketRaw.events) ? ticketRaw.events.map(event => {
+            const entry = event as Record<string, unknown>;
+            return { at: typeof entry.at === "number" ? entry.at : Date.now(), actorId: String(entry.actorId || "unknown"), type: String(entry.type || "update").slice(0, 40), detail: String(entry.detail || "").slice(0, 300) };
+        }).filter(event => event.detail).slice(-100) : [],
+        slaPausedAt: typeof ticketRaw.slaPausedAt === "number" ? ticketRaw.slaPausedAt : null,
+        slaPausedMs: typeof ticketRaw.slaPausedMs === "number" ? Math.max(0, ticketRaw.slaPausedMs) : 0,
         csat,
         slaPolicy: {
             name: typeof rawSla?.name === "string" ? rawSla.name : derivedPolicy.name,
@@ -2209,6 +2221,38 @@ function readTicketStore(): TicketStore {
 }
 
 const ticketStore = readTicketStore();
+
+const TICKET_RESPONSE_TEMPLATES: Record<string, string> = {
+    ack: "Thanks for the detailed report. A handler has been notified and will review the case shortly.",
+    evidence: "Please provide the relevant screenshots, logs, timestamps, or message links so we can continue the investigation.",
+    resolved: "This case has been resolved. Reply within the reopen window if the issue persists."
+};
+const TICKET_TEMPLATE_IDS = {
+    ack: "ticket_template_ack",
+    evidence: "ticket_template_evidence",
+    resolved: "ticket_template_resolved"
+} as const;
+
+function recordTicketEvent(ticket: TicketEntry, actorId: string, type: string, detail: string): void {
+    const event = { at: Date.now(), actorId, type: type.slice(0, 40), detail: detail.slice(0, 300) };
+    ticket.events = [...(ticket.events || []), event].slice(-100);
+    void notifyTicketWatchers(ticket, event);
+}
+
+async function notifyTicketWatchers(ticket: TicketEntry, event: { at: number; actorId: string; type: string; detail: string }): Promise<void> {
+    for (const watcherId of ticket.watchers || []) {
+        if (watcherId === event.actorId) continue;
+        const watcher = await client.users.fetch(watcherId).catch(() => null);
+        if (!watcher) continue;
+        await watcher.send(`Ticket #${ticket.id} update: ${event.type}\n${event.detail}`).catch(() => undefined);
+    }
+}
+
+function addTicketWatcher(ticket: TicketEntry, watcherId: string): boolean {
+    ticket.watchers = Array.from(new Set([...(ticket.watchers || []), watcherId])).slice(0, 25);
+    recordTicketEvent(ticket, watcherId, "watcher_added", `Watcher <@${watcherId}> subscribed to this ticket.`);
+    return saveTicketStore();
+}
 
 function readDiskTicketStoreVersion(): number | null {
     if (!fs.existsSync(TICKET_DATA_FILE)) return null;
@@ -2640,7 +2684,7 @@ function buildTicketCsatButtons(ticketId: number): ActionRowBuilder<ButtonBuilde
 
 function addTicketInternalNote(ticket: TicketEntry, note: TicketNote): boolean {
     if (!ticket.internalNotes) ticket.internalNotes = [];
-    ticket.internalNotes.push({ ...note, note: note.note.slice(0, 500) });
+    ticket.internalNotes.push({ ...note, note: sanitizeTranscriptLine(note.note).slice(0, 500) });
     ticket.updatedAt = Date.now();
     return saveTicketStore();
 }
@@ -3422,6 +3466,7 @@ const TICKET_IDS = {
     claim: "ticket_claim",
     close: "ticket_close",
     resolve: "ticket_resolve",
+    watch: "ticket_watch",
     intakeModal: "ticket_intake_modal",
     intakeCategory: "ticket_intake_category",
     intakeSummary: "ticket_intake_summary",
@@ -4196,8 +4241,36 @@ async function runTicketSlaWatchdog(guild: Guild, reason: string): Promise<void>
 
     for (const ticket of activeTickets) {
         const status = normalizeTicketStatus(ticket.status);
+        const thresholds = buildTicketSlaThresholds(ticket);
+        const age = now - ticket.createdAt;
+        const firstResponseWarned = (ticket.events || []).some(event => event.type === "sla_first_response_warning");
+        const firstResponseBreached = (ticket.events || []).some(event => event.type === "sla_first_response_breach");
+        const resolveWarned = (ticket.events || []).some(event => event.type === "sla_resolution_warning");
+        const resolveBreached = (ticket.events || []).some(event => event.type === "sla_resolution_breach");
 
-        // SLA alerts are disabled. Instead, auto-close stale unclaimed tickets.
+        if (!ticket.firstResponseAt && age >= thresholds.firstResponseWarnMs && !firstResponseWarned) {
+            recordTicketEvent(ticket, guild.members.me?.id || guild.ownerId, "sla_first_response_warning", "First-response SLA warning issued.");
+            await ticketChannelNotice(guild, ticket, `SLA warning: first response target is approaching for ticket #${ticket.id}.`);
+            saveTicketStore();
+        }
+        if (!ticket.firstResponseAt && age >= thresholds.firstResponseBreachMs && !firstResponseBreached) {
+            ticket.workflowStatus = "escalated";
+            recordTicketEvent(ticket, guild.members.me?.id || guild.ownerId, "sla_first_response_breach", "First-response SLA breached; ticket escalated.");
+            await ticketChannelNotice(guild, ticket, `SLA breach: ticket #${ticket.id} has been escalated to senior support.`);
+            saveTicketStore();
+        }
+        if (status !== "resolved" && age >= thresholds.resolveWarnMs && !resolveWarned) {
+            recordTicketEvent(ticket, guild.members.me?.id || guild.ownerId, "sla_resolution_warning", "Resolution SLA warning issued.");
+            await ticketChannelNotice(guild, ticket, `SLA warning: resolution target is approaching for ticket #${ticket.id}.`);
+            saveTicketStore();
+        }
+        if (status !== "resolved" && age >= thresholds.resolveBreachMs && !resolveBreached) {
+            ticket.workflowStatus = "escalated";
+            recordTicketEvent(ticket, guild.members.me?.id || guild.ownerId, "sla_resolution_breach", "Resolution SLA breached; ticket escalated.");
+            await ticketChannelNotice(guild, ticket, `SLA breach: ticket #${ticket.id} requires senior escalation.`);
+            saveTicketStore();
+        }
+
         if (status === "open" && !ticket.claimedById && now - ticket.createdAt >= UNCLAIMED_TICKET_AUTO_CLOSE_MS) {
             const closedById = guild.members.me?.id || guild.ownerId;
             await closeTicketChannel(guild, ticket.channelId, closedById, "Auto-closed: ticket was not claimed within 30 minutes.");
@@ -4212,6 +4285,11 @@ async function runTicketSlaWatchdog(guild: Guild, reason: string): Promise<void>
             });
         }
     }
+}
+
+async function ticketChannelNotice(guild: Guild, ticket: TicketEntry, message: string): Promise<void> {
+    const channel = guild.channels.cache.get(ticket.channelId);
+    if (channel?.type === ChannelType.GuildText) await channel.send({ content: message, allowedMentions: { parse: [] } }).catch(() => undefined);
 }
 
 async function resolveXpRoleLines(guild?: Guild | null): Promise<string[]> {
@@ -8379,9 +8457,19 @@ async function createTicketChannel(guild: Guild, ownerId: string, reason: string
             .setCustomId(TICKET_IDS.resolve)
             .setLabel("Resolve Permanently")
             .setEmoji("✅")
-            .setStyle(ButtonStyle.Success)
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId(TICKET_IDS.watch)
+            .setLabel("Watch")
+            .setEmoji("👁️")
+            .setStyle(ButtonStyle.Primary)
     );
-    const panelMessage = await created.send({ content: `<@&${TICKET_HANDLER_ROLE_ID}> <@${owner.id}>`, embeds: [intro], components: [row], allowedMentions: { parse: ["roles", "users"] } }).catch(() => null);
+    const templateRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.ack).setLabel("Ack Template").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.evidence).setLabel("Evidence Template").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.resolved).setLabel("Resolved Template").setStyle(ButtonStyle.Success)
+    );
+    const panelMessage = await created.send({ content: `<@&${TICKET_HANDLER_ROLE_ID}> <@${owner.id}>`, embeds: [intro], components: [row, templateRow], allowedMentions: { parse: ["roles", "users"] } }).catch(() => null);
     if (panelMessage) {
         setTicketPanelMessageId(ticket.channelId, panelMessage.id);
     }
@@ -9954,7 +10042,13 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const adminError = requireAdministrator(interaction);
         if (adminError) return adminError;
         const guild = interaction.guild!;
-        const active = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id && ticket.status !== "resolved");
+        const statusFilter = interaction.options.getString("status");
+        const priorityFilter = interaction.options.getString("priority");
+        const categoryFilter = interaction.options.getString("category");
+        const active = ticketStore.tickets.filter(ticket => ticket.guildId === guild.id && ticket.status !== "resolved")
+            .filter(ticket => !statusFilter || ticket.workflowStatus === statusFilter)
+            .filter(ticket => !priorityFilter || ticket.priority === priorityFilter)
+            .filter(ticket => !categoryFilter || ticket.category === categoryFilter);
         const byAssignee = new Map<string, number>();
         for (const ticket of active) {
             const assignee = ticket.assignedToId || ticket.claimedById || "unassigned";
@@ -10008,6 +10102,8 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const ticket = await ensureTrackedTicketByChannelId(interaction.guild!, target.channelId, interaction.user.id);
         if (!ticket) return "Ticket not found for this channel.";
         const notes = (ticket.internalNotes || []).slice(-10).map(note => `• <t:${Math.floor(note.at / 1000)}:f> <@${note.byId}>: ${note.note}`);
+        const events = (ticket.events || []).slice(-10).map(event => `• <t:${Math.floor(event.at / 1000)}:f> ${event.type}: ${event.detail}`);
+        const templates = Object.entries(TICKET_RESPONSE_TEMPLATES).map(([key, text]) => `• ${key}: ${text}`);
         const meta = [
             `Ticket #${ticket.id}`,
             `Status: ${ticket.status}/${ticket.workflowStatus}`,
@@ -10015,7 +10111,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             `Parent: ${ticket.parentTicketId ? `#${ticket.parentTicketId}` : "none"}`,
             `Linked: ${ticket.linkedTicketId ? `#${ticket.linkedTicketId}` : "none"}`
         ];
-        return `${meta.join("\n")}\n\nNotes:\n${notes.length ? notes.join("\n") : "No internal notes yet."}`;
+        return `${meta.join("\n")}\n\nTimeline:\n${events.length ? events.join("\n") : "No timeline events yet."}\n\nNotes:\n${notes.length ? notes.join("\n") : "No internal notes yet."}\n\nSaved Responses:\n${templates.join("\n")}`;
     },
     ticketmerge: async interaction => {
         const guildError = requireGuild(interaction);
@@ -10074,7 +10170,15 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         if (!resolved.length) return "No resolved tickets available for export.";
         let sent = 0;
         for (const ticket of resolved) {
-            const ok = await postJsonToWebhook(sink, { type: "ticket_export", guildId: guild.id, ticket });
+            const safeTicket = {
+                ...ticket,
+                reason: sanitizeTranscriptLine(ticket.reason),
+                intakeSummary: ticket.intakeSummary ? sanitizeTranscriptLine(ticket.intakeSummary) : ticket.intakeSummary,
+                intakeDetails: ticket.intakeDetails ? sanitizeTranscriptLine(ticket.intakeDetails) : ticket.intakeDetails,
+                intakeEvidence: ticket.intakeEvidence ? sanitizeTranscriptLine(ticket.intakeEvidence) : ticket.intakeEvidence,
+                internalNotes: (ticket.internalNotes || []).map(note => ({ ...note, note: sanitizeTranscriptLine(note.note) }))
+            };
+            const ok = await postJsonToWebhook(sink, { type: "ticket_export", guildId: guild.id, ticket: safeTicket });
             if (ok) sent += 1;
         }
         appendAuditEvent("ticket_export_batch", { guildId: guild.id, requested: limit, sent, total: resolved.length });
@@ -10884,6 +10988,11 @@ client.on("interactionCreate", async interaction => {
         const details = interaction.fields.getTextInputValue(TICKET_IDS.intakeDetails) || "";
         const platform = interaction.fields.getTextInputValue(TICKET_IDS.intakePlatform) || "";
         const evidence = interaction.fields.getTextInputValue(TICKET_IDS.intakeEvidence) || "";
+        const intakeCategory = classifyTicketCategory(category);
+        if (["report", "appeal", "billing"].includes(intakeCategory) && !evidence.trim()) {
+            await interaction.reply({ content: `Evidence links are required for ${intakeCategory} intake. Please reopen the form and include screenshots, logs, or relevant links.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
         const reason = buildTicketIntakeReason({ category, summary, details, platform, evidence });
         const priority = category.toLowerCase().includes("billing") ? "high" : "normal";
 
@@ -11246,6 +11355,31 @@ client.on("interactionCreate", async interaction => {
         await interaction.showModal(buildTicketIntakeModal()).catch(async () => {
             await interaction.reply({ content: "Unable to open intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
         });
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === TICKET_IDS.watch) {
+        const ticket = interaction.channelId ? findTicketByChannel(interaction.channelId) : null;
+        if (!ticket) {
+            await interaction.reply({ content: "This ticket is no longer tracked.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const saved = addTicketWatcher(ticket, interaction.user.id);
+        await interaction.reply({ content: saved ? `You are now watching ticket #${ticket.id}.` : "Unable to save watcher status. Please retry.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isButton() && Object.values(TICKET_TEMPLATE_IDS).includes(interaction.customId as typeof TICKET_TEMPLATE_IDS[keyof typeof TICKET_TEMPLATE_IDS])) {
+        const member = interaction.member as GuildMember | null;
+        if (!member || !canManageTicketActions(member)) {
+            await interaction.reply({ content: "Only support staff can use response templates.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const ticket = interaction.channelId ? findTicketByChannel(interaction.channelId) : null;
+        const templateKey = Object.entries(TICKET_TEMPLATE_IDS).find(([, id]) => id === interaction.customId)?.[0] || "ack";
+        const response = TICKET_RESPONSE_TEMPLATES[templateKey] || TICKET_RESPONSE_TEMPLATES.ack;
+        if (ticket) recordTicketEvent(ticket, interaction.user.id, "template_used", `Response template '${templateKey}' prepared.`);
+        await interaction.reply({ content: response, flags: MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
 

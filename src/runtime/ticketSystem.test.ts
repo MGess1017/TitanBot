@@ -41,6 +41,7 @@ function runTicketSystemTests(): void {
     const created = createTicketEntry(store, "g1", "u-owner", "c-1", "Need help", "normal", save);
     assert.ok(created);
     assert.equal(store.tickets.length, 1);
+    assert.equal(created?.events?.[0]?.type, "created");
     assert.equal(normalizeTicketStatus("closed"), "archived");
     assert.equal(normalizeTicketPriority("invalid"), "normal");
     assert.equal(canTransitionTicketStatus("open", "claimed"), true);
@@ -54,6 +55,7 @@ function runTicketSystemTests(): void {
     const assigned = assignTicketToUser(store.tickets, "c-1", "u-2", save);
     assert.ok(assigned);
     assert.equal(assigned?.assignedToId, "u-2");
+    assert.ok((assigned?.events || []).some(event => event.type === "assigned"));
 
     const statusSet = setTicketWorkflowStatus(store.tickets, "c-1", "waiting_user", save);
     assert.ok(statusSet);
@@ -76,6 +78,7 @@ function runTicketSystemTests(): void {
     const resolved = resolveTicketByChannel(store.tickets, "c-1", "done", { exportedAt: Date.now(), messageCountApprox: 4, firstMessageAt: null, lastMessageAt: null, channelName: "ops", transcriptFormat: "txt", transcriptPath: "x.txt" }, save);
     assert.ok(resolved);
     assert.equal(resolved?.status, "resolved");
+    assert.ok((resolved?.events || []).some(event => event.type === "resolved"));
     assert.equal(findOpenTicketByChannel(store.tickets, "c-1"), null);
 
     const strictThresholds: TicketSlaThresholdsMs = {
@@ -120,6 +123,10 @@ function runTicketSystemTests(): void {
     const overdue = getTicketSlaState(pendingTicket, now, strictThresholds);
     assert.equal(overdue.firstResponseOverdue, true);
     assert.equal(overdue.resolveOverdue, true);
+    const pausedTicket: TicketRecord = { ...pendingTicket, workflowStatus: "waiting_user", slaPausedAt: now - 20_000, slaPausedMs: 0 };
+    const pausedSla = getTicketSlaState(pausedTicket, now, strictThresholds);
+    assert.equal(pausedSla.firstResponseOverdue, false);
+    assert.equal(pausedSla.resolveOverdue, false);
 
     const failedSaveStore = makeStore();
     const saveFail = () => false;
@@ -135,6 +142,7 @@ function runTicketSystemTests(): void {
     assert.equal(rollbackStore.tickets[0].status, "open");
 
     assert.equal(sanitizeTranscriptLine("hello\nworld"), "hello world");
+    assert.equal(sanitizeTranscriptLine("Email user@example.com token=abc123 123456789012"), "Email [email redacted] token: [redacted] [number redacted]");
     assert.equal(clampTranscriptLine("x".repeat(5000)).length <= 1802, true);
     assert.ok(saveCount >= 8);
 }

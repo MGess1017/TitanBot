@@ -331,7 +331,16 @@ export function buildSlashCommands(input: {
         new SlashCommandBuilder().setName("magicslots").setDescription("Play Magic Slots: 6 reels, enchanted symbols, and ultra bonus spin chances")
             .addIntegerOption(o => o.setName("bet").setDescription("Single spin bet").setRequired(true)),
         new SlashCommandBuilder().setName("ticketworkload").setDescription("Admin: handler workload and SLA risk distribution")
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addStringOption(o => o.setName("status").setDescription("Filter workflow status").setRequired(false).addChoices(
+                { name: "new", value: "new" }, { name: "responded", value: "responded" }, { name: "waiting_user", value: "waiting_user" }, { name: "escalated", value: "escalated" }
+            ))
+            .addStringOption(o => o.setName("priority").setDescription("Filter priority").setRequired(false).addChoices(
+                { name: "low", value: "low" }, { name: "normal", value: "normal" }, { name: "high", value: "high" }
+            ))
+            .addStringOption(o => o.setName("category").setDescription("Filter category").setRequired(false).addChoices(
+                { name: "general", value: "general" }, { name: "bug", value: "bug" }, { name: "billing", value: "billing" }, { name: "appeal", value: "appeal" }, { name: "account", value: "account" }, { name: "report", value: "report" }
+            )),
         new SlashCommandBuilder().setName("ticketnote").setDescription("Add a private handler note to a ticket")
             .addStringOption(o => o.setName("note").setDescription("Private internal note").setRequired(true))
             .addChannelOption(o => o.setName("ticket_channel").setDescription("Optional ticket channel").addChannelTypes(ChannelType.GuildText).setRequired(false))
