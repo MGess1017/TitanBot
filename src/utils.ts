@@ -30,6 +30,15 @@ export type UserState = {
     gearLoadouts: Record<string, { weaponId: string | null; armorId: string | null; ammoId: string | null }>;
     ammo: Record<string, number>;
     vendorReputation: number;
+    casinoXP: number;
+    casinoStreak: number;
+    casinoBestStreak: number;
+    casinoVipLevel: number;
+    casinoDailyClaimedAt: number;
+    casinoLossDay: string;
+    casinoLossToday: number;
+    casinoJackpotContribution: number;
+    casinoAchievements: string[];
     raidHistory: Array<{
         timestamp: number;
         tension: string;
@@ -191,6 +200,15 @@ function defaultUserState(): UserState {
         gearLoadouts: {},
         ammo: {},
         vendorReputation: 0,
+        casinoXP: 0,
+        casinoStreak: 0,
+        casinoBestStreak: 0,
+        casinoVipLevel: 0,
+        casinoDailyClaimedAt: 0,
+        casinoLossDay: "",
+        casinoLossToday: 0,
+        casinoJackpotContribution: 0,
+        casinoAchievements: [],
         raidHistory: [],
         lastRaid: 0,
         inventory: {},
@@ -357,6 +375,15 @@ export function ensureUser(userId: string): UserState {
     if (!user.gearLoadouts || typeof user.gearLoadouts !== "object") user.gearLoadouts = {};
     if (!user.ammo || typeof user.ammo !== "object") user.ammo = {};
     if (user.vendorReputation === undefined) user.vendorReputation = 0;
+    if (user.casinoXP === undefined) user.casinoXP = 0;
+    if (user.casinoStreak === undefined) user.casinoStreak = 0;
+    if (user.casinoBestStreak === undefined) user.casinoBestStreak = 0;
+    if (user.casinoVipLevel === undefined) user.casinoVipLevel = Math.min(10, Math.floor(user.casinoXP / 5000));
+    if (user.casinoDailyClaimedAt === undefined) user.casinoDailyClaimedAt = 0;
+    if (user.casinoLossDay === undefined) user.casinoLossDay = "";
+    if (user.casinoLossToday === undefined) user.casinoLossToday = 0;
+    if (user.casinoJackpotContribution === undefined) user.casinoJackpotContribution = 0;
+    if (!Array.isArray(user.casinoAchievements)) user.casinoAchievements = [];
     if (!Array.isArray(user.raidHistory)) user.raidHistory = [];
     if (user.lastRaid === undefined) user.lastRaid = 0;
     if (!user.inventory || typeof user.inventory !== "object") user.inventory = {};
@@ -841,8 +868,48 @@ export function recordGameResult(
     entry.payout += cleanPayout;
     entry.net += cleanPayout - cleanBet;
     user.gameStats[game] = entry;
+    if (game !== "raid") {
+        const net = cleanPayout - cleanBet;
+        user.casinoJackpotContribution += Math.max(0, Math.floor(cleanBet * 0.01));
+        user.casinoXP += Math.max(1, Math.floor(cleanBet / 10)) + (outcome === "win" ? 8 : 0);
+        user.casinoVipLevel = Math.min(10, Math.floor(user.casinoXP / 5000));
+        if (outcome === "win") {
+            user.casinoStreak += 1;
+            user.casinoBestStreak = Math.max(user.casinoBestStreak, user.casinoStreak);
+        } else if (outcome === "loss") {
+            user.casinoStreak = 0;
+            const day = new Date().toISOString().slice(0, 10);
+            if (user.casinoLossDay !== day) {
+                user.casinoLossDay = day;
+                user.casinoLossToday = 0;
+            }
+            user.casinoLossToday += Math.max(0, -net);
+        }
+        if (entry.played === 1) user.casinoAchievements.push(`🎰 First ${game} session`);
+        if (user.casinoStreak > 0 && user.casinoStreak % 10 === 0) user.casinoAchievements.push(`🔥 Casino win streak ${user.casinoStreak}`);
+    }
     savePoints();
     return entry;
+}
+
+export function getCasinoVipTier(userId: string): { level: number; label: string; xpToNext: number } {
+    const user = ensureUser(userId);
+    const level = Math.min(10, Math.max(0, Math.floor(user.casinoVipLevel || 0)));
+    const labels = ["Visitor", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Obsidian", "Apex", "Mythic", "Royal", "House Legend"];
+    return { level, label: labels[level], xpToNext: level >= 10 ? 0 : Math.max(0, ((level + 1) * 5000) - user.casinoXP) };
+}
+
+export function claimCasinoDaily(userId: string): { error?: string; reward?: number; streak?: number } {
+    const user = ensureUser(userId);
+    const now = Date.now();
+    if (now - user.casinoDailyClaimedAt < 24 * 60 * 60 * 1000) return { error: "Daily casino reward is still recharging." };
+    user.casinoDailyClaimedAt = now;
+    user.casinoStreak += 1;
+    user.casinoBestStreak = Math.max(user.casinoBestStreak, user.casinoStreak);
+    const reward = 40 + Math.min(300, user.casinoStreak * 12) + user.casinoVipLevel * 15;
+    user.fnTokens += reward;
+    savePoints();
+    return { reward, streak: user.casinoStreak };
 }
 
 export function getGameStatsSummary(userId: string): {

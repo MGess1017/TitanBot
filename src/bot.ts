@@ -35,6 +35,7 @@ import {
     addXP,
     addTokens,
     applyPmcMilestoneRewards,
+    claimCasinoDaily,
     addInventoryItem,
     canAffordTokens,
     depositToBank,
@@ -50,6 +51,7 @@ import {
     getPmcTierForLevel,
     getBossProgressEntry,
     getGameStatsSummary,
+    getCasinoVipTier,
     type GameStatKey,
     getXpPersistenceSnapshot,
     formatProgressPercent,
@@ -3503,8 +3505,10 @@ const SELL_UI_IDS = {
 } as const;
 
 const CASINO_UI_IDS = {
-    prefix: "casino_ui"
+    prefix: "casino_ui",
+    dailyPrefix: "casino_daily"
 } as const;
+const CASINO_DAILY_LOSS_LIMIT = Math.max(100, Number(process.env.CASINO_DAILY_LOSS_LIMIT || 5000));
 
 const PMC_PRESTIGE_IDS = {
     request: "pmc_prestige_request",
@@ -6403,6 +6407,13 @@ function buildGearIntelPayload(kindRaw?: string | null, conditionRaw?: string | 
 
 function validateCasinoBet(userId: string, bet: number): string | null {
     if (bet < MIN_BET) return `Minimum bet is ${MIN_BET}.`;
+    const user = ensureUser(userId);
+    const day = new Date().toISOString().slice(0, 10);
+    if (user.casinoLossDay !== day) {
+        user.casinoLossDay = day;
+        user.casinoLossToday = 0;
+    }
+    if (user.casinoLossToday >= CASINO_DAILY_LOSS_LIMIT) return `Daily casino loss limit reached (${CASINO_DAILY_LOSS_LIMIT} FN Token$).`;
     if (!canAffordTokens(userId, bet)) return `You need at least ${bet} FN Token$.`;
     return null;
 }
@@ -6569,6 +6580,8 @@ function buildCasinoLobbyPayload(userId: string, bet: number): string {
         )).toJSON()
     );
     const profileLines = games.map(game => `${game.emoji} **${game.label}** • ${CASINO_PROFILES[game.key].rtp} • ${CASINO_PROFILES[game.key].volatility}`);
+    const vip = getCasinoVipTier(userId);
+    const dailyId = `${CASINO_UI_IDS.dailyPrefix}:${String(userId).replace(/\D/g, "")}`;
     const embed = new EmbedBuilder()
         .setColor(0xd4af37)
         .setTitle("🎰 FN Casino Floor")
@@ -6576,10 +6589,15 @@ function buildCasinoLobbyPayload(userId: string, bet: number): string {
         .addFields(
             { name: "Your Stake", value: `${formatTokenAmount(stake)}\nWallet: ${formatTokenAmount(getTokens(userId))}`, inline: true },
             { name: "Win Bonus", value: `${(STANDARD_WIN_BONUS_CHANCE * 100).toFixed(0)}% chance on standard-game wins\nBonuses only increase payouts.`, inline: true },
+            { name: "VIP & Limits", value: `VIP ${vip.level} • ${vip.label}\n${vip.xpToNext ? `${vip.xpToNext} Casino XP to next tier` : "Maximum VIP tier"}\nDaily loss limit: ${CASINO_DAILY_LOSS_LIMIT} FN Token$`, inline: true },
+            { name: "Jackpot Pool", value: "Progressive pool funded by 1% of casino wagers. Jackpot wins are rare and server-wide.", inline: true },
             { name: "Game Profiles", value: profileLines.join("\n"), inline: false }
         )
         .setFooter({ text: "Long-run return is not a guarantee for any session. Play within your wallet." });
 
+    rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(dailyId).setLabel("Claim Daily Reward").setEmoji("🎁").setStyle(ButtonStyle.Success)
+    ).toJSON());
     return JSON.stringify({ embed: embed.toJSON(), components: rows });
 }
 
@@ -11222,11 +11240,9 @@ client.on("interactionCreate", async interaction => {
             const parsedPayload = JSON.parse(actionResult.payload);
             if (parsedPayload && parsedPayload.embed) {
                 const embed = embedFromPayload(actionResult.gameKey, parsedPayload.embed, interaction.user);
-                await interaction.reply({
-                    embeds: [embed],
-                    components: Array.isArray(parsedPayload.components) ? parsedPayload.components : [],
-                    flags: MessageFlags.Ephemeral
-                }).catch(() => undefined);
+                await interaction.reply({ embeds: [embedFromText(actionResult.gameKey, "🎲 Resolving table outcome...", interaction.user)], flags: MessageFlags.Ephemeral }).catch(() => undefined);
+                await new Promise(resolve => setTimeout(resolve, 450));
+                await interaction.editReply({ embeds: [embed], components: Array.isArray(parsedPayload.components) ? parsedPayload.components : [] }).catch(() => undefined);
                 return;
             }
         } catch {
@@ -11237,6 +11253,17 @@ client.on("interactionCreate", async interaction => {
             embeds: [embedFromText(actionResult.gameKey, actionResult.payload, interaction.user)],
             flags: MessageFlags.Ephemeral
         }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(`${CASINO_UI_IDS.dailyPrefix}:`)) {
+        const ownerId = interaction.customId.split(":")[1]?.replace(/\D/g, "");
+        if (ownerId !== interaction.user.id) {
+            await interaction.reply({ content: "This daily reward belongs to another player.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const result = claimCasinoDaily(interaction.user.id);
+        await interaction.reply({ content: result.error || `Daily reward claimed: ${result.reward} FN Token$. Casino streak: ${result.streak}.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
 

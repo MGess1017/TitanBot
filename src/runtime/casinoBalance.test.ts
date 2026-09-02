@@ -14,6 +14,7 @@ import {
     STANDARD_WIN_BONUS_CHANCE,
     STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER
 } from "../game/casinoBalance";
+import { claimCasinoDaily, ensureUser, getCasinoVipTier, points, recordGameResult } from "../utils";
 
 function combination(n: number, k: number): number {
     let result = 1;
@@ -26,6 +27,29 @@ function assertFairRtp(label: string, rtp: number, low = 0.93, high = 0.98): voi
 }
 
 function runCasinoBalanceTests(): void {
+    const priorNoSave = process.env.RUNTIME_TEST_NO_POINTS_SAVE;
+    process.env.RUNTIME_TEST_NO_POINTS_SAVE = "1";
+    const testUser = "__casino_progression_test__";
+    const user = ensureUser(testUser);
+    user.fnTokens = 10000;
+    user.casinoXP = 0;
+    user.casinoVipLevel = 0;
+    user.casinoStreak = 0;
+    user.casinoDailyClaimedAt = 0;
+    user.casinoLossToday = 0;
+    recordGameResult(testUser, "dice", "win", 1000, 1900);
+    assert.equal(user.casinoStreak, 1);
+    assert.ok(user.casinoXP >= 108);
+    assert.equal(getCasinoVipTier(testUser).level, 0);
+    const daily = claimCasinoDaily(testUser);
+    assert.ok(daily.reward && daily.reward > 0);
+    assert.ok(claimCasinoDaily(testUser).error);
+    recordGameResult(testUser, "dice", "loss", 500, 0);
+    assert.equal(user.casinoLossToday, 500);
+    delete points[testUser];
+    if (typeof priorNoSave === "string") process.env.RUNTIME_TEST_NO_POINTS_SAVE = priorNoSave;
+    else delete process.env.RUNTIME_TEST_NO_POINTS_SAVE;
+
     assert.equal(Object.keys(CASINO_PROFILES).length, 9);
     assert.equal(STANDARD_WIN_BONUS_CHANCE, 0.06);
     assert.deepEqual(rollWinBonus(0.5), { multiplier: 1, label: "No bonus", triggered: false });
