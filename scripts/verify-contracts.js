@@ -4,9 +4,9 @@ const path = require("path");
 require("ts-node/register/transpile-only");
 
 const { buildSlashCommands } = require("../src/commands/slashCatalog");
-const { BOSS_HEART_DEFS, ITEM_DEFS } = require("../src/game/catalog");
-const { RAID_RESULT_ACTION_IDS } = require("../src/game/payloads");
-const { RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_MAPS, RAID_MAP_CHOICES, RAID_CONDITIONS } = require("../src/raid/domain");
+const { BOSS_HEART_DEFS, ITEM_DEFS, SHOP_ITEMS } = require("../src/game/catalog");
+const { RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } = require("../src/game/payloads");
+const { RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_MAPS, RAID_MAP_CHOICES, RAID_CONDITIONS, RARE_EXTRACTION_ROUTES } = require("../src/raid/domain");
 
 const BOT_FILE = path.resolve(__dirname, "../src/bot.ts");
 
@@ -127,6 +127,7 @@ function run() {
   const errors = [];
   const interactionIds = [
     ...parseIdObjects(source),
+    ...Object.entries(RAID_ENCOUNTER_IDS).map(([key, value]) => ({ owner: `RAID_ENCOUNTER_IDS.${key}`, value })),
     ...Object.entries(RAID_RESULT_ACTION_IDS).map(([key, value]) => ({ owner: `RAID_RESULT_ACTION_IDS.${key}`, value }))
   ];
   const interactionIdOwners = new Map();
@@ -144,11 +145,17 @@ function run() {
     ["Raid map keys", Object.keys(RAID_MAPS)],
     ["Raid approach keys", Object.keys(RAID_APPROACHES)],
     ["Raid condition keys", RAID_CONDITIONS.map(condition => condition.key)],
-    ["Raid boss names", RAID_BOSS_ROSTER.map(boss => boss.name)]
+    ["Raid boss names", RAID_BOSS_ROSTER.map(boss => boss.name)],
+    ["Rare extraction route keys", RARE_EXTRACTION_ROUTES.map(route => route.key)]
   ];
 
   for (const [label, values] of registries) {
     assertUniqueRegistry(label, values, errors);
+  }
+  for (const route of RARE_EXTRACTION_ROUTES) {
+    assert(ITEM_DEFS[route.requiredItemId]?.rarity === "mythic", `Rare route '${route.key}' requires a non-mythic or missing item: ${route.requiredItemId}`, errors);
+    assert(!SHOP_ITEMS.includes(route.requiredItemId), `Rare route artifact is purchasable: ${route.requiredItemId}`, errors);
+    assert(route.mapKeys.every(mapKey => Boolean(RAID_MAPS[mapKey])), `Rare route '${route.key}' references an unknown map.`, errors);
   }
 
   assert(commands.length > 0, "No slash commands were detected.", errors);

@@ -10,6 +10,9 @@ export type UserState = {
     pmcRaidWins: number;
     pmcBossKills: number;
     pmcPrestige: number;
+    pmcMasteryLevel: number;
+    pmcCallsign: string;
+    pmcBanner: string;
     lastXP: number;
     prestige: number;
     lastDaily: number;
@@ -21,6 +24,12 @@ export type UserState = {
     bankUpdatedAt: number;
     selectedCharacter: string | null;
     mapReputation: Record<string, MapReputationEntry>;
+    bossProgress: Record<string, BossProgressEntry>;
+    gearDurability: Record<string, number>;
+    insuredGear: Record<string, number>;
+    gearLoadouts: Record<string, { weaponId: string | null; armorId: string | null; ammoId: string | null }>;
+    ammo: Record<string, number>;
+    vendorReputation: number;
     raidHistory: Array<{
         timestamp: number;
         tension: string;
@@ -28,6 +37,9 @@ export type UserState = {
         mapKey?: string;
         condition?: string;
         approach?: string;
+        extractionRoute?: string;
+        branchDecision?: string;
+        mapEvent?: string;
         bet: number;
         success: boolean;
         rewardTokens: number;
@@ -57,6 +69,16 @@ export type MapReputationEntry = {
     bossEncounters: number;
     bossKills: number;
     lastRaidAt: number;
+};
+
+export type BossProgressEntry = {
+    encounters: number;
+    kills: number;
+    currentStreak: number;
+    bestStreak: number;
+    intelLevel: number;
+    heartUpgradeLevel: number;
+    alternateFormUnlocked: boolean;
 };
 
 export type GameStatKey = "raid" | "dice" | "roulette" | "blackjack" | "crash" | "magicslots" | "coinflip" | "baccarat" | "hilo" | "keno";
@@ -149,6 +171,9 @@ function defaultUserState(): UserState {
         pmcRaidWins: 0,
         pmcBossKills: 0,
         pmcPrestige: 0,
+        pmcMasteryLevel: 0,
+        pmcCallsign: "Rookie",
+        pmcBanner: "standard",
         lastXP: 0,
         prestige: 0,
         lastDaily: 0,
@@ -160,6 +185,12 @@ function defaultUserState(): UserState {
         bankUpdatedAt: Date.now(),
         selectedCharacter: null,
         mapReputation: {},
+        bossProgress: {},
+        gearDurability: {},
+        insuredGear: {},
+        gearLoadouts: {},
+        ammo: {},
+        vendorReputation: 0,
         raidHistory: [],
         lastRaid: 0,
         inventory: {},
@@ -306,6 +337,9 @@ export function ensureUser(userId: string): UserState {
     if (user.pmcRaidWins === undefined) user.pmcRaidWins = 0;
     if (user.pmcBossKills === undefined) user.pmcBossKills = 0;
     if (user.pmcPrestige === undefined) user.pmcPrestige = 0;
+    if (user.pmcMasteryLevel === undefined) user.pmcMasteryLevel = 0;
+    if (user.pmcCallsign === undefined) user.pmcCallsign = "Rookie";
+    if (user.pmcBanner === undefined) user.pmcBanner = "standard";
     if (user.lastXP === undefined) user.lastXP = 0;
     if (user.prestige === undefined) user.prestige = 0;
     if (user.lastDaily === undefined) user.lastDaily = 0;
@@ -317,6 +351,12 @@ export function ensureUser(userId: string): UserState {
     if (user.bankUpdatedAt === undefined) user.bankUpdatedAt = Date.now();
     if (user.selectedCharacter === undefined) user.selectedCharacter = null;
     if (!user.mapReputation || typeof user.mapReputation !== "object") user.mapReputation = {};
+    if (!user.bossProgress || typeof user.bossProgress !== "object") user.bossProgress = {};
+    if (!user.gearDurability || typeof user.gearDurability !== "object") user.gearDurability = {};
+    if (!user.insuredGear || typeof user.insuredGear !== "object") user.insuredGear = {};
+    if (!user.gearLoadouts || typeof user.gearLoadouts !== "object") user.gearLoadouts = {};
+    if (!user.ammo || typeof user.ammo !== "object") user.ammo = {};
+    if (user.vendorReputation === undefined) user.vendorReputation = 0;
     if (!Array.isArray(user.raidHistory)) user.raidHistory = [];
     if (user.lastRaid === undefined) user.lastRaid = 0;
     if (!user.inventory || typeof user.inventory !== "object") user.inventory = {};
@@ -840,4 +880,65 @@ export function getGameStatsSummary(userId: string): {
     }
 
     return { totalPlayed, wins, losses, pushes, wagered, payout, net, raid, casinoPlayed };
+}
+
+export function getBossProgressEntry(userId: string, bossName: string): BossProgressEntry {
+    const user = ensureUser(userId);
+    const existing = user.bossProgress[bossName] as Partial<BossProgressEntry> | undefined;
+    const normalized: BossProgressEntry = {
+        encounters: Math.max(0, Math.floor(existing?.encounters || 0)),
+        kills: Math.max(0, Math.floor(existing?.kills || 0)),
+        currentStreak: Math.max(0, Math.floor(existing?.currentStreak || 0)),
+        bestStreak: Math.max(0, Math.floor(existing?.bestStreak || 0)),
+        intelLevel: Math.max(0, Math.min(5, Math.floor(existing?.intelLevel || 0))),
+        heartUpgradeLevel: Math.max(0, Math.min(3, Math.floor(existing?.heartUpgradeLevel || 0))),
+        alternateFormUnlocked: Boolean(existing?.alternateFormUnlocked)
+    };
+    user.bossProgress[bossName] = normalized;
+    return normalized;
+}
+
+export function recordBossProgress(userId: string, bossName: string, defeated: boolean): BossProgressEntry {
+    const entry = getBossProgressEntry(userId, bossName);
+    entry.encounters += 1;
+    entry.intelLevel = Math.min(5, Math.floor(entry.encounters / 2));
+    if (defeated) {
+        entry.kills += 1;
+        entry.currentStreak += 1;
+        entry.bestStreak = Math.max(entry.bestStreak, entry.currentStreak);
+        entry.heartUpgradeLevel = Math.min(3, Math.floor(entry.kills / 3));
+        entry.alternateFormUnlocked = entry.kills >= 5;
+    } else {
+        entry.currentStreak = 0;
+    }
+    return entry;
+}
+
+export function getPmcMasteryLevel(pmcXP: number): number {
+    const capXp = PMC_LEVEL_THRESHOLDS[PMC_LEVEL_CAP - 1] || 0;
+    return Math.max(0, Math.floor(Math.max(0, pmcXP - capXp) / 1000000));
+}
+
+export function applyPmcMilestoneRewards(userId: string): { claimed: number[]; masteryLevel: number } {
+    const user = ensureUser(userId);
+    const level = getPmcLevel(user.pmcXP);
+    const claimed: number[] = [];
+    const previous = Math.max(0, Math.floor(user.pmcMasteryLevel || 0));
+    const currentMastery = getPmcMasteryLevel(user.pmcXP);
+    for (let milestone = 1000; milestone <= level; milestone += 1000) {
+        const marker = `PMC Milestone ${milestone}`;
+        if (user.achievements.some(entry => entry.includes(marker))) continue;
+        user.achievements.push(`${milestone >= PMC_LEVEL_CAP ? "🌌" : "🏅"} ${marker} secured`);
+        user.inventory.upgrade_core = (user.inventory.upgrade_core || 0) + (milestone % 5000 === 0 ? 2 : 1);
+        claimed.push(milestone);
+    }
+    if (currentMastery > previous) {
+        for (let mastery = previous + 1; mastery <= currentMastery; mastery++) {
+            user.achievements.push(`✦ Post-Cap Mastery ${mastery} achieved`);
+            user.inventory.upgrade_core = (user.inventory.upgrade_core || 0) + 2;
+        }
+        user.pmcMasteryLevel = currentMastery;
+    }
+    if (claimed.length || currentMastery > previous) savePoints();
+    return { claimed, masteryLevel: currentMastery };
 }

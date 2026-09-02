@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RAID_RESULT_ACTION_IDS = void 0;
+exports.RAID_ENCOUNTER_IDS = exports.RAID_RESULT_ACTION_IDS = void 0;
 exports.rarityBadge = rarityBadge;
 exports.getSellableInventoryOptions = getSellableInventoryOptions;
 exports.buildSellPickerPayload = buildSellPickerPayload;
@@ -10,6 +10,9 @@ exports.buildTradeActionPayload = buildTradeActionPayload;
 exports.buildCrateOpenPayload = buildCrateOpenPayload;
 exports.buildConsumableUsePayload = buildConsumableUsePayload;
 exports.buildRaidResultPayload = buildRaidResultPayload;
+exports.buildRareRouteDecisionPayload = buildRareRouteDecisionPayload;
+exports.buildBossBattlePayload = buildBossBattlePayload;
+exports.buildRaidBranchDecisionPayload = buildRaidBranchDecisionPayload;
 const discord_js_1 = require("discord.js");
 const catalog_1 = require("./catalog");
 exports.RAID_RESULT_ACTION_IDS = {
@@ -17,6 +20,17 @@ exports.RAID_RESULT_ACTION_IDS = {
     history: "raid_result_history",
     bosses: "raid_result_bosses",
     mastery: "raid_result_mastery"
+};
+exports.RAID_ENCOUNTER_IDS = {
+    hiddenExit: "raid_route_hidden_exit",
+    routeCache: "raid_route_cache",
+    securePerimeter: "raid_branch_secure_perimeter",
+    pushObjective: "raid_branch_push_objective",
+    stayCourse: "raid_route_stay_course",
+    attack: "raid_boss_attack",
+    defend: "raid_boss_defend",
+    heal: "raid_boss_heal",
+    scan: "raid_boss_scan"
 };
 function kindLabel(kind) {
     const key = String(kind || "resource");
@@ -398,6 +412,8 @@ function buildRaidResultPayload(input) {
             `Status: ${result.success ? "Extracted" : "Failed"}`,
             `Success Chance: ${result.successChance || 0}%`,
             `Approach: ${result.approachLabel || "Balanced"}`,
+            `Route: ${result.extractionRouteLabel ? `${result.extractionRouteLabel} • ${result.branchDecisionLabel || "Original Route"}` : result.branchDecisionLabel || "Standard extraction lanes"}`,
+            `Map Event: ${result.mapEventLabel || "None"}`,
             `PMC: Prestige ${result.pmcPrestige || 0} • ${result.pmcPrestigeLabel || "Unprestiged"}`,
             `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}`,
             `Territory: ${result.mapReputationTier || "Unproven"} • ${result.mapReputationPoints || 0} REP`
@@ -429,7 +445,9 @@ function buildRaidResultPayload(input) {
                 `Active/Final Phase: ${result.bossCurrentPhase || "Contact"}`,
                 `Sequence: ${result.bossPhaseNames?.join(" → ") || "Contact"}`,
                 `Counter Intel: ${result.bossCounteredTraits?.length ? result.bossCounteredTraits.join(", ") : "No trait counter matched"}`,
-                `Threat Reward Scale: ${(result.bossCombatRewardMultiplier || 1).toFixed(2)}x`
+                `Threat Reward Scale: ${(result.bossCombatRewardMultiplier || 1).toFixed(2)}x`,
+                `Streak: ${result.bossCurrentStreak || 0} current / ${result.bossBestStreak || 0} best • Intel Lv ${result.bossIntelLevel || 0}`,
+                `Heart Upgrade: ${result.bossHeartUpgradeLevel || 0}/3 • Alternate Form: ${result.bossAlternateFormUnlocked ? "Unlocked" : "Locked"}`
             ].join("\n"),
             inline: false
         }] : []), {
@@ -455,4 +473,79 @@ function buildRaidResultPayload(input) {
         .setLabel("Map Mastery")
         .setStyle(discord_js_1.ButtonStyle.Secondary));
     return JSON.stringify({ embed: embed.toJSON(), components: [actionRow.toJSON()] });
+}
+function buildRareRouteDecisionPayload(input) {
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle("Rare Extraction Route Discovered")
+        .setDescription(`${input.route.label}\n${input.route.description}`)
+        .addFields({ name: "Access Artifact", value: `[M] ${input.requiredItemName}\nThe artifact is retained after route access.`, inline: true }, { name: "Operation Zone", value: input.mapLabel, inline: true }, { name: "Hidden Exit", value: `+${Math.round(input.route.safeSuccessBonus * 100)}% extraction chance\n-6% token multiplier`, inline: true }, { name: "Breach Route Cache", value: `-${Math.round(input.route.cacheSuccessPenalty * 100)}% extraction chance\n+${Math.round(input.route.cacheTokenBonus * 100)}% token multiplier\n+${input.route.cacheBonusRolls} loot rolls`, inline: true }, { name: "Original Route", value: "Continue without route modifiers.", inline: true })
+        .setFooter({ text: "Route signal expires in 20 seconds. Timeout continues on the original route." });
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.hiddenExit).setLabel("Take Hidden Exit").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.routeCache).setLabel("Breach Cache").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.stayCourse).setLabel("Stay Course").setStyle(discord_js_1.ButtonStyle.Secondary));
+    return JSON.stringify({ embed: embed.toJSON(), components: [row.toJSON()] });
+}
+function buildBossBattlePayload(input) {
+    const totalTurns = Math.max(1, Math.floor(input.totalTurns));
+    const turn = Math.max(0, Math.min(totalTurns, Math.floor(input.turn)));
+    const progress = turn / totalTurns;
+    const bossHp = Math.max(0, Math.round(input.bossHpMax - ((input.bossHpMax - input.bossHpFinal) * progress)));
+    const pmcHp = Math.max(0, Math.round(input.pmcHpMax - ((input.pmcHpMax - input.pmcHpFinal) * progress)));
+    const phaseNames = input.bossPhaseNames?.length ? input.bossPhaseNames : ["Contact"];
+    const phaseIndex = Math.min(phaseNames.length - 1, Math.floor(progress * phaseNames.length));
+    const phase = turn >= totalTurns ? input.bossCurrentPhase || phaseNames[phaseIndex] : phaseNames[phaseIndex];
+    const actionLabel = input.action === "defend" ? "Defend" : input.action === "heal" ? "Heal" : input.action === "scan" ? "Scan" : "Attack";
+    const actionEffect = input.action === "defend"
+        ? "Damage mitigated while the PMC reads the boss counter."
+        : input.action === "heal"
+            ? "Field treatment stabilizes the PMC's health."
+            : input.action === "scan"
+                ? `Intel acquired: ${phase} phase and ${input.bossTraitLabels?.join(" / ") || "unknown traits"}.`
+                : "The PMC commits a direct strike.";
+    const status = turn === 0
+        ? `${input.bossName} entered the combat zone.`
+        : turn < totalTurns
+            ? `Turn ${turn}: ${actionLabel}. ${actionEffect} ${input.bossName} counters from ${phase}.`
+            : input.bossDefeated
+                ? `${input.bossName} was neutralized. The PMC holds the field.`
+                : `The PMC disengaged. ${input.bossName} remains active.`;
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(turn >= totalTurns ? (input.bossDefeated ? 0x16a34a : 0xdc2626) : 0xef4444)
+        .setTitle(`Boss Battle • Turn ${turn}/${totalTurns}`)
+        .setDescription(`**${input.bossName}${input.bossTitle ? ` • ${input.bossTitle}` : ""}** challenges the PMC.`)
+        .addFields({
+        name: `${input.bossName} • ${ferocityLabel(input.bossFerocity)}`,
+        value: [
+            `HP ${healthBar(bossHp, input.bossHpMax, 16)}`,
+            `Phase: ${phase}`,
+            `Traits: ${input.bossTraitLabels?.join(" • ") || "Unknown"}`,
+            `Threat: ${(input.bossFerocity || 1).toFixed(2)}x`
+        ].join("\n"),
+        inline: false
+    }, {
+        name: `PMC • Level ${(input.pmcLevel || 0).toLocaleString()} • Prestige ${input.pmcPrestige || 0}`,
+        value: [
+            `HP ${healthBar(pmcHp, input.pmcHpMax, 16)}`,
+            `Weapon: ${input.weaponName || "Auto-best weapon"}`,
+            `Armor: ${input.armorName || "Auto-best armor"}`,
+            `Boss Takedown Chance: ${input.bossKillChance || 0}%`
+        ].join("\n"),
+        inline: false
+    }, { name: "Battle Feed", value: status, inline: false })
+        .setFooter({ text: `Combat simulation • ${phaseNames.join(" -> ")}` });
+    if (input.bossImageUrl)
+        embed.setThumbnail(input.bossImageUrl);
+    const components = turn < totalTurns
+        ? [new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.attack).setLabel("Attack").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.defend).setLabel("Defend").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.heal).setLabel("Heal").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.scan).setLabel("Scan").setStyle(discord_js_1.ButtonStyle.Primary)).toJSON()]
+        : [];
+    return JSON.stringify({ embed: embed.toJSON(), components });
+}
+function buildRaidBranchDecisionPayload(input) {
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x0ea5e9)
+        .setTitle("Mid-Raid Tactical Fork")
+        .setDescription(`The operation on **${input.mapLabel}** has reached an unstable decision point.`)
+        .addFields({ name: "Secure Perimeter", value: "+3% extraction chance\n-4% token multiplier", inline: true }, { name: "Push Objective", value: "-3% extraction chance\n+6% token multiplier\n+1 loot roll", inline: true }, { name: "Stay Course", value: `Keep the original ${input.tension} tension plan.`, inline: true })
+        .setFooter({ text: "Decision window: 15 seconds. Timeout keeps the original plan." });
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.securePerimeter).setLabel("Secure Perimeter").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.pushObjective).setLabel("Push Objective").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.stayCourse).setLabel("Stay Course").setStyle(discord_js_1.ButtonStyle.Secondary));
+    return JSON.stringify({ embed: embed.toJSON(), components: [row.toJSON()] });
 }

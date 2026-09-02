@@ -52,6 +52,7 @@ const casinoBalance_1 = require("./game/casinoBalance");
 const catalog_1 = require("./game/catalog");
 const bossHearts_1 = require("./game/bossHearts");
 const bossPortraits_1 = require("./game/bossPortraits");
+const gearEconomy_1 = require("./game/gearEconomy");
 const payloads_1 = require("./game/payloads");
 const raid_1 = require("./game/raid");
 const RaidDomain = __importStar(require("./raid/domain"));
@@ -2733,6 +2734,7 @@ const PMC_PRESTIGE_IDS = {
     confirm: "pmc_prestige_confirm",
     cancel: "pmc_prestige_cancel"
 };
+const activeRaidEncounters = new Set();
 const CASINO_GAME_ORDER = [
     "dice",
     "roulette",
@@ -3510,7 +3512,7 @@ function helpPageRaids() {
     }, {
         name: "🪖 Mission Commands",
         value: `• \`/raid bet:<amount> tension:<low|medium|high> map:<map_name> weapon:<optional> armor:<optional>\`\n\n• \`/raidhistory\` — recent results (map + boss outcomes)\n\n• \`/bosses\` — full boss roster, stats, and rotation weights\n\n• \`/conditions\` — every raid condition, deltas, and armor counters\n\n• \`/gearintel\` — raid gear stat and trait directory\n\n• \`/pmc\` — milestone PMC progression (up to Level ${utils_1.PMC_LEVEL_CAP})\n\n• \`/loadout\` — best auto-applied weapon/armor bonuses\n\n• \`/raidintel map:<map_name> weapon:<optional> armor:<optional>\``
-    }, { name: "🛡️ Trigger Buffs and Debuffs", value: "• Conditions: `storm`, `fog`, `night`, `heatwave`, `urban`, `radiation`, `drizzle`, `crosswind`, `low_power`, `ashfall`\n\n• Best owned weapon/armor auto-apply with condition-specific modifiers and loss mitigation.\n\n• Some armor pieces now fully negate their matching raid condition." }, { name: "👑 Boss Mechanics", value: "• Maps pull from boss variants or apex signatures with unique names and ferocity.\n\n• Boss pressure scales with map, tension, and PMC progression.\n\n• Defeating bosses grants map-tuned gear drops, bonus Raid XP, extra token rewards, and permanent heart trophies." }, { name: "📈 PMC Progression", value: `• PMC XP is separate from chat XP.\n\n• Legacy tiers unlock through Level 20,000, followed by mastery tiers every 5,000 levels up to ${utils_1.PMC_LEVEL_CAP.toLocaleString()}.\n\n• At Level 20,000, choose optional Prestige I-X for permanent raid bonuses or continue overleveling.` }, { name: "⏱️ Operation Rules", value: `Cooldown: 5s | Minimum bet: ${MIN_RAID_BET} FN Token$ | Raid XP saved to persistent PMC profile` });
+    }, { name: "🛡️ Trigger Buffs and Debuffs", value: "• Conditions: `storm`, `fog`, `night`, `heatwave`, `urban`, `radiation`, `drizzle`, `crosswind`, `low_power`, `ashfall`\n\n• Best owned weapon/armor auto-apply with condition-specific modifiers and loss mitigation.\n\n• Some armor pieces now fully negate their matching raid condition." }, { name: "👑 Boss Mechanics", value: "• Maps pull from boss variants or apex signatures with unique names and ferocity.\n\n• Boss pressure scales with map, tension, and PMC progression.\n\n• Defeating bosses grants map-tuned gear drops, bonus Raid XP, extra token rewards, and permanent heart trophies." }, { name: "📈 PMC Progression", value: `• PMC XP is separate from chat XP.\n\n• Legacy tiers unlock through Level 20,000, followed by mastery tiers every 5,000 levels up to ${utils_1.PMC_LEVEL_CAP.toLocaleString()}.\n\n• At Level 20,000, choose optional Prestige I-X for permanent raid bonuses or continue overleveling.` }, { name: "🧭 Mid-Raid Decisions", value: "• Tactical forks can alter extraction odds, token multipliers, and loot rolls.\n\n• Mythic route artifacts reveal rare map-specific exits. They only drop from successful raids, cannot be purchased, and are retained after use.\n\n• Boss contacts play through a live dual-health combat display before final results." }, { name: "⏱️ Operation Rules", value: `Cooldown: 5s | Minimum bet: ${MIN_RAID_BET} FN Token$ | Raid XP saved to persistent PMC profile` });
 }
 function helpPageShop() {
     return new discord_js_1.EmbedBuilder()
@@ -4123,7 +4125,7 @@ function buyItem(userId, itemId, qty) {
         return { error: "Item does not exist." };
     if (qty < 1)
         return { error: "Quantity must be at least 1." };
-    const cost = item.price * qty;
+    const cost = (0, gearEconomy_1.getDynamicVendorPrice)((0, utils_1.ensureUser)(userId), itemId) * qty;
     if (!(0, utils_1.canAffordTokens)(userId, cost))
         return { error: `You need ${cost} FN Token$.` };
     (0, utils_1.removeTokens)(userId, cost);
@@ -4331,7 +4333,7 @@ function useItem(userId, itemId, quantity) {
     (0, utils_1.addInventoryItem)(userId, itemId, qty);
     return { error: "Use action failed safely; item was restored." };
 }
-function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selectedArmorId, approachRaw) {
+function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selectedArmorId, approachRaw, extractionRoute, branchDecision = "stay_course") {
     const user = (0, utils_1.ensureUser)(userId);
     const now = Date.now();
     if (now - user.lastRaid < RAID_COOLDOWN_MS) {
@@ -4344,8 +4346,10 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         return { error: "Not enough FN Token$." };
     const mapCfg = RaidDomain.resolveRaidMap(mapKeyRaw);
     const approach = RaidDomain.resolveRaidApproach(approachRaw);
+    const branchModifiers = RaidDomain.getRaidBranchModifiers(extractionRoute || null, branchDecision);
     const mapReputationBefore = (0, utils_1.getMapReputationEntry)(userId, mapCfg.key);
     const mapReputationBeforeProgress = RaidDomain.getMapReputationProgress(mapReputationBefore.points);
+    const mapEvent = RaidDomain.rollRaidMapEvent(mapCfg.key, mapReputationBeforeProgress.tier.level);
     const table = {
         low: { successChance: 0.78, tokenMultiplier: 1.07, baseRxp: 5 },
         medium: { successChance: 0.53, tokenMultiplier: 1.42, baseRxp: 11 },
@@ -4373,16 +4377,22 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
     const bossSpawnChance = Math.max(0.03, Math.min(0.82, mapCfg.bossSpawnChance + 0.02 + tensionPressure + levelPressure * 0.5 + mapCfg.bossRaidPressure * 0.35 + approach.bossSpawnDelta));
     const bossSpawned = Math.random() < bossSpawnChance;
     const boss = bossSpawned ? RaidDomain.rollBossVariant(mapCfg) : null;
+    const priorBossProgress = boss ? (0, utils_1.getBossProgressEntry)(userId, boss.name) : null;
+    const alternateBossForm = Boolean(boss && priorBossProgress?.alternateFormUnlocked && Math.random() < 0.35);
+    if (alternateBossForm && boss) {
+        boss.ferocity = Math.min(2.6, boss.ferocity * 1.15);
+        boss.title = `${boss.title} • Alternate Form`;
+    }
     const bossCombat = boss ? RaidDomain.getBossCombatModifiers(boss.name, approach.key) : null;
     const bossPressurePenalty = bossSpawned
         ? (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure + (boss?.successPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * mapDifficultyBossScale * latePmcBossScale
         : 0;
-    const finalSuccessChance = Math.max(0.06, Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + approach.successDelta + mapReputationBeforeProgress.tier.successBonus - bossPressurePenalty));
+    const finalSuccessChance = Math.max(0.06, Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + approach.successDelta + branchModifiers.successDelta + (mapEvent?.successDelta || 0) + mapReputationBeforeProgress.tier.successBonus - bossPressurePenalty));
     const success = Math.random() < finalSuccessChance;
     (0, utils_1.removeTokens)(userId, bet);
     let rewardTokens = 0;
     if (success) {
-        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + approach.tokenMultiplierDelta + mapReputationBeforeProgress.tier.tokenBonus;
+        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + approach.tokenMultiplierDelta + branchModifiers.tokenMultiplierDelta + (mapEvent?.tokenMultiplierDelta || 0) + mapReputationBeforeProgress.tier.tokenBonus;
         rewardTokens = Math.max(1, Math.floor(bet * (conditionTokenBoost + (Math.random() * 0.12 - 0.07))));
         (0, utils_1.addTokens)(userId, rewardTokens);
     }
@@ -4426,6 +4436,7 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
             }
         }
     }
+    const bossProgress = bossSpawned ? (0, utils_1.recordBossProgress)(userId, boss?.name || mapCfg.bossName, bossDefeated) : null;
     let pmcHpMax = 0;
     let pmcHpRemaining = 0;
     let bossHpMax = 0;
@@ -4465,7 +4476,7 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         ? bossCombat.phases[Math.min(bossPhasesReached, bossCombat.phases.length) - 1]
         : null;
     const bossPhaseLootRoll = bossDefeated && (bossCombat?.phases.length || 0) >= 3 ? 1 : 0;
-    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll });
+    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll + branchModifiers.bonusLootRolls + (mapEvent?.lootBonusRolls || 0) });
     for (const drop of loot) {
         (0, utils_1.addInventoryItem)(userId, drop.id, drop.qty);
     }
@@ -4480,6 +4491,10 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         user.pmcRaidWins += 1;
     user.lastRaid = now;
     const pmcLevelAfterRaid = (0, utils_1.getPmcLevel)(user.pmcXP);
+    (0, utils_1.applyPmcMilestoneRewards)(userId);
+    for (const gearId of [gearBonus.weapon?.id, gearBonus.armor?.id].filter((id) => Boolean(id))) {
+        (0, gearEconomy_1.resolveGearLoss)(user, gearId, success);
+    }
     const pmcTierAfterRaid = (0, utils_1.getPmcTierForLevel)(pmcLevelAfterRaid);
     const pmcTierUnlocked = pmcTierAfterRaid && (!pmcTierBeforeRaid || pmcTierAfterRaid.level > pmcTierBeforeRaid.level)
         ? pmcTierAfterRaid
@@ -4503,6 +4518,9 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         mapKey: mapCfg.key,
         condition: gearBonus.negatedCondition ? `${condition.label} (Negated)` : condition.label,
         approach: approach.label,
+        extractionRoute: extractionRoute?.label,
+        branchDecision: branchModifiers.label,
+        mapEvent: mapEvent?.label,
         bet,
         success,
         rewardTokens: baseRewardTokens + outcomeBonusTokens + bossTokenBonus,
@@ -4534,6 +4552,9 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         tension,
         condition: condition.label,
         approach: approach.key,
+        extractionRoute: extractionRoute?.key || null,
+        branchDecision,
+        mapEvent: mapEvent?.key || null,
         bet,
         success,
         bossSpawned,
@@ -4587,6 +4608,15 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         bossPhasesReached,
         bossCurrentPhase: bossCurrentPhase?.name,
         bossCombatRewardMultiplier: bossCombat?.rewardMultiplier,
+        extractionRouteLabel: extractionRoute?.label,
+        branchDecisionLabel: branchModifiers.label,
+        mapEventLabel: mapEvent?.label,
+        bossCurrentStreak: bossProgress?.currentStreak,
+        bossBestStreak: bossProgress?.bestStreak,
+        bossIntelLevel: bossProgress?.intelLevel,
+        bossHeartUpgradeLevel: bossProgress?.heartUpgradeLevel,
+        bossAlternateFormUnlocked: bossProgress?.alternateFormUnlocked,
+        alternateBossForm,
         bossBonusXp,
         bossKillChance: Math.round(bossKillChance * 100),
         bossImageUrl: bossSpawned ? (0, bossPortraits_1.getBossPortraitUrl)(boss?.name || mapCfg.bossName, boss?.title) || undefined : undefined,
@@ -4616,6 +4646,105 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         pmcPrestigeLabel: (0, utils_1.getPmcPrestigeTier)(user.pmcPrestige).label
     };
 }
+async function resolveRareRouteDecision(interaction, route, mapLabel) {
+    const payload = JSON.parse((0, payloads_1.buildRareRouteDecisionPayload)({
+        route,
+        mapLabel,
+        requiredItemName: catalog_1.ITEM_DEFS[route.requiredItemId]?.name || route.requiredItemId
+    }));
+    const message = await interaction.editReply({
+        embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
+        components: payload.components
+    });
+    const validIds = new Set(Object.values(payloads_1.RAID_ENCOUNTER_IDS));
+    const selected = await message.awaitMessageComponent({
+        componentType: discord_js_1.ComponentType.Button,
+        time: 20000,
+        filter: candidate => candidate.user.id === interaction.user.id && validIds.has(candidate.customId)
+    }).catch(() => null);
+    if (!selected)
+        return "stay_course";
+    await selected.deferUpdate().catch(() => undefined);
+    if (selected.customId === payloads_1.RAID_ENCOUNTER_IDS.hiddenExit)
+        return "hidden_exit";
+    if (selected.customId === payloads_1.RAID_ENCOUNTER_IDS.routeCache)
+        return "route_cache";
+    return "stay_course";
+}
+async function resolveRaidBranchDecision(interaction, mapLabel, tension) {
+    const payload = JSON.parse((0, payloads_1.buildRaidBranchDecisionPayload)({ mapLabel, tension }));
+    const message = await interaction.editReply({
+        embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
+        components: payload.components
+    });
+    const selected = await message.awaitMessageComponent({
+        componentType: discord_js_1.ComponentType.Button,
+        time: 15000,
+        filter: candidate => candidate.user.id === interaction.user.id && [payloads_1.RAID_ENCOUNTER_IDS.securePerimeter, payloads_1.RAID_ENCOUNTER_IDS.pushObjective, payloads_1.RAID_ENCOUNTER_IDS.stayCourse].includes(candidate.customId)
+    }).catch(() => null);
+    if (!selected)
+        return "stay_course";
+    await selected.deferUpdate().catch(() => undefined);
+    if (selected.customId === payloads_1.RAID_ENCOUNTER_IDS.securePerimeter)
+        return "secure_perimeter";
+    if (selected.customId === payloads_1.RAID_ENCOUNTER_IDS.pushObjective)
+        return "push_objective";
+    return "stay_course";
+}
+async function presentBossBattle(interaction, result) {
+    if (!result.bossName || !result.bossHpMax || !result.pmcHpMax)
+        return;
+    const totalTurns = Math.max(3, Math.min(5, result.bossPhaseNames?.length || 3));
+    let action;
+    const actionIds = new Map([
+        [payloads_1.RAID_ENCOUNTER_IDS.attack, "attack"],
+        [payloads_1.RAID_ENCOUNTER_IDS.defend, "defend"],
+        [payloads_1.RAID_ENCOUNTER_IDS.heal, "heal"],
+        [payloads_1.RAID_ENCOUNTER_IDS.scan, "scan"]
+    ]);
+    for (let turn = 0; turn <= totalTurns; turn++) {
+        const payload = JSON.parse((0, payloads_1.buildBossBattlePayload)({
+            bossName: result.bossName,
+            bossTitle: result.bossTitle,
+            bossImageUrl: result.bossImageUrl,
+            bossFerocity: result.bossFerocity,
+            bossTraitLabels: result.bossTraitLabels,
+            bossPhaseNames: result.bossPhaseNames,
+            bossCurrentPhase: result.bossCurrentPhase,
+            bossDefeated: result.bossDefeated,
+            bossKillChance: result.bossKillChance,
+            bossHpMax: result.bossHpMax,
+            bossHpFinal: result.bossHpRemaining || 0,
+            pmcLevel: result.pmcLevel,
+            pmcPrestige: result.pmcPrestige,
+            pmcHpMax: result.pmcHpMax,
+            pmcHpFinal: result.pmcHpRemaining || 0,
+            weaponName: result.selectedWeaponName,
+            armorName: result.selectedArmorName,
+            turn,
+            totalTurns,
+            action
+        }));
+        const displayed = await interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components })
+            .then(() => true)
+            .catch(() => false);
+        if (!displayed)
+            return;
+        if (turn < totalTurns) {
+            const message = await interaction.fetchReply().catch(() => null);
+            const selected = message && "awaitMessageComponent" in message
+                ? await message.awaitMessageComponent({
+                    componentType: discord_js_1.ComponentType.Button,
+                    time: 8000,
+                    filter: candidate => candidate.user.id === interaction.user.id && actionIds.has(candidate.customId)
+                }).catch(() => null)
+                : null;
+            action = selected ? actionIds.get(selected.customId) : "attack";
+            if (selected)
+                await selected.deferUpdate().catch(() => undefined);
+        }
+    }
+}
 function formatRaidHistory(userId) {
     const history = (0, utils_1.ensureUser)(userId).raidHistory.slice(0, 8);
     if (!history.length)
@@ -4626,10 +4755,15 @@ function formatRaidHistory(userId) {
         const map = entry.map ? ` | Map ${entry.map}` : "";
         const condition = entry.condition ? ` | Cond ${entry.condition}` : "";
         const approach = entry.approach ? ` | ${entry.approach}` : "";
+        const route = entry.extractionRoute
+            ? ` | Route ${entry.extractionRoute} (${entry.branchDecision || "Original Route"})`
+            : entry.branchDecision && entry.branchDecision !== "Original Route"
+                ? ` | Decision ${entry.branchDecision}`
+                : "";
         const boss = entry.bossSpawned
             ? ` | Boss ${entry.bossName || "Unknown"} ${entry.bossDefeated ? "defeated" : "engaged"}${entry.bossBonusXp ? ` (+${entry.bossBonusXp} XP)` : ""}`
             : "";
-        return `* [${time}] ${status} ${entry.tension}${map}${condition}${approach}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
+        return `* [${time}] ${status} ${entry.tension}${map}${condition}${approach}${route}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
     }).join("\n");
 }
 function buildRaidHistoryPayload(userId) {
@@ -4730,6 +4864,14 @@ function buildMapMasteryPayload(userId, focusMapKey) {
     return JSON.stringify({ embed: embed.toJSON() });
 }
 function buildBossRosterPayload() {
+    const bossLeaderboard = RaidDomain.RAID_BOSS_ROSTER.map(boss => {
+        const progress = Object.values(utils_1.points).map(user => user.bossProgress?.[boss.name]).filter(entry => entry && entry.kills > 0);
+        return {
+            name: boss.name,
+            totalKills: progress.reduce((sum, entry) => sum + (entry?.kills || 0), 0),
+            bestStreak: Math.max(0, ...progress.map(entry => entry?.bestStreak || 0))
+        };
+    }).sort((a, b) => b.totalKills - a.totalKills).slice(0, 5);
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(0xd97706)
         .setTitle("👑 Raid Boss Roster")
@@ -4746,6 +4888,10 @@ function buildBossRosterPayload() {
             `Highest Threat: ${Math.max(...RaidDomain.RAID_BOSS_ROSTER.map(boss => boss.ferocity)).toFixed(2)} ferocity`
         ].join("\n"),
         inline: false
+    }, {
+        name: "Boss Leaderboard",
+        value: bossLeaderboard.map((boss, index) => `#${index + 1} ${boss.name} • ${boss.totalKills} kills • Best streak ${boss.bestStreak}`).join("\n") || "No boss kills recorded yet.",
+        inline: false
     });
     for (const boss of RaidDomain.RAID_BOSS_ROSTER) {
         const combatProfile = RaidDomain.getBossCombatProfile(boss.name);
@@ -4761,7 +4907,8 @@ function buildBossRosterPayload() {
                 `Traits: ${traitLine}`,
                 `Phases: ${combatProfile.phases.map(phase => phase.name).join(" → ")}`,
                 `Rewards: XP ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} • Tokens ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} • Rare ${(boss.rareDropChance * 100).toFixed(0)}%`,
-                `Signature Drops: ${boss.weaponDrops[0]} • ${boss.armorDrops[0]}`
+                `Signature Drops: ${boss.weaponDrops[0]} • ${boss.armorDrops[0]}`,
+                "Rematches: 5 kills unlock a chance for an Alternate Form with increased ferocity."
             ].join("\n"),
             inline: false
         });
@@ -4836,6 +4983,10 @@ function buildPmcProfilePayload(user) {
     const collectibleLine = collectibleEntries.length
         ? collectibleEntries.slice(0, 6).map(entry => `${entry.def.name} x${entry.qty}`).join("\n")
         : "No collectibles found yet. Ultra-rare collectibles can only be found in raids.";
+    const bossProgressLines = RaidDomain.RAID_BOSS_ROSTER.slice(0, 6).map(boss => {
+        const entry = (0, utils_1.getBossProgressEntry)(user.id, boss.name);
+        return `${boss.name}: ${entry.kills} kills • streak ${entry.currentStreak}/${entry.bestStreak} • intel ${entry.intelLevel}/5${entry.alternateFormUnlocked ? " • form unlocked" : ""}`;
+    });
     const winRate = raids > 0 ? ((wins / raids) * 100).toFixed(1) : "0.0";
     const recentTrend = state.raidHistory.slice(0, 5).map(entry => entry.success ? "W" : "L").join(" ") || "No recent raids";
     const thresholdLine = progress.capped
@@ -4858,6 +5009,7 @@ function buildPmcProfilePayload(user) {
         .addFields({
         name: "Profile Header",
         value: [
+            `Callsign: ${state.pmcCallsign} • Banner: ${state.pmcBanner}`,
             `Level: ${progress.level}/${utils_1.PMC_LEVEL_CAP}`,
             `Raid XP: ${state.pmcXP}`,
             `Win Rate: ${winRate}%`,
@@ -4901,6 +5053,10 @@ function buildPmcProfilePayload(user) {
             `First-Kill Hearts: ${bossHeartsUnlocked}`,
             `Unlocked Hearts: ${bossHeartNames.length ? bossHeartNames.join(", ") : "None yet. Defeat a boss for your first heart trophy."}`
         ].join("\n"),
+        inline: false
+    }, {
+        name: "Boss Progression Matrix",
+        value: bossProgressLines.join("\n"),
         inline: false
     }, {
         name: "Collector Vault",
@@ -8566,7 +8722,9 @@ const commandHandlers = {
     raid: async (interaction) => {
         trackRaidCommandUsage("raid");
         const userId = interaction.user.id;
-        (0, utils_1.ensureUser)(userId);
+        const userState = (0, utils_1.ensureUser)(userId);
+        if (activeRaidEncounters.has(userId))
+            return "You already have an active raid encounter.";
         const bet = interaction.options.getInteger("bet", true);
         const tension = interaction.options.getString("tension") || "medium";
         const mapRaw = interaction.options.getString("map") || "plagued_cemetary";
@@ -8576,46 +8734,67 @@ const commandHandlers = {
         const mapCfg = RaidDomain.resolveRaidMap(mapRaw);
         if (!["low", "medium", "high"].includes(tension))
             return "Tension must be low, medium, or high.";
-        const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId, approachRaw);
-        if (result.error)
-            return result.error;
-        const [tensionLabel] = (result.tension || tension).split(" | ");
-        recordRaidTelemetry({
-            mapLabel: result.mapLabel || mapCfg.label,
-            mapDifficulty: result.mapDifficulty || mapCfg.difficulty,
-            conditionLabel: result.conditionLabel || "unknown",
-            tensionLabel,
-            success: Boolean(result.success),
-            successChance: result.successChance || 0,
-            bet,
-            net: result.net || 0,
-            baseRewardTokens: result.baseRewardTokens || 0,
-            outcomeBonusTokens: result.outcomeBonusTokens || 0,
-            bossBonusTokens: result.bossBonusTokens || 0,
-            failureMitigationTokens: result.failureMitigationTokens || 0,
-            loot: result.loot || [],
-            bossSpawned: result.bossSpawned,
-            bossDefeated: result.bossDefeated,
-            mapReputationGain: result.mapReputationGain,
-            mapReputationTierUnlocked: Boolean(result.mapReputationTierUnlocked),
-            bossTraits: result.bossTraitLabels,
-            bossPhasesReached: result.bossPhasesReached,
-            bossPhaseCount: result.bossPhaseNames?.length
-        });
-        const raidBroadcast = interaction.guild
-            ? buildRaidUnlockBroadcastEmbed({ user: interaction.user, result })
-            : null;
-        if (interaction.guild && raidBroadcast) {
-            void sendOpsBroadcastEmbed(interaction.guild, raidBroadcast);
-            appendAuditEvent("raid_unlock_broadcast", {
-                guildId: interaction.guild.id,
-                userId: interaction.user.id,
+        if (Date.now() - userState.lastRaid < RAID_COOLDOWN_MS)
+            return "Raid systems are still recharging.";
+        if (bet < MIN_RAID_BET)
+            return `Minimum raid bet is ${MIN_RAID_BET} FN Token$.`;
+        if (!(0, utils_1.canAffordTokens)(userId, bet))
+            return "Not enough FN Token$.";
+        activeRaidEncounters.add(userId);
+        try {
+            const reputation = RaidDomain.getMapReputationProgress((0, utils_1.getMapReputationEntry)(userId, mapCfg.key).points);
+            const rareRoute = RaidDomain.discoverRareExtractionRoute({ mapKey: mapCfg.key, tension, reputationLevel: reputation.tier.level, inventory: userState.inventory });
+            const branchDecision = rareRoute
+                ? await resolveRareRouteDecision(interaction, rareRoute, mapCfg.label)
+                : RaidDomain.shouldTriggerRaidDecision(tension)
+                    ? await resolveRaidBranchDecision(interaction, mapCfg.label, tension)
+                    : "stay_course";
+            const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId, approachRaw, rareRoute, branchDecision);
+            if (result.error)
+                return result.error;
+            if (result.bossSpawned)
+                await presentBossBattle(interaction, result);
+            const [tensionLabel] = (result.tension || tension).split(" | ");
+            recordRaidTelemetry({
                 mapLabel: result.mapLabel || mapCfg.label,
-                bossHeartUnlockedName: result.bossHeartUnlockedName || null,
-                pmcTierUnlockedLabel: result.pmcTierUnlockedLabel || null
+                mapDifficulty: result.mapDifficulty || mapCfg.difficulty,
+                conditionLabel: result.conditionLabel || "unknown",
+                tensionLabel,
+                success: Boolean(result.success),
+                successChance: result.successChance || 0,
+                bet,
+                net: result.net || 0,
+                baseRewardTokens: result.baseRewardTokens || 0,
+                outcomeBonusTokens: result.outcomeBonusTokens || 0,
+                bossBonusTokens: result.bossBonusTokens || 0,
+                failureMitigationTokens: result.failureMitigationTokens || 0,
+                loot: result.loot || [],
+                bossSpawned: result.bossSpawned,
+                bossDefeated: result.bossDefeated,
+                mapReputationGain: result.mapReputationGain,
+                mapReputationTierUnlocked: Boolean(result.mapReputationTierUnlocked),
+                bossTraits: result.bossTraitLabels,
+                bossPhasesReached: result.bossPhasesReached,
+                bossPhaseCount: result.bossPhaseNames?.length
             });
+            const raidBroadcast = interaction.guild
+                ? buildRaidUnlockBroadcastEmbed({ user: interaction.user, result })
+                : null;
+            if (interaction.guild && raidBroadcast) {
+                void sendOpsBroadcastEmbed(interaction.guild, raidBroadcast);
+                appendAuditEvent("raid_unlock_broadcast", {
+                    guildId: interaction.guild.id,
+                    userId: interaction.user.id,
+                    mapLabel: result.mapLabel || mapCfg.label,
+                    bossHeartUnlockedName: result.bossHeartUnlockedName || null,
+                    pmcTierUnlockedLabel: result.pmcTierUnlockedLabel || null
+                });
+            }
+            return (0, payloads_1.buildRaidResultPayload)({ result, mapCfg, fallbackTension: tensionLabel, armyIconUrl: ARMY_ICON_URL });
         }
-        return (0, payloads_1.buildRaidResultPayload)({ result, mapCfg, fallbackTension: tensionLabel, armyIconUrl: ARMY_ICON_URL });
+        finally {
+            activeRaidEncounters.delete(userId);
+        }
     },
     raidhistory: async (interaction) => {
         trackRaidCommandUsage("raidhistory");

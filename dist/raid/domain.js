@@ -1,6 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BOSS_REWARD_BALANCE = exports.RAID_BOSS_XP_SCALE = exports.RAID_PMC_XP_SCALE = exports.RAID_APEX_ARMOR_DISCOVERY_TABLE = exports.RAID_APEX_WEAPON_DISCOVERY_TABLE = exports.RAID_ARMOR_DISCOVERY_TABLE = exports.RAID_WEAPON_DISCOVERY_TABLE = exports.ARMOR_TRAITS = exports.WEAPON_TRAITS = exports.RAID_BOSS_ROSTER = exports.RAID_MAP_SHORT_LABELS = exports.RAID_DIFFICULTY_ORDER = exports.RAID_MAP_CHOICES = exports.RAID_MAPS = exports.RAID_LOOT_TUNING_BY_DIFFICULTY = exports.BOSS_COMBAT_PROFILES = exports.BOSS_TRAITS = exports.MAP_REPUTATION_TIERS = exports.RAID_APPROACH_CHOICES = exports.RAID_APPROACHES = exports.RAID_CONDITIONS = void 0;
+exports.BOSS_REWARD_BALANCE = exports.RAID_BOSS_XP_SCALE = exports.RAID_PMC_XP_SCALE = exports.RAID_APEX_ARMOR_DISCOVERY_TABLE = exports.RAID_APEX_WEAPON_DISCOVERY_TABLE = exports.RAID_ARMOR_DISCOVERY_TABLE = exports.RAID_WEAPON_DISCOVERY_TABLE = exports.ARMOR_TRAITS = exports.WEAPON_TRAITS = exports.RAID_BOSS_ROSTER = exports.RAID_MAP_SHORT_LABELS = exports.RAID_DIFFICULTY_ORDER = exports.RAID_MAP_CHOICES = exports.RAID_MAPS = exports.RAID_LOOT_TUNING_BY_DIFFICULTY = exports.BOSS_COMBAT_PROFILES = exports.BOSS_TRAITS = exports.MAP_REPUTATION_TIERS = exports.RAID_MAP_EVENTS = exports.RARE_EXTRACTION_ROUTES = exports.RAID_APPROACH_CHOICES = exports.RAID_APPROACHES = exports.RAID_CONDITIONS = void 0;
+exports.getRouteAccessItemIdForMap = getRouteAccessItemIdForMap;
+exports.discoverRareExtractionRoute = discoverRareExtractionRoute;
+exports.getRaidBranchModifiers = getRaidBranchModifiers;
+exports.shouldTriggerRaidDecision = shouldTriggerRaidDecision;
+exports.rollRaidMapEvent = rollRaidMapEvent;
 exports.resolveRaidApproach = resolveRaidApproach;
 exports.getMapReputationTier = getMapReputationTier;
 exports.getMapReputationProgress = getMapReputationProgress;
@@ -39,6 +44,56 @@ exports.RAID_APPROACHES = {
     scavenge: { key: "scavenge", label: "Scavenge", description: "Slower cache routing adds a loot roll but weakens extraction and combat returns.", successDelta: -0.025, tokenMultiplierDelta: -0.04, bossSpawnDelta: 0.01, bossKillDelta: -0.03, xpMultiplier: 1.05, lootBonusRolls: 1 }
 };
 exports.RAID_APPROACH_CHOICES = Object.values(exports.RAID_APPROACHES).map(approach => ({ name: approach.label, value: approach.key }));
+exports.RARE_EXTRACTION_ROUTES = [
+    { key: "catacomb_smuggler", label: "Catacomb Smuggler Exit", description: "A sealed ossuary tunnel bypasses the exposed extraction lanes.", mapKeys: ["plagued_cemetary", "slaughterhouse"], requiredItemId: "boneway_key", baseDiscoveryChance: 0.045, safeSuccessBonus: 0.08, cacheSuccessPenalty: 0.045, cacheTokenBonus: 0.09, cacheBonusRolls: 2 },
+    { key: "blacksite_rift", label: "Blacksite Rift Gate", description: "A cipher-locked distortion corridor cuts through the deep combat zone.", mapKeys: ["boogerswoodz"], requiredItemId: "null_route_cipher", baseDiscoveryChance: 0.035, safeSuccessBonus: 0.075, cacheSuccessPenalty: 0.05, cacheTokenBonus: 0.11, cacheBonusRolls: 2 },
+    { key: "sovereign_lift", label: "Sovereign Cargo Lift", description: "A dormant command lift reaches a fortified off-grid evacuation deck.", mapKeys: ["megayachtolopolis", "warlords_warcamp"], requiredItemId: "sovereign_evac_transponder", baseDiscoveryChance: 0.03, safeSuccessBonus: 0.07, cacheSuccessPenalty: 0.055, cacheTokenBonus: 0.12, cacheBonusRolls: 2 },
+    { key: "drowned_tidegate", label: "Drowned Tidegate", description: "A mythic seal opens a submerged route beneath the collapsing village.", mapKeys: ["sunken_village"], requiredItemId: "abyssal_tide_seal", baseDiscoveryChance: 0.028, safeSuccessBonus: 0.07, cacheSuccessPenalty: 0.06, cacheTokenBonus: 0.14, cacheBonusRolls: 2 }
+];
+function getRouteAccessItemIdForMap(mapKey) {
+    return exports.RARE_EXTRACTION_ROUTES.find(route => route.mapKeys.includes(mapKey))?.requiredItemId || null;
+}
+function discoverRareExtractionRoute(input) {
+    const route = exports.RARE_EXTRACTION_ROUTES.find(entry => entry.mapKeys.includes(input.mapKey) && (input.inventory[entry.requiredItemId] || 0) > 0);
+    if (!route)
+        return null;
+    const tensionBonus = input.tension === "high" ? 0.01 : input.tension === "medium" ? 0.004 : 0;
+    const masteryBonus = Math.max(0, Math.min(0.015, Math.floor(input.reputationLevel || 0) * 0.003));
+    const discoveryChance = Math.min(0.08, route.baseDiscoveryChance + tensionBonus + masteryBonus);
+    return (input.random || Math.random)() < discoveryChance ? route : null;
+}
+function getRaidBranchModifiers(route, decision) {
+    if (decision === "secure_perimeter") {
+        return { label: "Secure the Perimeter", successDelta: 0.03, tokenMultiplierDelta: -0.04, bonusLootRolls: 0 };
+    }
+    if (decision === "push_objective") {
+        return { label: "Push the Secondary Objective", successDelta: -0.03, tokenMultiplierDelta: 0.06, bonusLootRolls: 1 };
+    }
+    if (!route || decision === "stay_course") {
+        return { label: "Original Route", successDelta: 0, tokenMultiplierDelta: 0, bonusLootRolls: 0 };
+    }
+    if (decision === "route_cache") {
+        return { label: `Breach ${route.label} Cache`, successDelta: -route.cacheSuccessPenalty, tokenMultiplierDelta: route.cacheTokenBonus, bonusLootRolls: route.cacheBonusRolls };
+    }
+    return { label: route.label, successDelta: route.safeSuccessBonus, tokenMultiplierDelta: -0.06, bonusLootRolls: 0 };
+}
+function shouldTriggerRaidDecision(tension, random = Math.random) {
+    const chance = tension === "high" ? 0.4 : tension === "medium" ? 0.3 : 0.22;
+    return random() < chance;
+}
+exports.RAID_MAP_EVENTS = [
+    { key: "locked_side_room", label: "Locked Side Room", description: "A sealed side room contains a bonus cache if the route can be breached.", mapKeys: ["plagued_cemetary", "slaughterhouse"], chance: 0.12, successDelta: -0.015, tokenMultiplierDelta: 0.03, lootBonusRolls: 1 },
+    { key: "random_cache", label: "Unmarked Supply Cache", description: "A randomized cache signal appears off the primary route.", mapKeys: ["boogerswoodz", "megayachtolopolis", "warlords_warcamp", "sunken_village"], chance: 0.1, successDelta: -0.01, tokenMultiplierDelta: 0.04, lootBonusRolls: 1 },
+    { key: "faction_invasion", label: "Faction Invasion", description: "A rival faction has entered the operation and changed the threat profile.", mapKeys: ["slaughterhouse", "warlords_warcamp"], chance: 0.08, successDelta: -0.04, tokenMultiplierDelta: 0.12, lootBonusRolls: 1 },
+    { key: "supply_drop", label: "Emergency Supply Drop", description: "A contested supply drop creates a high-value optional route.", mapKeys: ["boogerswoodz", "sunken_village"], chance: 0.06, successDelta: -0.02, tokenMultiplierDelta: 0.1, lootBonusRolls: 2 },
+    { key: "environmental_disaster", label: "Environmental Disaster", description: "A map disaster is escalating and compressing every extraction lane.", mapKeys: ["megayachtolopolis", "sunken_village"], chance: 0.05, successDelta: -0.06, tokenMultiplierDelta: 0.16, lootBonusRolls: 1 },
+    { key: "map_lockdown", label: "Map Lockdown", description: "The map has entered lockdown; only reputation-backed exits remain viable.", mapKeys: ["warlords_warcamp", "sunken_village"], chance: 0.04, successDelta: -0.05, tokenMultiplierDelta: 0.2, lootBonusRolls: 2, requiredReputationLevel: 3 }
+];
+function rollRaidMapEvent(mapKey, reputationLevel, random = Math.random) {
+    const candidates = exports.RAID_MAP_EVENTS.filter(event => event.mapKeys.includes(mapKey) && (!event.requiredReputationLevel || reputationLevel >= event.requiredReputationLevel));
+    const event = candidates.find(candidate => random() < candidate.chance);
+    return event || null;
+}
 function resolveRaidApproach(approachRaw) {
     const key = (approachRaw || "balanced");
     return exports.RAID_APPROACHES[key] || exports.RAID_APPROACHES.balanced;

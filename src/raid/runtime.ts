@@ -7,6 +7,7 @@ import {
     RAID_LOOT_TUNING_BY_DIFFICULTY,
     RAID_WEAPON_DISCOVERY_TABLE,
     WEAPON_TRAITS,
+    getRouteAccessItemIdForMap,
     hasConditionImmunity,
     isAdvancedRaidDifficulty,
     type RaidCondition,
@@ -193,6 +194,16 @@ function pushLootStack(loot: Array<{ id: string; qty: number }>, id: string, qty
     loot.push({ id, qty: amount });
 }
 
+export function getRouteAccessItemDropChance(input: {
+    ultraRareBaseChance: number;
+    legendaryChanceBonus: number;
+    bossDefeated: boolean;
+    success: boolean;
+}): number {
+    if (!input.success) return 0;
+    return Math.max(0.00015, Math.min(0.0012, input.ultraRareBaseChance * 0.22 + input.legendaryChanceBonus * 0.002 + (input.bossDefeated ? 0.00035 : 0)));
+}
+
 export function rollRaidLoot(input: {
     success: boolean;
     tension: string;
@@ -316,6 +327,12 @@ export function rollRaidLoot(input: {
     }
     if (success && Math.random() < (tuning.ultraRareBaseChance + tensionBoost * 0.00035)) {
         pushLootStack(loot, weightedPick([{ id: "eclipse_core", weight: 1 }, { id: "sovereign_cipher", weight: 1 }, { id: "ghostmatter_relay", weight: 1 }]), 1);
+    }
+
+    const routeAccessChance = getRouteAccessItemDropChance({ ultraRareBaseChance: tuning.ultraRareBaseChance, legendaryChanceBonus: mapCfg.legendaryChanceBonus, bossDefeated, success });
+    const routeAccessItemId = getRouteAccessItemIdForMap(mapCfg.key);
+    if (routeAccessItemId && success && Math.random() < routeAccessChance) {
+        pushLootStack(loot, routeAccessItemId, 1);
     }
 
     const collectibleChance = success
