@@ -10247,30 +10247,43 @@ client.on("interactionCreate", async (interaction) => {
             channelId: interaction.channelId,
             durationMs: elapsedMs
         });
+        let parsed = null;
         try {
-            const parsed = JSON.parse(result);
-            if (parsed && parsed.embed && parsed.withHelpNav) {
-                const embed = embedFromPayload(interaction.commandName, parsed.embed, interaction.user);
-                const page = parsed.helpPage || "general";
-                await interaction.editReply({
-                    embeds: [embed],
-                    components: helpDropdown(page),
-                    allowedMentions: { parse: ["roles"] }
-                });
-            }
-            else if (parsed && parsed.embed) {
-                const embed = embedFromPayload(interaction.commandName, parsed.embed, interaction.user);
-                await interaction.editReply({
-                    embeds: [embed],
-                    components: Array.isArray(parsed.components) ? parsed.components : [],
-                    allowedMentions: { parse: ["roles"] }
-                });
-            }
-            else {
-                await interaction.editReply({ embeds: [embedFromText(interaction.commandName, result, interaction.user)] });
-            }
+            parsed = JSON.parse(result);
         }
         catch {
+            parsed = null;
+        }
+        if (parsed?.embed) {
+            try {
+                const embed = embedFromPayload(interaction.commandName, parsed.embed, interaction.user);
+                if (parsed.withHelpNav) {
+                    const page = ["general", "xp", "raids", "shop", "games", "bank", "moderation"].includes(parsed.helpPage || "")
+                        ? parsed.helpPage
+                        : "general";
+                    await interaction.editReply({
+                        embeds: [embed],
+                        components: helpDropdown(page),
+                        allowedMentions: { parse: ["roles"] }
+                    });
+                }
+                else {
+                    await interaction.editReply({
+                        embeds: [embed],
+                        components: Array.isArray(parsed.components) ? parsed.components : [],
+                        allowedMentions: { parse: ["roles"] }
+                    });
+                }
+            }
+            catch (structuredError) {
+                console.error("Structured command response failed:", structuredError);
+                await interaction.editReply({
+                    embeds: [embedFromText(interaction.commandName, "The command completed, but its rich display could not be rendered. Please retry.", interaction.user)],
+                    components: []
+                }).catch(() => undefined);
+            }
+        }
+        else {
             await interaction.editReply({ embeds: [embedFromText(interaction.commandName, result, interaction.user)] });
         }
     }
