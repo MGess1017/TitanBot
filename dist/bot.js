@@ -2777,7 +2777,6 @@ const CASINO_UI_IDS = {
     prefix: "casino_ui",
     dailyPrefix: "casino_daily"
 };
-const CASINO_DAILY_LOSS_LIMIT = Math.max(100, Number(process.env.CASINO_DAILY_LOSS_LIMIT || 5000));
 const PMC_PRESTIGE_IDS = {
     request: "pmc_prestige_request",
     confirm: "pmc_prestige_confirm",
@@ -5335,14 +5334,6 @@ function buildGearIntelPayload(kindRaw, conditionRaw) {
 function validateCasinoBet(userId, bet) {
     if (bet < MIN_BET)
         return `Minimum bet is ${MIN_BET}.`;
-    const user = (0, utils_1.ensureUser)(userId);
-    const day = new Date().toISOString().slice(0, 10);
-    if (user.casinoLossDay !== day) {
-        user.casinoLossDay = day;
-        user.casinoLossToday = 0;
-    }
-    if (user.casinoLossToday >= CASINO_DAILY_LOSS_LIMIT)
-        return `Daily casino loss limit reached (${CASINO_DAILY_LOSS_LIMIT} FN Token$).`;
     if (!(0, utils_1.canAffordTokens)(userId, bet))
         return `You need at least ${bet} FN Token$.`;
     return null;
@@ -5503,7 +5494,7 @@ function buildCasinoLobbyPayload(userId, bet) {
         .setColor(0xd4af37)
         .setTitle("🎰 FN Casino Floor")
         .setDescription("Choose a table below. Results include the outcome, payout, net change, wallet balance, odds, and replay controls.")
-        .addFields({ name: "Your Stake", value: `${formatTokenAmount(stake)}\nWallet: ${formatTokenAmount((0, utils_1.getTokens)(userId))}`, inline: true }, { name: "Win Bonus", value: `${(casinoBalance_1.STANDARD_WIN_BONUS_CHANCE * 100).toFixed(0)}% chance on standard-game wins\nBonuses only increase payouts.`, inline: true }, { name: "VIP & Limits", value: `VIP ${vip.level} • ${vip.label}\n${vip.xpToNext ? `${vip.xpToNext} Casino XP to next tier` : "Maximum VIP tier"}\nDaily loss limit: ${CASINO_DAILY_LOSS_LIMIT} FN Token$`, inline: true }, { name: "Jackpot Pool", value: "Progressive pool funded by 1% of casino wagers. Jackpot wins are rare and server-wide.", inline: true }, { name: "Game Profiles", value: profileLines.join("\n"), inline: false })
+        .addFields({ name: "Your Stake", value: `${formatTokenAmount(stake)}\nWallet: ${formatTokenAmount((0, utils_1.getTokens)(userId))}`, inline: true }, { name: "Win Bonus", value: `${(casinoBalance_1.STANDARD_WIN_BONUS_CHANCE * 100).toFixed(0)}% chance on standard-game wins\nBonuses only increase payouts.`, inline: true }, { name: "VIP Status", value: `VIP ${vip.level} • ${vip.label}\n${vip.xpToNext ? `${vip.xpToNext} Casino XP to next tier` : "Maximum VIP tier"}\nWager freely within your available wallet.`, inline: true }, { name: "Jackpot Pool", value: "Progressive pool funded by 1% of casino wagers. Jackpot wins are rare and server-wide.", inline: true }, { name: "Game Profiles", value: profileLines.join("\n"), inline: false })
         .setFooter({ text: "Long-run return is not a guarantee for any session. Play within your wallet." });
     rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(dailyId).setLabel("Claim Daily Reward").setEmoji("🎁").setStyle(discord_js_1.ButtonStyle.Success)).toJSON());
     return JSON.stringify({ embed: embed.toJSON(), components: rows });
