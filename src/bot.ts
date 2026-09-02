@@ -5720,8 +5720,8 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
     pmcHpRemaining?: number;
     selectedWeaponName?: string;
     selectedArmorName?: string;
-}): Promise<void> {
-    if (!result.bossName || !result.bossHpMax || !result.pmcHpMax) return;
+}): Promise<{ defeated: boolean; bossHp: number; pmcHp: number; scanRevealed: boolean } | null> {
+    if (!result.bossName || !result.bossHpMax || !result.pmcHpMax) return null;
     const bossName = result.bossName;
     const bossHpMax = result.bossHpMax;
     const pmcHpMax = result.pmcHpMax;
@@ -5776,18 +5776,18 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
         return displayed;
     };
     for (let entranceFrame = 0; entranceFrame < 4; entranceFrame++) {
-        if (!await renderFrame(0, entranceFrame, entranceFrame === 3)) return;
+        if (!await renderFrame(0, entranceFrame, entranceFrame === 3)) return null;
         if (entranceFrame < 3) await new Promise(resolve => setTimeout(resolve, 350));
     }
     for (let turn = 0; turn <= totalTurns; turn++) {
         if (turn > 0) {
-            if (!await renderFrame(turn, 1, false)) return;
+            if (!await renderFrame(turn, 1, false)) return null;
             await new Promise(resolve => setTimeout(resolve, 300));
-            if (!await renderFrame(turn, 2, false)) return;
+            if (!await renderFrame(turn, 2, false)) return null;
             await new Promise(resolve => setTimeout(resolve, 350));
-            if (!await renderFrame(turn, 3, turn < totalTurns)) return;
+            if (!await renderFrame(turn, 3, turn < totalTurns)) return null;
         }
-        if (turn >= totalTurns) return;
+        if (turn >= totalTurns) return { defeated: battleBossHp <= 0, bossHp: battleBossHp, pmcHp: battlePmcHp, scanRevealed };
         if (turn < totalTurns) {
             const message = await interaction.fetchReply().catch(() => null);
             const selected = message && "awaitMessageComponent" in message
@@ -5825,6 +5825,44 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
             }
         }
     }
+    return { defeated: battleBossHp <= 0, bossHp: battleBossHp, pmcHp: battlePmcHp, scanRevealed };
+}
+
+function reconcileBossBattleOutcome(userId: string, mapCfg: RaidDomain.RaidMapConfig, result: ReturnType<typeof performRaid>, battle: { defeated: boolean; bossHp: number; pmcHp: number; scanRevealed: boolean }): void {
+    if (!result.success || result.bossDefeated || !battle.defeated || !result.bossName) return;
+    const user = ensureUser(userId);
+    const bonusXp = Math.max(40, Math.floor((result.bossBonusXp || 40) * 1.1));
+    const bonusTokens = Math.max(20, Math.floor((result.bet || 0) * 0.15));
+    result.bossDefeated = true;
+    result.bossBonusXp = bonusXp;
+    result.bossBonusTokens = bonusTokens;
+    result.rxpGain = (result.rxpGain || 0) + bonusXp;
+    result.net = (result.net || 0) + bonusTokens;
+    const bonusLoot = [{ id: mapCfg.bossKit.weaponId, qty: 1 }, { id: mapCfg.bossKit.armorId, qty: 1 }];
+    result.loot = [...(result.loot || []), ...bonusLoot];
+    for (const drop of bonusLoot) addInventoryItem(userId, drop.id, drop.qty);
+    addTokens(userId, bonusTokens);
+    user.rxp += bonusXp;
+    user.pmcXP += bonusXp;
+    user.pmcBossKills += 1;
+    const progress = getBossProgressEntry(userId, result.bossName);
+    progress.kills += 1;
+    progress.currentStreak += 1;
+    progress.bestStreak = Math.max(progress.bestStreak, progress.currentStreak);
+    progress.heartUpgradeLevel = Math.min(3, Math.floor(progress.kills / 3));
+    progress.alternateFormUnlocked = progress.kills >= 5;
+    const history = user.raidHistory[0];
+    if (history && history.bossName === result.bossName) {
+        history.bossDefeated = true;
+        history.bossBonusXp = bonusXp;
+        history.rewardTokens += bonusTokens;
+        history.net += bonusTokens;
+        history.rxpGain += bonusXp;
+    }
+    const heart = awardBossHeartAchievement(userId, result.bossName);
+    if (heart.awarded) result.bossHeartUnlockedName = heart.heartName;
+    recordGameResult(userId, "raid", "win", 0, bonusTokens);
+    savePoints();
 }
 
 function formatRaidHistory(userId: string): string {
@@ -10161,7 +10199,10 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                     : "stay_course";
             const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId, approachRaw, rareRoute, branchDecision);
             if (result.error) return result.error;
-            if (result.bossSpawned) await presentBossBattle(interaction, result);
+            if (result.bossSpawned) {
+                            const battle = await presentBossBattle(interaction, result);
+                            if (battle) reconcileBossBattleOutcome(userId, mapCfg, result, battle);
+                        }
             const [tensionLabel] = (result.tension || tension).split(" | ");
             recordRaidTelemetry({
                 mapLabel: result.mapLabel || mapCfg.label,
