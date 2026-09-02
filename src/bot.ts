@@ -5727,6 +5727,12 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
     const pmcHpMax = result.pmcHpMax;
     const totalTurns = Math.max(3, Math.min(5, result.bossPhaseNames?.length || 3));
     let action: "attack" | "defend" | "heal" | "scan" | undefined;
+    let battleBossHp = bossHpMax;
+    let battlePmcHp = pmcHpMax;
+    let rage = 0;
+    let armorBreak = 0;
+    let specialAttack: string | undefined;
+    let scanRevealed = false;
     const actionIds = new Map<string, "attack" | "defend" | "heal" | "scan">([
         [RAID_ENCOUNTER_IDS.attack, "attack"],
         [RAID_ENCOUNTER_IDS.defend, "defend"],
@@ -5756,7 +5762,13 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
             totalTurns,
             action,
             animationFrame,
-            interactive
+            interactive,
+            bossHpCurrent: battleBossHp,
+            pmcHpCurrent: battlePmcHp,
+            rage,
+            armorBreak,
+            specialAttack,
+            scanRevealed
         }));
         const displayed = await interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components })
             .then(() => true)
@@ -5787,6 +5799,30 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
                 : null;
             action = selected ? actionIds.get(selected.customId) : "attack";
             if (selected) await selected.deferUpdate().catch(() => undefined);
+            const damageRoll = 30 + Math.floor(Math.random() * 36);
+            if (action === "attack") {
+                battleBossHp = Math.max(0, battleBossHp - damageRoll - Math.floor(armorBreak * 0.12));
+                armorBreak = Math.min(100, armorBreak + 18);
+                rage = Math.min(100, rage + 14);
+            } else if (action === "defend") {
+                battlePmcHp = Math.max(0, battlePmcHp - Math.max(4, Math.floor(damageRoll * 0.28)));
+                rage = Math.max(0, rage - 8);
+            } else if (action === "heal") {
+                if (getInventoryCount(interaction.user.id, "med_patch") > 0) {
+                    removeInventoryItem(interaction.user.id, "med_patch", 1);
+                    battlePmcHp = Math.min(pmcHpMax, battlePmcHp + 70);
+                } else {
+                    battlePmcHp = Math.max(0, battlePmcHp - Math.floor(damageRoll * 0.65));
+                }
+            } else if (action === "scan") {
+                scanRevealed = true;
+                armorBreak = Math.min(100, armorBreak + 8);
+            }
+            specialAttack = rage >= 70 ? "Infernal Countercharge" : undefined;
+            if (specialAttack && action !== "defend") {
+                battlePmcHp = Math.max(0, battlePmcHp - Math.floor(12 + rage * 0.16));
+                rage = Math.min(100, rage + 6);
+            }
         }
     }
 }

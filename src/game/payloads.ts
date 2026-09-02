@@ -678,12 +678,22 @@ export function buildBossBattlePayload(input: {
     action?: "attack" | "defend" | "heal" | "scan";
     animationFrame?: number;
     interactive?: boolean;
+    bossHpCurrent?: number;
+    pmcHpCurrent?: number;
+    rage?: number;
+    armorBreak?: number;
+    specialAttack?: string;
+    scanRevealed?: boolean;
 }): string {
     const totalTurns = Math.max(1, Math.floor(input.totalTurns));
     const turn = Math.max(0, Math.min(totalTurns, Math.floor(input.turn)));
     const progress = turn / totalTurns;
-    const bossHp = Math.max(0, Math.round(input.bossHpMax - ((input.bossHpMax - input.bossHpFinal) * progress)));
-    const pmcHp = Math.max(0, Math.round(input.pmcHpMax - ((input.pmcHpMax - input.pmcHpFinal) * progress)));
+    const bossHp = input.bossHpCurrent === undefined
+        ? Math.max(0, Math.round(input.bossHpMax - ((input.bossHpMax - input.bossHpFinal) * progress)))
+        : Math.max(0, Math.min(input.bossHpMax, Math.floor(input.bossHpCurrent)));
+    const pmcHp = input.pmcHpCurrent === undefined
+        ? Math.max(0, Math.round(input.pmcHpMax - ((input.pmcHpMax - input.pmcHpFinal) * progress)))
+        : Math.max(0, Math.min(input.pmcHpMax, Math.floor(input.pmcHpCurrent)));
     const phaseNames = input.bossPhaseNames?.length ? input.bossPhaseNames : ["Contact"];
     const phaseIndex = Math.min(phaseNames.length - 1, Math.floor(progress * phaseNames.length));
     const phase = turn >= totalTurns ? input.bossCurrentPhase || phaseNames[phaseIndex] : phaseNames[phaseIndex];
@@ -717,7 +727,8 @@ export function buildBossBattlePayload(input: {
                     `HP ${healthBar(bossHp, input.bossHpMax, 16)}`,
                     `Phase: ${phase}`,
                     `Traits: ${input.bossTraitLabels?.join(" • ") || "Unknown"}`,
-                    `Threat: ${(input.bossFerocity || 1).toFixed(2)}x`
+                    `Threat: ${(input.bossFerocity || 1).toFixed(2)}x • Rage ${Math.round(input.rage || 0)}%`,
+                    `Armor Break: ${Math.round(input.armorBreak || 0)}%${input.specialAttack ? ` • ⚠ ${input.specialAttack}` : ""}`
                 ].join("\n"),
                 inline: true
             },
@@ -727,7 +738,7 @@ export function buildBossBattlePayload(input: {
                     `HP ${healthBar(pmcHp, input.pmcHpMax, 16)}`,
                     `Weapon: ${input.weaponName || "Auto-best weapon"}`,
                     `Armor: ${input.armorName || "Auto-best armor"}`,
-                    `Boss Takedown Chance: ${input.bossKillChance || 0}%`
+                    `Boss Takedown Chance: ${input.bossKillChance || 0}%${input.scanRevealed ? " • Intel revealed" : ""}`
                 ].join("\n"),
                 inline: true
             },

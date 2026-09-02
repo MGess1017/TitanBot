@@ -230,6 +230,10 @@ function runEconomyAndRaidTests(): void {
         assert.equal(battleOpening.components[0].components.length, 4);
         assert.ok(battleOpening.embed.fields[2].name.includes("ENTRANCE"));
         assert.ok(battleOpening.embed.fields[0].value.includes("800/800"));
+        assert.ok(battleOpening.embed.fields[0].value.includes("Rage 0%"));
+        const battleAction = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossHpMax: 800, bossHpFinal: 0, pmcHpMax: 600, pmcHpFinal: 240, turn: 1, totalTurns: 3, action: "scan", bossHpCurrent: 760, pmcHpCurrent: 600, rage: 20, armorBreak: 30, scanRevealed: true }));
+        assert.ok(battleAction.embed.fields[0].value.includes("Armor Break: 30%"));
+        assert.ok(battleAction.embed.fields[1].value.includes("Intel revealed"));
         assert.ok(battleFinal.embed.fields[0].value.includes("0/800"));
         assert.ok(battleFinal.embed.fields[1].value.includes("240/600"));
         assert.ok(battleFinal.embed.fields[2].value.includes("neutralized"));
