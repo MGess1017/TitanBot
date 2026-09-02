@@ -24,6 +24,7 @@ export type UserState = {
         tension: string;
         map?: string;
         condition?: string;
+        approach?: string;
         bet: number;
         success: boolean;
         rewardTokens: number;

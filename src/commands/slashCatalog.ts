@@ -5,8 +5,15 @@ export type CommandChoice = { name: string; value: string };
 export function buildSlashCommands(input: {
     raidConditionChoices: CommandChoice[];
     raidMapChoices: CommandChoice[];
+    raidApproachChoices?: CommandChoice[];
 }) {
     const { raidConditionChoices, raidMapChoices } = input;
+    const raidApproachChoices = input.raidApproachChoices || [
+        { name: "Balanced", value: "balanced" },
+        { name: "Recon", value: "recon" },
+        { name: "Assault", value: "assault" },
+        { name: "Scavenge", value: "scavenge" }
+    ];
 
     return [
         new SlashCommandBuilder()
@@ -125,6 +132,8 @@ export function buildSlashCommands(input: {
                 ))
             .addStringOption(o => o.setName("map").setDescription("Select raid map").setRequired(false)
                 .addChoices(...raidMapChoices))
+            .addStringOption(o => o.setName("approach").setDescription("Choose a tactical approach").setRequired(false)
+                .addChoices(...raidApproachChoices))
             .addStringOption(o => o.setName("weapon").setDescription("Optional weapon (OWNED shown first)").setRequired(false).setAutocomplete(true))
             .addStringOption(o => o.setName("armor").setDescription("Optional armor (OWNED shown first)").setRequired(false).setAutocomplete(true)),
         new SlashCommandBuilder().setName("raidhistory").setDescription("View recent raid history"),

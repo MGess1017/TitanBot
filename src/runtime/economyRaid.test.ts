@@ -10,7 +10,7 @@ import {
     withdrawFromBank
 } from "../utils";
 import { getRaidRewards } from "../game/raid";
-import { RAID_MAPS, getBossRotationTable, mapProjection } from "../raid/domain";
+import { RAID_APPROACHES, RAID_MAPS, getBossRotationTable, mapProjection, resolveRaidApproach } from "../raid/domain";
 
 function cloneUserState(userId: string) {
     const value = points[userId];
@@ -66,6 +66,15 @@ function runEconomyAndRaidTests(): void {
         assert.equal(loot.tokens, 24);
         assert.equal(extract.tokens, 14);
         assert.equal(fail.tokens, 0);
+
+        assert.equal(resolveRaidApproach("unknown").key, "balanced");
+        assert.equal(RAID_APPROACHES.balanced.successDelta, 0);
+        assert.ok(RAID_APPROACHES.recon.successDelta > 0);
+        assert.ok(RAID_APPROACHES.recon.tokenMultiplierDelta < 0);
+        assert.ok(RAID_APPROACHES.assault.bossSpawnDelta > 0);
+        assert.ok(RAID_APPROACHES.assault.bossKillDelta > 0);
+        assert.ok(RAID_APPROACHES.scavenge.lootBonusRolls > 0);
+        assert.ok(RAID_APPROACHES.scavenge.successDelta < 0);
 
         for (const mapCfg of Object.values(RAID_MAPS)) {
             const table = getBossRotationTable(mapCfg);

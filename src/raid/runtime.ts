@@ -200,6 +200,7 @@ export function rollRaidLoot(input: {
     bossDefeated: boolean;
     boss: RolledBoss | null;
     difficultyScalar: number;
+    bonusRolls?: number;
 }): Array<{ id: string; qty: number }> {
     const { success, tension, mapCfg, bossDefeated, boss, difficultyScalar } = input;
     const loot: Array<{ id: string; qty: number }> = [];
@@ -217,7 +218,8 @@ export function rollRaidLoot(input: {
 
     const bonusDifficultyRolls = success ? Math.max(0, Math.floor((effectiveScalar - 1) * 1.5)) : 0;
     const failureCompensationRoll = !success && tension === "high" && Math.random() < 0.2 ? 1 : 0;
-    const totalRollCount = Math.max(1, rollCount + bonusDifficultyRolls + failureCompensationRoll + (bossDefeated ? 1 : 0));
+    const tacticalBonusRolls = Math.max(0, Math.min(2, Math.floor(input.bonusRolls || 0)));
+    const totalRollCount = Math.max(1, rollCount + bonusDifficultyRolls + failureCompensationRoll + tacticalBonusRolls + (bossDefeated ? 1 : 0));
 
     const commonPool: Array<{ id: string; weight: number }> = [
         { id: "rusted_dogtag", weight: 22 },

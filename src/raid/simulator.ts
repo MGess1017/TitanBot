@@ -1,6 +1,7 @@
 import {
     getBossRotationTable,
     mapProjection,
+    RAID_APPROACHES,
     RAID_CONDITIONS,
     RAID_MAPS,
     rollBossSuccessRewards,
@@ -17,7 +18,7 @@ function parseArg(name: string, fallback: number): number {
     return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function simulateMap(mapCfg: RaidMapConfig, tension: Tension, iterations: number, bet: number) {
+function simulateMap(mapCfg: RaidMapConfig, tension: Tension, approach: (typeof RAID_APPROACHES)[keyof typeof RAID_APPROACHES], iterations: number, bet: number) {
     const projection = mapProjection(mapCfg, tension);
     const successProb = projection.successPct / 100;
     const bossRotation = getBossRotationTable(mapCfg);
@@ -36,18 +37,20 @@ function simulateMap(mapCfg: RaidMapConfig, tension: Tension, iterations: number
 
     for (let i = 0; i < iterations; i++) {
         const condition = RAID_CONDITIONS[Math.floor(Math.random() * RAID_CONDITIONS.length)];
-        const conditionAwareSuccess = Math.max(0.06, Math.min(0.93, table[tension].successChance + mapCfg.successDelta + condition.successDelta - ((mapCfg.bossSpawnChance * mapCfg.bossSuccessPenalty) * 0.75)));
+        const bossSpawnChance = Math.max(0.03, Math.min(0.82, mapCfg.bossSpawnChance + approach.bossSpawnDelta));
+        const bossExpectedPenalty = bossSpawnChance * (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure);
+        const conditionAwareSuccess = Math.max(0.06, Math.min(0.93, table[tension].successChance + mapCfg.successDelta + condition.successDelta + approach.successDelta - bossExpectedPenalty));
         const success = Math.random() < conditionAwareSuccess;
         if (success) successes += 1;
 
-        const bossSpawned = Math.random() < mapCfg.bossSpawnChance;
+        const bossSpawned = Math.random() < bossSpawnChance;
         if (bossSpawned) bossSpawns += 1;
 
         let bossBonusXp = 0;
         let bossTokenBonus = 0;
         if (bossSpawned && success) {
             const boss = bossRotation[Math.floor(Math.random() * bossRotation.length)].boss;
-            const bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + (tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0) - mapCfg.bossKillPenalty - (boss.killPenalty * 0.7)));
+            const bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + (tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0) + approach.bossKillDelta - mapCfg.bossKillPenalty - mapCfg.bossRaidPressure - boss.killPenalty - boss.raidPressure));
             const bossDefeated = Math.random() < bossKillChance;
             if (bossDefeated) {
                 bossKills += 1;
@@ -64,9 +67,9 @@ function simulateMap(mapCfg: RaidMapConfig, tension: Tension, iterations: number
             }
         }
 
-        const raidXp = rollRaidXpGain(tension, success, bet, condition.xpMultiplier, mapCfg);
+        const raidXp = rollRaidXpGain(tension, success, bet, condition.xpMultiplier * approach.xpMultiplier, mapCfg);
         const tokenBase = success
-            ? Math.max(1, Math.floor(bet * (table[tension].tokenMultiplier + mapCfg.tokenMultiplierDelta + condition.tokenMultiplierDelta)))
+            ? Math.max(1, Math.floor(bet * (table[tension].tokenMultiplier + mapCfg.tokenMultiplierDelta + condition.tokenMultiplierDelta + approach.tokenMultiplierDelta)))
             : 0;
 
         totalRaidXp += raidXp + bossBonusXp;
@@ -89,17 +92,20 @@ function main() {
     const iterations = parseArg("iterations", 2500);
     const bet = parseArg("bet", 100);
     const tensions: Tension[] = ["low", "medium", "high"];
+    const approaches = Object.values(RAID_APPROACHES);
 
     console.log(`Titan Raid Balance Simulator | iterations=${iterations} | bet=${bet}`);
     for (const mapCfg of Object.values(RAID_MAPS)) {
         console.log(`\n=== ${mapCfg.label} (${mapCfg.difficulty}) ===`);
-        for (const tension of tensions) {
-            const result = simulateMap(mapCfg, tension, iterations, bet);
-            console.log([
-                `${tension.toUpperCase()} | sim success ${result.successRate}% | projected success ${result.projection.successPct}%`,
-                `boss spawn ${result.bossSpawnRate}% | boss kill ${result.bossKillRate}%`,
-                `avg raid xp ${result.avgRaidXp} | avg boss xp ${result.avgBossXp} | avg tokens ${result.avgTokens}`
-            ].join(" | "));
+        for (const approach of approaches) {
+            for (const tension of tensions) {
+                const result = simulateMap(mapCfg, tension, approach, iterations, bet);
+                console.log([
+                    `${approach.label.toUpperCase()} ${tension.toUpperCase()} | sim success ${result.successRate}%`,
+                    `boss spawn ${result.bossSpawnRate}% | boss kill ${result.bossKillRate}%`,
+                    `avg raid xp ${result.avgRaidXp} | avg boss xp ${result.avgBossXp} | avg tokens ${result.avgTokens}`
+                ].join(" | "));
+            }
         }
     }
 }

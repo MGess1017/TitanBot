@@ -4628,630 +4628,6 @@ function formatInventory(userId: string): string {
     return entries.map(([id, qty]) => `${qty}x ${ITEM_DEFS[id]?.name || id}`).join("\n");
 }
 
-type RaidConditionKey = "storm" | "fog" | "night" | "heatwave" | "urban" | "radiation" | "drizzle" | "crosswind" | "low_power" | "ashfall";
-
-type RaidCondition = {
-    key: RaidConditionKey;
-    label: string;
-    description: string;
-    successDelta: number;
-    tokenMultiplierDelta: number;
-    xpMultiplier: number;
-};
-
-const RAID_CONDITIONS: RaidCondition[] = [
-    { key: "storm", label: "Storm Front", description: "Visibility drops and extraction lanes are unstable.", successDelta: -0.03, tokenMultiplierDelta: 0.08, xpMultiplier: 1.1 },
-    { key: "fog", label: "Dense Fog", description: "Long-range pressure is reduced, stealth routing improves.", successDelta: -0.01, tokenMultiplierDelta: 0.05, xpMultiplier: 1.06 },
-    { key: "night", label: "Night Operation", description: "High-risk engagement windows with stealth-focused paths.", successDelta: -0.02, tokenMultiplierDelta: 0.1, xpMultiplier: 1.14 },
-    { key: "heatwave", label: "Heatwave", description: "Thermal strain lowers heavy gear efficiency.", successDelta: -0.015, tokenMultiplierDelta: 0.06, xpMultiplier: 1.08 },
-    { key: "urban", label: "Urban Collapse", description: "Close-quarters terrain rewards mobility and fast weapons.", successDelta: 0.0, tokenMultiplierDelta: 0.04, xpMultiplier: 1.04 },
-    { key: "radiation", label: "Radiation Surge", description: "Hazard zones punish weak protection but increase rewards.", successDelta: -0.025, tokenMultiplierDelta: 0.12, xpMultiplier: 1.18 },
-    { key: "drizzle", label: "Cold Drizzle", description: "Minor moisture slicks lanes and softens sightlines without heavily disrupting tempo.", successDelta: -0.006, tokenMultiplierDelta: 0.025, xpMultiplier: 1.03 },
-    { key: "crosswind", label: "Crosswind Shear", description: "Light lateral wind nudges ranged consistency and extraction timing.", successDelta: -0.009, tokenMultiplierDelta: 0.03, xpMultiplier: 1.04 },
-    { key: "low_power", label: "Low Power Grid", description: "Flickering infrastructure causes subtle routing delays and weaker tactical reads.", successDelta: -0.012, tokenMultiplierDelta: 0.035, xpMultiplier: 1.05 },
-    { key: "ashfall", label: "Ashfall", description: "Airborne ash creates persistent low-grade interference across the operation.", successDelta: -0.018, tokenMultiplierDelta: 0.055, xpMultiplier: 1.08 }
-];
-
-type RaidDifficulty = "Beginner" | "Mid" | "Hard" | "Elite" | "Brutal" | "Cataclysmic";
-
-type RaidMapKey = "plagued_cemetary" | "slaughterhouse" | "boogerswoodz" | "megayachtolopolis" | "warlords_warcamp" | "sunken_village";
-
-type RaidMapConfig = {
-    key: RaidMapKey;
-    label: string;
-    difficulty: RaidDifficulty;
-    helpSummary: string;
-    description: string;
-    lootTier: string;
-    recommendedTension: "low" | "medium" | "high";
-    successDelta: number;
-    tokenMultiplierDelta: number;
-    xpMultiplier: number;
-    lootGearChanceBonus: number;
-    resourceChanceBonus: number;
-    legendaryChanceBonus: number;
-    fnCoinChanceBonus: number;
-    bossName: string;
-    bossSpawnChance: number;
-    bossSuccessPenalty: number;
-    bossKillPenalty: number;
-    bossRaidPressure: number;
-    bossBonusXpRange: [number, number];
-    bossPool: BossVariant[];
-    successWeapons: string[];
-    failureWeapons: string[];
-    successArmor: string[];
-    failureArmor: string[];
-    bossKit: { weaponId: string; armorId: string };
-    scrapBonus: number;
-    bonusLootPool: Array<{ id: string; weight: number }>;
-    crateDropTable: Array<{ id: string; weight: number }>;
-    bossCrateDropTable: Array<{ id: string; weight: number }>;
-};
-
-type RaidLootTuning = {
-    successBaseRolls: number;
-    successHighTensionBonusRolls: number;
-    successHardMapBonusRolls: number;
-    failureBaseRolls: number;
-    gearSuccessBaseChance: number;
-    gearFailureChance: number;
-    fnCoinBaseChance: number;
-    relicBaseChance: number;
-    crateBaseChance: number;
-    ultraRareBaseChance: number;
-    bossUltraRareBonusChance: number;
-};
-
-const RAID_LOOT_TUNING_BY_DIFFICULTY: Record<RaidMapConfig["difficulty"], RaidLootTuning> = {
-    Beginner: {
-        successBaseRolls: 1,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 0,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.18,
-        gearFailureChance: 0.06,
-        fnCoinBaseChance: 0.006,
-        relicBaseChance: 0.018,
-        crateBaseChance: 0.026,
-        ultraRareBaseChance: 0.0003,
-        bossUltraRareBonusChance: 0.0028
-    },
-    Mid: {
-        successBaseRolls: 1,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 0,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.22,
-        gearFailureChance: 0.08,
-        fnCoinBaseChance: 0.009,
-        relicBaseChance: 0.024,
-        crateBaseChance: 0.035,
-        ultraRareBaseChance: 0.00075,
-        bossUltraRareBonusChance: 0.0035
-    },
-    Hard: {
-        successBaseRolls: 1,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 1,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.26,
-        gearFailureChance: 0.1,
-        fnCoinBaseChance: 0.012,
-        relicBaseChance: 0.03,
-        crateBaseChance: 0.042,
-        ultraRareBaseChance: 0.0014,
-        bossUltraRareBonusChance: 0.0042
-    },
-    Elite: {
-        successBaseRolls: 2,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 1,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.29,
-        gearFailureChance: 0.11,
-        fnCoinBaseChance: 0.014,
-        relicBaseChance: 0.034,
-        crateBaseChance: 0.052,
-        ultraRareBaseChance: 0.0019,
-        bossUltraRareBonusChance: 0.0049
-    },
-    Brutal: {
-        successBaseRolls: 2,
-        successHighTensionBonusRolls: 1,
-        successHardMapBonusRolls: 1,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.31,
-        gearFailureChance: 0.115,
-        fnCoinBaseChance: 0.016,
-        relicBaseChance: 0.039,
-        crateBaseChance: 0.06,
-        ultraRareBaseChance: 0.0023,
-        bossUltraRareBonusChance: 0.0054
-    },
-    Cataclysmic: {
-        successBaseRolls: 2,
-        successHighTensionBonusRolls: 2,
-        successHardMapBonusRolls: 1,
-        failureBaseRolls: 1,
-        gearSuccessBaseChance: 0.34,
-        gearFailureChance: 0.12,
-        fnCoinBaseChance: 0.018,
-        relicBaseChance: 0.044,
-        crateBaseChance: 0.075,
-        ultraRareBaseChance: 0.003,
-        bossUltraRareBonusChance: 0.0062
-    }
-};
-
-type BossVariant = {
-    name: string;
-    title: string;
-    ferocity: number;
-    successPenalty: number;
-    killPenalty: number;
-    raidPressure: number;
-    bonusXpRange: [number, number];
-    tokenRewardRange: [number, number];
-    weaponDrops: string[];
-    armorDrops: string[];
-    rareDropChance: number;
-};
-
-type BossRosterEntry = BossVariant & {
-    homeMapKey: RaidMapKey;
-    homeMapLabel: string;
-    homeMapDifficulty: RaidDifficulty;
-};
-
-type RolledBoss = {
-    name: string;
-    title: string;
-    ferocity: number;
-    successPenalty: number;
-    killPenalty: number;
-    raidPressure: number;
-    bonusXpRange: [number, number];
-    tokenRewardRange: [number, number];
-    weaponDrop: string;
-    armorDrop: string;
-    rareDropChance: number;
-    homeMapKey: RaidMapKey;
-    homeMapLabel: string;
-    spawnSharePct: number;
-};
-
-function pickOne<T>(arr: T[]): T {
-    return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function pickWeightedEntry<T extends { weight: number }>(arr: T[]): T {
-    const eligible = arr.filter(entry => entry.weight > 0);
-    if (!eligible.length) return arr[0];
-    const total = eligible.reduce((sum, entry) => sum + entry.weight, 0);
-    let roll = Math.random() * total;
-    for (const entry of eligible) {
-        roll -= entry.weight;
-        if (roll <= 0) return entry;
-    }
-    return eligible[eligible.length - 1];
-}
-
-function rollBossVariant(mapCfg: RaidMapConfig): RolledBoss {
-    const variant = pickWeightedEntry(getBossRotationTable(mapCfg));
-    return {
-        name: variant.boss.name,
-        title: variant.boss.title,
-        ferocity: variant.boss.ferocity,
-        successPenalty: variant.boss.successPenalty,
-        killPenalty: variant.boss.killPenalty,
-        raidPressure: variant.boss.raidPressure,
-        bonusXpRange: variant.boss.bonusXpRange,
-        tokenRewardRange: variant.boss.tokenRewardRange,
-        weaponDrop: pickOne(variant.boss.weaponDrops),
-        armorDrop: pickOne(variant.boss.armorDrops),
-        rareDropChance: variant.boss.rareDropChance,
-        homeMapKey: variant.boss.homeMapKey,
-        homeMapLabel: variant.boss.homeMapLabel,
-        spawnSharePct: variant.sharePct
-    };
-}
-
-function isAdvancedRaidDifficulty(difficulty: RaidDifficulty): boolean {
-    return difficulty !== "Beginner" && difficulty !== "Mid";
-}
-
-const RAID_MAPS: Record<RaidMapKey, RaidMapConfig> = {
-    plagued_cemetary: {
-        key: "plagued_cemetary",
-        label: "FN Plagued Cemetery",
-        difficulty: "Beginner",
-        helpSummary: "Beginner map, higher extraction odds, low-mid loot.",
-        description: "Beginner route with calmer extraction lanes and low-mid tier loot opportunities.",
-        lootTier: "Low to Mid",
-        recommendedTension: "low",
-        successDelta: 0.12,
-        tokenMultiplierDelta: -0.12,
-        xpMultiplier: 0.88,
-        lootGearChanceBonus: -0.08,
-        resourceChanceBonus: 0.03,
-        legendaryChanceBonus: -0.025,
-        fnCoinChanceBonus: -0.02,
-        bossName: "The Grave Warden",
-        bossSpawnChance: 0.05,
-        bossSuccessPenalty: 0.05,
-        bossKillPenalty: 0.06,
-        bossRaidPressure: 0.01,
-        bossBonusXpRange: [24, 52],
-        bossPool: [
-            { name: "The Grave Warden", title: "Crypt Marshal", ferocity: 0.7, successPenalty: 0.03, killPenalty: 0.05, raidPressure: 0.012, bonusXpRange: [28, 58], tokenRewardRange: [18, 42], weaponDrops: ["marksman_dmr", "scav_smg"], armorDrops: ["guardian_plate", "storm_shell"], rareDropChance: 0.08 },
-            { name: "Sister Vell", title: "Bone Oracle", ferocity: 0.82, successPenalty: 0.04, killPenalty: 0.06, raidPressure: 0.013, bonusXpRange: [36, 72], tokenRewardRange: [26, 58], weaponDrops: ["thermal_lance", "marksman_dmr"], armorDrops: ["shadow_cloak", "guardian_plate"], rareDropChance: 0.1 },
-            { name: "Morrow Fang", title: "Pit Reaper", ferocity: 0.9, successPenalty: 0.05, killPenalty: 0.07, raidPressure: 0.015, bonusXpRange: [48, 86], tokenRewardRange: [30, 66], weaponDrops: ["mythic_hammer", "plasma_carbine"], armorDrops: ["adaptive_mesh", "juggernaut_frame"], rareDropChance: 0.12 }
-        ],
-        successWeapons: ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr"],
-        failureWeapons: ["rust_blade", "combat_knife", "scav_smg"],
-        successArmor: ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell"],
-        failureArmor: ["field_vest", "scout_weave", "tactical_armor"],
-        bossKit: { weaponId: "marksman_dmr", armorId: "guardian_plate" },
-        scrapBonus: 2,
-        bonusLootPool: [
-            { id: "field_ration", weight: 8 },
-            { id: "common_crate", weight: 3 },
-            { id: "rare_material_small", weight: 6 },
-            { id: "tactical_blueprint", weight: 2 }
-        ],
-        crateDropTable: [{ id: "tactical_crate", weight: 1 }],
-        bossCrateDropTable: [{ id: "tactical_crate", weight: 1 }]
-    },
-    slaughterhouse: {
-        key: "slaughterhouse",
-        label: "FN Slaughterhouse",
-        difficulty: "Mid",
-        helpSummary: "Mid map, harder extracts, better loot spread, 10% boss spawn.",
-        description: "Mid-tier combat map with harder extractions, stronger loot spread, and a 10% boss spawn chance.",
-        lootTier: "Mid to High",
-        recommendedTension: "medium",
-        successDelta: -0.04,
-        tokenMultiplierDelta: 0.14,
-        xpMultiplier: 1.16,
-        lootGearChanceBonus: 0.07,
-        resourceChanceBonus: 0.08,
-        legendaryChanceBonus: 0.03,
-        fnCoinChanceBonus: 0.012,
-        bossName: "Butcher Prime",
-        bossSpawnChance: 0.12,
-        bossSuccessPenalty: 0.09,
-        bossKillPenalty: 0.1,
-        bossRaidPressure: 0.013,
-        bossBonusXpRange: [60, 120],
-        bossPool: [
-            { name: "Butcher Prime", title: "Arena Tyrant", ferocity: 1.05, successPenalty: 0.06, killPenalty: 0.08, raidPressure: 0.016, bonusXpRange: [70, 132], tokenRewardRange: [48, 92], weaponDrops: ["mythic_hammer", "thermal_lance"], armorDrops: ["juggernaut_frame", "void_shield"], rareDropChance: 0.16 },
-            { name: "Shardjaw", title: "Steel Maw", ferocity: 1.12, successPenalty: 0.07, killPenalty: 0.09, raidPressure: 0.018, bonusXpRange: [84, 156], tokenRewardRange: [56, 108], weaponDrops: ["rail_sniper", "plasma_carbine"], armorDrops: ["adaptive_mesh", "aegis_exosuit"], rareDropChance: 0.2 },
-            { name: "Hexline Rook", title: "Execution Marshal", ferocity: 1.2, successPenalty: 0.08, killPenalty: 0.1, raidPressure: 0.02, bonusXpRange: [92, 168], tokenRewardRange: [62, 118], weaponDrops: ["reactor_blade", "rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.22 }
-        ],
-        successWeapons: ["combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer"],
-        failureWeapons: ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr"],
-        successArmor: ["scout_weave", "tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame"],
-        failureArmor: ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell"],
-        bossKit: { weaponId: "mythic_hammer", armorId: "juggernaut_frame" },
-        scrapBonus: 5,
-        bonusLootPool: [
-            { id: "weapon_bolts", weight: 7 },
-            { id: "repair_kit", weight: 5 },
-            { id: "rare_crate", weight: 2 },
-            { id: "reactor_matrix", weight: 2 }
-        ],
-        crateDropTable: [{ id: "tactical_crate", weight: 1 }],
-        bossCrateDropTable: [{ id: "tactical_crate", weight: 1 }]
-    },
-    boogerswoodz: {
-        key: "boogerswoodz",
-        label: "FN BoogersWoodZ",
-        difficulty: "Hard",
-        helpSummary: "Hard map, premium loot tables, harder boss pressure.",
-        description: "Highest-risk territory with elite loot tables, brutal extraction odds, and harder bosses.",
-        lootTier: "High to Legendary",
-        recommendedTension: "high",
-        successDelta: -0.16,
-        tokenMultiplierDelta: 0.28,
-        xpMultiplier: 1.34,
-        lootGearChanceBonus: 0.14,
-        resourceChanceBonus: 0.12,
-        legendaryChanceBonus: 0.07,
-        fnCoinChanceBonus: 0.04,
-        bossName: "Booger King Omega",
-        bossSpawnChance: 0.26,
-        bossSuccessPenalty: 0.16,
-        bossKillPenalty: 0.2,
-        bossRaidPressure: 0.016,
-        bossBonusXpRange: [140, 260],
-        bossPool: [
-            { name: "Booger King Omega", title: "Apex Monstrosity", ferocity: 1.4, successPenalty: 0.1, killPenalty: 0.12, raidPressure: 0.022, bonusXpRange: [160, 280], tokenRewardRange: [120, 210], weaponDrops: ["reactor_blade", "rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.28 },
-            { name: "Queen Sumphex", title: "Rot Sovereign", ferocity: 1.55, successPenalty: 0.12, killPenalty: 0.14, raidPressure: 0.024, bonusXpRange: [190, 320], tokenRewardRange: [140, 245], weaponDrops: ["reactor_blade", "mythic_hammer"], armorDrops: ["titan_carapace", "adaptive_mesh"], rareDropChance: 0.34 },
-            { name: "Warlord Nullhide", title: "Void Cannoneer", ferocity: 1.68, successPenalty: 0.14, killPenalty: 0.16, raidPressure: 0.026, bonusXpRange: [220, 360], tokenRewardRange: [160, 290], weaponDrops: ["rail_sniper", "plasma_carbine", "enhanced_plasma_carbine"], armorDrops: ["aegis_exosuit", "titan_carapace"], rareDropChance: 0.38 }
-        ],
-        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
-        failureWeapons: ["combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon"],
-        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
-        failureArmor: ["tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield"],
-        bossKit: { weaponId: "reactor_blade", armorId: "titan_carapace" },
-        scrapBonus: 8,
-        bonusLootPool: [
-            { id: "servo_motor", weight: 6 },
-            { id: "nanofiber_roll", weight: 4 },
-            { id: "black_ice_lens", weight: 2 },
-            { id: "epic_crate", weight: 2 },
-            { id: "spectral_fiber", weight: 2 }
-        ],
-        crateDropTable: [
-            { id: "tactical_crate", weight: 1 },
-            { id: "mythic_crate", weight: 3 }
-        ],
-        bossCrateDropTable: [
-            { id: "tactical_crate", weight: 1 },
-            { id: "mythic_crate", weight: 4 }
-        ]
-    },
-    megayachtolopolis: {
-        key: "megayachtolopolis",
-        label: "FN MegaYachtolopolis",
-        difficulty: "Elite",
-        helpSummary: "Elite yacht city, luxury-tech loot, punishing CQB bosses.",
-        description: "Skyline-sized superyacht district packed with luxury-tech vaults, tight interior kill lanes, and brutal command deck extracts.",
-        lootTier: "Luxury Tech / High-End",
-        recommendedTension: "high",
-        successDelta: -0.145,
-        tokenMultiplierDelta: 0.31,
-        xpMultiplier: 1.42,
-        lootGearChanceBonus: 0.17,
-        resourceChanceBonus: 0.15,
-        legendaryChanceBonus: 0.085,
-        fnCoinChanceBonus: 0.045,
-        bossName: "Dreadwake Morvane",
-        bossSpawnChance: 0.29,
-        bossSuccessPenalty: 0.18,
-        bossKillPenalty: 0.22,
-        bossRaidPressure: 0.019,
-        bossBonusXpRange: [210, 360],
-        bossPool: [
-            { name: "Dreadwake Morvane", title: "Hull Reaper", ferocity: 1.82, successPenalty: 0.15, killPenalty: 0.18, raidPressure: 0.03, bonusXpRange: [250, 390], tokenRewardRange: [180, 320], weaponDrops: ["reactor_blade", "rail_sniper", "enhanced_rail_sniper"], armorDrops: ["titan_carapace", "aegis_exosuit"], rareDropChance: 0.42 }
-        ],
-        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
-        failureWeapons: ["pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine"],
-        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
-        failureArmor: ["guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh"],
-        bossKit: { weaponId: "reactor_blade", armorId: "titan_carapace" },
-        scrapBonus: 9,
-        bonusLootPool: [
-            { id: "encrypted_chip", weight: 12 },
-            { id: "nanofiber_roll", weight: 9 },
-            { id: "black_ice_lens", weight: 4 },
-            { id: "legendary_token", weight: 3 },
-            { id: "tactical_crate", weight: 3 },
-            { id: "quantum_logbook", weight: 3 }
-        ],
-        crateDropTable: [
-            { id: "epic_crate", weight: 1 },
-            { id: "tactical_crate", weight: 3 },
-            { id: "mythic_crate", weight: 2 }
-        ],
-        bossCrateDropTable: [
-            { id: "tactical_crate", weight: 2 },
-            { id: "mythic_crate", weight: 3 }
-        ]
-    },
-    warlords_warcamp: {
-        key: "warlords_warcamp",
-        label: "FN Warlords Warcamp",
-        difficulty: "Brutal",
-        helpSummary: "Brutal trench map, war salvage jackpots, relentless field pressure.",
-        description: "Fortified trench sprawl where roaming commanders, artillery scars, and open kill boxes crush sloppy pushes.",
-        lootTier: "War Salvage / High-End",
-        recommendedTension: "high",
-        successDelta: -0.155,
-        tokenMultiplierDelta: 0.34,
-        xpMultiplier: 1.48,
-        lootGearChanceBonus: 0.19,
-        resourceChanceBonus: 0.17,
-        legendaryChanceBonus: 0.09,
-        fnCoinChanceBonus: 0.05,
-        bossName: "Kraghoss the Ashen Standard",
-        bossSpawnChance: 0.31,
-        bossSuccessPenalty: 0.19,
-        bossKillPenalty: 0.23,
-        bossRaidPressure: 0.021,
-        bossBonusXpRange: [240, 390],
-        bossPool: [
-            { name: "Kraghoss the Ashen Standard", title: "Siegeblood Khan", ferocity: 1.96, successPenalty: 0.17, killPenalty: 0.2, raidPressure: 0.033, bonusXpRange: [290, 430], tokenRewardRange: [220, 360], weaponDrops: ["mythic_hammer", "plasma_carbine", "enhanced_thermal_lance"], armorDrops: ["aegis_exosuit", "juggernaut_frame"], rareDropChance: 0.46 }
-        ],
-        successWeapons: ["thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
-        failureWeapons: ["marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer"],
-        successArmor: ["adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
-        failureArmor: ["storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame"],
-        bossKit: { weaponId: "mythic_hammer", armorId: "aegis_exosuit" },
-        scrapBonus: 10,
-        bonusLootPool: [
-            { id: "weapon_bolts", weight: 12 },
-            { id: "servo_motor", weight: 10 },
-            { id: "combat_stim", weight: 8 },
-            { id: "relic_fragment", weight: 4 },
-            { id: "tactical_crate", weight: 4 },
-            { id: "mythic_crate", weight: 1 },
-            { id: "warbond_chip", weight: 2 }
-        ],
-        crateDropTable: [
-            { id: "epic_crate", weight: 1 },
-            { id: "tactical_crate", weight: 3 },
-            { id: "mythic_crate", weight: 2 }
-        ],
-        bossCrateDropTable: [
-            { id: "tactical_crate", weight: 2 },
-            { id: "mythic_crate", weight: 4 }
-        ]
-    },
-    sunken_village: {
-        key: "sunken_village",
-        label: "FN SUNKEN VILLAGE",
-        difficulty: "Cataclysmic",
-        helpSummary: "Cataclysmic ruins, varied crate economy, drowned apex boss.",
-        description: "Flood-choked ruins with submerged cache routes, ambush angles, and crate-rich shrines that reward disciplined clears.",
-        lootTier: "Crate Dense / Legendary",
-        recommendedTension: "high",
-        successDelta: -0.135,
-        tokenMultiplierDelta: 0.3,
-        xpMultiplier: 1.44,
-        lootGearChanceBonus: 0.16,
-        resourceChanceBonus: 0.14,
-        legendaryChanceBonus: 0.095,
-        fnCoinChanceBonus: 0.055,
-        bossName: "Thalrex Mourntide",
-        bossSpawnChance: 0.33,
-        bossSuccessPenalty: 0.2,
-        bossKillPenalty: 0.24,
-        bossRaidPressure: 0.023,
-        bossBonusXpRange: [270, 430],
-        bossPool: [
-            { name: "Thalrex Mourntide", title: "Drowned Godspeaker", ferocity: 2.08, successPenalty: 0.19, killPenalty: 0.22, raidPressure: 0.036, bonusXpRange: [340, 520], tokenRewardRange: [260, 420], weaponDrops: ["rail_sniper", "reactor_blade", "enhanced_reactor_blade", "enhanced_starforged_reaper"], armorDrops: ["titan_carapace", "adaptive_mesh"], rareDropChance: 0.5 }
-        ],
-        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"],
-        failureWeapons: ["marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "rail_sniper"],
-        successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"],
-        failureArmor: ["shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit"],
-        bossKit: { weaponId: "rail_sniper", armorId: "titan_carapace" },
-        scrapBonus: 7,
-        bonusLootPool: [
-            { id: "common_crate", weight: 7 },
-            { id: "rare_crate", weight: 8 },
-            { id: "epic_crate", weight: 6 },
-            { id: "tactical_crate", weight: 4 },
-            { id: "mythic_crate", weight: 2 },
-            { id: "scav_beacon", weight: 6 },
-            { id: "relic_fragment", weight: 4 },
-            { id: "mythic_circuit", weight: 2 }
-        ],
-        crateDropTable: [
-            { id: "common_crate", weight: 4 },
-            { id: "rare_crate", weight: 5 },
-            { id: "epic_crate", weight: 5 },
-            { id: "tactical_crate", weight: 4 },
-            { id: "mythic_crate", weight: 3 }
-        ],
-        bossCrateDropTable: [
-            { id: "rare_crate", weight: 2 },
-            { id: "epic_crate", weight: 3 },
-            { id: "tactical_crate", weight: 4 },
-            { id: "mythic_crate", weight: 5 }
-        ]
-    }
-};
-
-const RAID_MAP_CHOICES = Object.values(RAID_MAPS).map(map => ({ name: map.label, value: map.key }));
-
-const RAID_DIFFICULTY_ORDER: RaidDifficulty[] = ["Beginner", "Mid", "Hard", "Elite", "Brutal", "Cataclysmic"];
-
-const RAID_MAP_SHORT_LABELS: Record<RaidMapKey, string> = {
-    plagued_cemetary: "CEM",
-    slaughterhouse: "SLH",
-    boogerswoodz: "BGZ",
-    megayachtolopolis: "MYO",
-    warlords_warcamp: "WWC",
-    sunken_village: "SVL"
-};
-
-const RAID_BOSS_ROSTER: BossRosterEntry[] = Object.values(RAID_MAPS).flatMap(mapCfg =>
-    mapCfg.bossPool.map(boss => ({
-        ...boss,
-        homeMapKey: mapCfg.key,
-        homeMapLabel: mapCfg.label,
-        homeMapDifficulty: mapCfg.difficulty
-    }))
-);
-
-function getRaidDifficultyIndex(difficulty: RaidDifficulty): number {
-    const idx = RAID_DIFFICULTY_ORDER.indexOf(difficulty);
-    return idx >= 0 ? idx : 0;
-}
-
-function getBossRotationWeight(boss: BossRosterEntry, mapCfg: RaidMapConfig): number {
-    const difficultyDistance = Math.abs(getRaidDifficultyIndex(boss.homeMapDifficulty) - getRaidDifficultyIndex(mapCfg.difficulty));
-    const sameMapBonus = boss.homeMapKey === mapCfg.key ? 8 : 0;
-    const sameDifficultyBonus = boss.homeMapDifficulty === mapCfg.difficulty ? 3 : 0;
-    const distanceBonus = Math.max(0, 4 - difficultyDistance);
-    const ferocityBias = Math.max(1, Math.round(boss.ferocity * 1.8));
-    return Math.max(1, sameMapBonus + sameDifficultyBonus + distanceBonus + ferocityBias);
-}
-
-function getBossRotationTable(mapCfg: RaidMapConfig): Array<{ boss: BossRosterEntry; weight: number; sharePct: number }> {
-    const weighted = RAID_BOSS_ROSTER.map(boss => ({
-        boss,
-        weight: getBossRotationWeight(boss, mapCfg)
-    }));
-    const total = weighted.reduce((sum, entry) => sum + entry.weight, 0) || 1;
-    return weighted.map(entry => ({
-        ...entry,
-        sharePct: Math.round((entry.weight / total) * 1000) / 10
-    }));
-}
-
-function formatBossRotationShares(boss: BossRosterEntry): string {
-    return Object.values(RAID_MAPS)
-        .map(mapCfg => {
-            const tableEntry = getBossRotationTable(mapCfg).find(entry => entry.boss.name === boss.name);
-            const share = tableEntry?.sharePct ?? 0;
-            return `${RAID_MAP_SHORT_LABELS[mapCfg.key]} ${share.toFixed(1)}%`;
-        })
-        .join(" | ");
-}
-
-function resolveRaidMap(mapKeyRaw?: string | null): RaidMapConfig {
-    const key = (mapKeyRaw || "plagued_cemetary") as RaidMapKey;
-    return RAID_MAPS[key] || RAID_MAPS.plagued_cemetary;
-}
-
-function mapProjection(mapCfg: RaidMapConfig, tension: "low" | "medium" | "high"): {
-    successPct: number;
-    tokenMultiplier: number;
-    xpBand: [number, number];
-    expectedNetAt100: number;
-    expectedBossBonusXp: number;
-    bossKitDropChancePct: number;
-} {
-    const base = {
-        low: { successChance: 0.8, tokenMultiplier: 1.15, xp: [14, 30] as [number, number] },
-        medium: { successChance: 0.56, tokenMultiplier: 1.6, xp: [22, 54] as [number, number] },
-        high: { successChance: 0.33, tokenMultiplier: 2.38, xp: [38, 88] as [number, number] }
-    } as const;
-
-    const avgConditionSuccessDelta = -0.0167;
-    const avgConditionTokenDelta = 0.075;
-    const bossExpectedPenalty = mapCfg.bossSpawnChance * (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure);
-    const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
-    const baselineBossKillChance = Math.max(0.12, Math.min(0.88, 0.4 + tensionBossDelta - mapCfg.bossKillPenalty - mapCfg.bossRaidPressure * 0.5));
-    const avgBossBonusXp = Math.round((mapCfg.bossBonusXpRange[0] + mapCfg.bossBonusXpRange[1]) / 2);
-
-    const successPct = Math.round(Math.max(0.06, Math.min(0.93,
-        base[tension].successChance + mapCfg.successDelta + avgConditionSuccessDelta - bossExpectedPenalty
-    )) * 100);
-
-    const tokenMultiplier = Math.max(0.7,
-        base[tension].tokenMultiplier + mapCfg.tokenMultiplierDelta + avgConditionTokenDelta
-    );
-
-    const xpBand: [number, number] = [
-        Math.max(1, Math.floor(base[tension].xp[0] * mapCfg.xpMultiplier)),
-        Math.max(1, Math.floor(base[tension].xp[1] * mapCfg.xpMultiplier))
-    ];
-
-    const successProb = successPct / 100;
-    const expectedOutcomeTokens = 17;
-    const bet = 100;
-    const expectedNetAt100 = Math.round((successProb * bet * tokenMultiplier) + expectedOutcomeTokens - bet);
-    const expectedBossBonusXp = Math.round(successProb * mapCfg.bossSpawnChance * baselineBossKillChance * avgBossBonusXp);
-    const bossKitDropChancePct = Math.round(successProb * mapCfg.bossSpawnChance * baselineBossKillChance * 100);
-
-    return { successPct, tokenMultiplier, xpBand, expectedNetAt100, expectedBossBonusXp, bossKitDropChancePct };
-}
-
 function getInventoryAutocompleteOptions(input: {
     userId: string;
     focusedRaw: string;
@@ -5780,7 +5156,7 @@ function useItem(userId: string, itemId: string, quantity: number): { error?: st
     return { error: "Use action failed safely; item was restored." };
 }
 
-function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: string | null, selectedWeaponId?: string | null, selectedArmorId?: string | null): {
+function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: string | null, selectedWeaponId?: string | null, selectedArmorId?: string | null, approachRaw?: string | null): {
     error?: string;
     success?: boolean;
     net?: number;
@@ -5815,6 +5191,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     outcomeBonusTokens?: number;
     bossBonusTokens?: number;
     failureMitigationTokens?: number;
+    approachLabel?: string;
 } {
     const user = ensureUser(userId);
     const now = Date.now();
@@ -5826,7 +5203,8 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     if (bet < MIN_RAID_BET) return { error: `Minimum raid bet is ${MIN_RAID_BET} FN Token$.` };
     if (!canAffordTokens(userId, bet)) return { error: "Not enough FN Token$." };
 
-    const mapCfg = resolveRaidMap(mapKeyRaw);
+    const mapCfg = RaidDomain.resolveRaidMap(mapKeyRaw);
+    const approach = RaidDomain.resolveRaidApproach(approachRaw);
     const table = {
         low: { successChance: 0.78, tokenMultiplier: 1.07, baseRxp: 5 },
         medium: { successChance: 0.53, tokenMultiplier: 1.42, baseRxp: 11 },
@@ -5846,7 +5224,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     const tensionPressure = tension === "high" ? 0.05 : tension === "medium" ? 0.02 : -0.01;
     const difficultyScalar = 1 + levelPressure + Math.max(0, tensionPressure);
 
-    const mapDifficultyIndex = getRaidDifficultyIndex(mapCfg.difficulty);
+    const mapDifficultyIndex = RaidDomain.getRaidDifficultyIndex(mapCfg.difficulty);
     const mapDifficultyBossScale = 1 + (mapDifficultyIndex * 0.055);
     const latePmcBossScale = pmcLevelBeforeRaid >= 8000
         ? 1 + Math.min(0.18, (pmcLevelBeforeRaid - 8000) / 60000)
@@ -5854,16 +5232,16 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
 
     const bossSpawnChance = Math.max(
         0.03,
-        Math.min(0.82, mapCfg.bossSpawnChance + 0.02 + tensionPressure + levelPressure * 0.5 + mapCfg.bossRaidPressure * 0.35)
+        Math.min(0.82, mapCfg.bossSpawnChance + 0.02 + tensionPressure + levelPressure * 0.5 + mapCfg.bossRaidPressure * 0.35 + approach.bossSpawnDelta)
     );
     const bossSpawned = Math.random() < bossSpawnChance;
-    const boss = bossSpawned ? rollBossVariant(mapCfg) : null;
+    const boss = bossSpawned ? RaidDomain.rollBossVariant(mapCfg) : null;
     const bossPressurePenalty = bossSpawned
         ? (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure + (boss?.successPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * mapDifficultyBossScale * latePmcBossScale
         : 0;
     const finalSuccessChance = Math.max(
         0.06,
-        Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus - bossPressurePenalty)
+        Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + approach.successDelta - bossPressurePenalty)
     );
 
     const success = Math.random() < finalSuccessChance;
@@ -5871,7 +5249,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
 
     let rewardTokens = 0;
     if (success) {
-        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus;
+        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + approach.tokenMultiplierDelta;
         rewardTokens = Math.max(1, Math.floor(bet * (conditionTokenBoost + (Math.random() * 0.12 - 0.07))));
         addTokens(userId, rewardTokens);
     }
@@ -5889,7 +5267,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
         const mapAndBossKillPenalty = (mapCfg.bossKillPenalty + mapCfg.bossRaidPressure + (boss?.killPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * (1 + mapDifficultyIndex * 0.05) * latePmcBossScale;
         const pmcRaidMastery = Math.max(0, Math.min(0.14, pmcLevelBeforeRaid * 0.00085));
-        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta - mapAndBossKillPenalty));
+        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta + approach.bossKillDelta - mapAndBossKillPenalty));
         bossDefeated = Math.random() < bossKillChance;
         if (bossDefeated) {
             const rolledBossReward = RaidDomain.rollBossSuccessRewards({
@@ -5950,7 +5328,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         bossHpRemaining = Math.max(0, Math.min(bossHpMax, Math.round(bossHpMax * bossRemainingPct)));
     }
 
-    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar });
+    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls });
     for (const drop of loot) {
         addInventoryItem(userId, drop.id, drop.qty);
     }
@@ -5959,7 +5337,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         tension,
         success,
         bet,
-        effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus),
+        effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus) * approach.xpMultiplier,
         mapCfg
     );
     const progressionScale = RaidDomain.getPmcXpGainScale(pmcLevelBeforeRaid, mapCfg, tension, success);
@@ -5987,6 +5365,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         tension,
         map: mapCfg.label,
         condition: gearBonus.negatedCondition ? `${condition.label} (Negated)` : condition.label,
+        approach: approach.label,
         bet,
         success,
         rewardTokens: baseRewardTokens + outcomeBonusTokens + bossTokenBonus,
@@ -6011,6 +5390,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         pmcBuffs,
         tension,
         condition: condition.label,
+        approach: approach.key,
         bet,
         success,
         bossSpawned,
@@ -6064,6 +5444,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         outcomeBonusTokens,
         bossBonusTokens: bossTokenBonus,
         failureMitigationTokens: failureMitigation,
+        approachLabel: approach.label,
         tension: `${tension} | ${condition.label}`,
         pmcXP: user.pmcXP,
         pmcLevel: pmcLevelAfterRaid
@@ -6078,10 +5459,11 @@ function formatRaidHistory(userId: string): string {
         const status = entry.success ? "Success" : "Fail";
         const map = entry.map ? ` | Map ${entry.map}` : "";
         const condition = entry.condition ? ` | Cond ${entry.condition}` : "";
+        const approach = entry.approach ? ` | ${entry.approach}` : "";
         const boss = entry.bossSpawned
             ? ` | Boss ${entry.bossName || "Unknown"} ${entry.bossDefeated ? "defeated" : "engaged"}${entry.bossBonusXp ? ` (+${entry.bossBonusXp} XP)` : ""}`
             : "";
-        return `* [${time}] ${status} ${entry.tension}${map}${condition}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
+        return `* [${time}] ${status} ${entry.tension}${map}${condition}${approach}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
     }).join("\n");
 }
 
@@ -6106,7 +5488,7 @@ function buildRaidHistoryPayload(userId: string): string {
         const boss = entry.bossSpawned
             ? `${entry.bossName || "Unknown"}${entry.bossDefeated ? " • defeated" : " • escaped"}`
             : "No boss";
-        return `${status} ${entry.map || "Unknown Map"} • ${entry.tension} • Net ${entry.net >= 0 ? `+${entry.net}` : entry.net} • XP +${entry.rxpGain}\n${boss}`;
+        return `${status} ${entry.map || "Unknown Map"} • ${entry.approach || "Balanced"} • ${entry.tension} • Net ${entry.net >= 0 ? `+${entry.net}` : entry.net} • XP +${entry.rxpGain}\n${boss}`;
     });
 
     const embed = new EmbedBuilder()
@@ -6142,21 +5524,21 @@ function buildBossRosterPayload(): string {
         .addFields(
             {
                 name: "Rotation Key",
-                value: Object.values(RAID_MAPS).map(map => `${RAID_MAP_SHORT_LABELS[map.key]} = ${map.label}`).join("\n"),
+                value: Object.values(RaidDomain.RAID_MAPS).map(map => `${RaidDomain.RAID_MAP_SHORT_LABELS[map.key]} = ${map.label}`).join("\n"),
                 inline: false
             },
             {
                 name: "Roster Summary",
                 value: [
-                    `Total Bosses: ${RAID_BOSS_ROSTER.length}`,
-                    `Maps Covered: ${Object.keys(RAID_MAPS).length}`,
-                    `Highest Threat: ${Math.max(...RAID_BOSS_ROSTER.map(boss => boss.ferocity)).toFixed(2)} ferocity`
+                    `Total Bosses: ${RaidDomain.RAID_BOSS_ROSTER.length}`,
+                    `Maps Covered: ${Object.keys(RaidDomain.RAID_MAPS).length}`,
+                    `Highest Threat: ${Math.max(...RaidDomain.RAID_BOSS_ROSTER.map(boss => boss.ferocity)).toFixed(2)} ferocity`
                 ].join("\n"),
                 inline: false
             }
         );
 
-    for (const boss of RAID_BOSS_ROSTER) {
+    for (const boss of RaidDomain.RAID_BOSS_ROSTER) {
         const portraitUrl = getBossPortraitUrl(boss.name, boss.title);
         embed.addFields({
             name: `${boss.name} (${boss.title})`,
@@ -6166,7 +5548,7 @@ function buildBossRosterPayload(): string {
                 `Ferocity: ${boss.ferocity.toFixed(2)} | Success Penalty: ${(boss.successPenalty * 100).toFixed(1)}% | Kill Penalty: ${(boss.killPenalty * 100).toFixed(1)}%`,
                 `Boss XP: ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} | Tokens: ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} | Rare Drop: ${(boss.rareDropChance * 100).toFixed(1)}%`,
                 `Drops: Wpn ${boss.weaponDrops.join(", ")} | Arm ${boss.armorDrops.join(", ")}`,
-                `Map Rotation: ${formatBossRotationShares(boss)}`,
+                `Map Rotation: ${RaidDomain.formatBossRotationShares(boss)}`,
                 `Portrait: ${portraitUrl ? `[View](${portraitUrl})` : "Unavailable"}`
             ].join("\n"),
             inline: false
@@ -8685,7 +8067,8 @@ async function resolveTicketChannel(guild: Guild, channelId: string, resolverId:
 
 const slashCommands = buildSlashCommands({
     raidConditionChoices: RAID_CONDITION_CHOICES,
-    raidMapChoices: RAID_MAP_CHOICES
+    raidMapChoices: RaidDomain.RAID_MAP_CHOICES,
+    raidApproachChoices: RaidDomain.RAID_APPROACH_CHOICES
 });
 
 const ticketCommandHandlers = buildTicketCommandHandlers({
@@ -10176,7 +9559,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     loadout: async interaction => {
         trackRaidCommandUsage("loadout");
         const condition = RaidDomain.rollRaidCondition();
-        const mapCfg = resolveRaidMap("plagued_cemetary");
+        const mapCfg = RaidDomain.resolveRaidMap("plagued_cemetary");
         return RaidRuntime.formatLoadoutSummary({ userId: interaction.user.id, condition, mapCfg, getInventoryCount, getBestOwnedGear });
     },
     bosses: async () => {
@@ -10198,15 +9581,15 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const mapRaw = interaction.options.getString("map") || "plagued_cemetary";
         const selectedWeaponId = interaction.options.getString("weapon");
         const selectedArmorId = interaction.options.getString("armor");
-        const mapCfg = resolveRaidMap(mapRaw);
+        const mapCfg = RaidDomain.resolveRaidMap(mapRaw);
         const condition = RaidDomain.rollRaidCondition();
         const details = RaidRuntime.formatLoadoutSummary({ userId: interaction.user.id, condition, mapCfg, selectedWeaponId, selectedArmorId, getInventoryCount, getBestOwnedGear });
         if (details.startsWith("Selected weapon") || details.startsWith("Selected armor") || details.startsWith("You do not own")) {
             return details;
         }
-        const lowProj = mapProjection(mapCfg, "low");
-        const medProj = mapProjection(mapCfg, "medium");
-        const highProj = mapProjection(mapCfg, "high");
+        const lowProj = RaidDomain.mapProjection(mapCfg, "low");
+        const medProj = RaidDomain.mapProjection(mapCfg, "medium");
+        const highProj = RaidDomain.mapProjection(mapCfg, "high");
         const previewBonus = RaidRuntime.getRaidLoadoutBonus({ userId: interaction.user.id, condition, selectedWeaponId, selectedArmorId, getInventoryCount, getBestOwnedGear });
         const effectiveConditionSuccess = previewBonus.error || !previewBonus.negatedCondition ? condition.successDelta : 0;
         const effectiveConditionToken = previewBonus.error || !previewBonus.negatedCondition ? condition.tokenMultiplierDelta : 0;
@@ -10218,7 +9601,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             `Map Base Success Delta: ${(mapCfg.successDelta * 100).toFixed(1)}%`,
             `Map Token Delta: ${(mapCfg.tokenMultiplierDelta * 100).toFixed(1)}%`,
             `Map Raid XP Multiplier: ${mapCfg.xpMultiplier.toFixed(2)}x`,
-            `Boss Spawn Chance: ${(mapCfg.bossSpawnChance * 100).toFixed(1)}% | Favored Boss: ${mapCfg.bossName} | Rotation Pool: ${RAID_BOSS_ROSTER.length} bosses`,
+            `Boss Spawn Chance: ${(mapCfg.bossSpawnChance * 100).toFixed(1)}% | Favored Boss: ${mapCfg.bossName} | Rotation Pool: ${RaidDomain.RAID_BOSS_ROSTER.length} bosses`,
             `Projected Low: ${lowProj.successPct}% success | ~${lowProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${lowProj.xpBand[0]}-${lowProj.xpBand[1]} | EV@100 ${lowProj.expectedNetAt100 >= 0 ? `+${lowProj.expectedNetAt100}` : lowProj.expectedNetAt100} tokens | Boss kit ~${lowProj.bossKitDropChancePct}% | Boss bonus XP ~${lowProj.expectedBossBonusXp}`,
             `Projected Medium: ${medProj.successPct}% success | ~${medProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${medProj.xpBand[0]}-${medProj.xpBand[1]} | EV@100 ${medProj.expectedNetAt100 >= 0 ? `+${medProj.expectedNetAt100}` : medProj.expectedNetAt100} tokens | Boss kit ~${medProj.bossKitDropChancePct}% | Boss bonus XP ~${medProj.expectedBossBonusXp}`,
             `Projected High: ${highProj.successPct}% success | ~${highProj.tokenMultiplier.toFixed(2)}x token multiplier | XP ${highProj.xpBand[0]}-${highProj.xpBand[1]} | EV@100 ${highProj.expectedNetAt100 >= 0 ? `+${highProj.expectedNetAt100}` : highProj.expectedNetAt100} tokens | Boss kit ~${highProj.bossKitDropChancePct}% | Boss bonus XP ~${highProj.expectedBossBonusXp}`,
@@ -10241,9 +9624,10 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const mapRaw = interaction.options.getString("map") || "plagued_cemetary";
         const selectedWeaponId = interaction.options.getString("weapon");
         const selectedArmorId = interaction.options.getString("armor");
-        const mapCfg = resolveRaidMap(mapRaw);
+        const approachRaw = interaction.options.getString("approach") || "balanced";
+        const mapCfg = RaidDomain.resolveRaidMap(mapRaw);
         if (!["low", "medium", "high"].includes(tension)) return "Tension must be low, medium, or high.";
-        const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId);
+        const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId, approachRaw);
         if (result.error) return result.error;
         const [tensionLabel] = (result.tension || tension).split(" | ");
         recordRaidTelemetry({

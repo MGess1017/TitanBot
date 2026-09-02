@@ -429,6 +429,7 @@ export function buildRaidResultPayload(input: {
         pmcTierUnlockedBadge?: string;
         selectedWeaponName?: string;
         selectedArmorName?: string;
+        approachLabel?: string;
     };
     mapCfg: { label: string; bossName: string; lootTier: string };
     fallbackTension: string;
@@ -489,6 +490,7 @@ export function buildRaidResultPayload(input: {
                 value: [
                     `Status: ${result.success ? "Extracted" : "Failed"}`,
                     `Success Chance: ${result.successChance || 0}%`,
+                    `Approach: ${result.approachLabel || "Balanced"}`,
                     `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}`
                 ].join("\n"),
                 inline: false
@@ -504,7 +506,7 @@ export function buildRaidResultPayload(input: {
                 inline: true
             },
             {
-                name: "Boss",
+                name: "Boss Encounter",
                 value: [
                     result.bossSpawned ? `${result.bossName || mapCfg.bossName}` : "Boss: No boss detected",
                     bossResolution,
@@ -518,7 +520,7 @@ export function buildRaidResultPayload(input: {
                 inline: false
             },
             ...(specialMoments.length ? [{
-                name: "Highlights",
+                name: "Premium Event Flags",
                 value: specialMoments.slice(0, 3).join("\n"),
                 inline: false
             }] : [])
