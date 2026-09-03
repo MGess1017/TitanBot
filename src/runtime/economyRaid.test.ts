@@ -42,6 +42,7 @@ import {
     MAP_REPUTATION_TIERS,
     RAID_APPROACHES,
     RAID_BOSS_ROSTER,
+    RAID_MAP_SHORT_LABELS,
     RAID_MAPS,
     RAID_WEAPON_DISCOVERY_TABLE,
     RAID_ARMOR_DISCOVERY_TABLE,
@@ -434,6 +435,17 @@ function runEconomyAndRaidTests(): void {
                 assert.ok(projection.xpBand[1] >= projection.xpBand[0]);
             }
         }
+        const compactBossRows = RAID_BOSS_ROSTER.map(boss => {
+            const combatProfile = getBossCombatProfile(boss.name);
+            const traitLine = combatProfile.traits.slice(0, 2).map(key => BOSS_TRAITS[key]?.label || key).join("/") || "standard";
+            const phaseLine = combatProfile.phases.slice(0, 3).map(phase => phase.name).join(" > ") || "Contact";
+            const threat = boss.ferocity >= 2 ? "CAT" : boss.ferocity >= 1.7 ? "APX" : boss.ferocity >= 1.35 ? "BRT" : boss.ferocity >= 1 ? "ELT" : "VET";
+            return `${RAID_MAP_SHORT_LABELS[boss.homeMapKey]} ${boss.name} (${threat} ${boss.ferocity.toFixed(2)}) | Rare ${(boss.rareDropChance * 100).toFixed(0)}% | ${traitLine} | ${phaseLine}`;
+        });
+        const bossChunks: string[] = [];
+        for (let index = 0; index < compactBossRows.length; index += 7) bossChunks.push(compactBossRows.slice(index, index + 7).join("\n"));
+        assert.ok(bossChunks.every(chunk => chunk.length <= 1024));
+        assert.ok(bossChunks.join("\n").length < 4200);
     } finally {
         restoreUserState(userA, snapshotA);
         restoreUserState(userB, snapshotB);

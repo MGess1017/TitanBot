@@ -6509,26 +6509,21 @@ function buildBossRosterPayload(): string {
             }
         );
 
-    for (const boss of RaidDomain.RAID_BOSS_ROSTER) {
+    const bossRows = RaidDomain.RAID_BOSS_ROSTER.map(boss => {
         const combatProfile = RaidDomain.getBossCombatProfile(boss.name);
-        const traitLine = combatProfile.traits.map(key => {
-            const trait = RaidDomain.BOSS_TRAITS[key];
-            return `${trait.label}${trait.counterApproach ? ` [${RaidDomain.RAID_APPROACHES[trait.counterApproach].label}]` : ""}`;
-        }).join(" • ");
+        const traitLine = combatProfile.traits.slice(0, 2).map(key => RaidDomain.BOSS_TRAITS[key]?.label || key).join("/") || "standard";
+        const phaseLine = combatProfile.phases.slice(0, 3).map(phase => phase.name).join(" > ") || "Contact";
+        const threat = boss.ferocity >= 2 ? "CAT" : boss.ferocity >= 1.7 ? "APX" : boss.ferocity >= 1.35 ? "BRT" : boss.ferocity >= 1 ? "ELT" : "VET";
+        return `${RaidDomain.RAID_MAP_SHORT_LABELS[boss.homeMapKey]} ${boss.name} (${threat} ${boss.ferocity.toFixed(2)}) | Rare ${(boss.rareDropChance * 100).toFixed(0)}% | ${traitLine} | ${phaseLine}`;
+    });
+
+    chunkDetailLines(bossRows, 7).forEach((chunk, index) => {
         embed.addFields({
-            name: `${boss.name} (${boss.title})`,
-            value: [
-                `Home: ${RaidDomain.RAID_MAP_SHORT_LABELS[boss.homeMapKey]} • ${boss.homeMapDifficulty}`,
-                `Threat: ${boss.ferocity >= 2 ? "Cataclysmic" : boss.ferocity >= 1.7 ? "Apex" : boss.ferocity >= 1.35 ? "Brutal" : boss.ferocity >= 1 ? "Elite" : "Veteran"} • Ferocity ${boss.ferocity.toFixed(2)}`,
-                `Traits: ${traitLine}`,
-                `Phases: ${combatProfile.phases.map(phase => phase.name).join(" → ")}`,
-                `Rewards: XP ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} • Tokens ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} • Rare ${(boss.rareDropChance * 100).toFixed(0)}%`,
-                `Signature Drops: ${boss.weaponDrops[0]} • ${boss.armorDrops[0]}`,
-                "Rematches: 5 kills unlock a chance for an Alternate Form with increased ferocity."
-            ].join("\n"),
+            name: `Boss Index ${index + 1}`,
+            value: chunk.slice(0, 1024),
             inline: false
         });
-    }
+    });
 
     return JSON.stringify({ embed: embed.toJSON() });
 }
