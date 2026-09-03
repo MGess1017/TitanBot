@@ -183,6 +183,8 @@ const MOD_DATA_FILE = path.resolve(__dirname, "../src/data/moderation.json");
 const TRADE_DATA_FILE = path.resolve(__dirname, "../src/data/trades.json");
 const GIVEAWAY_DATA_FILE = path.resolve(__dirname, "../src/data/giveaways.json");
 const XP_ROLE_DATA_FILE = path.resolve(__dirname, "../src/data/xp-roles.json");
+const XP_ROLE_DEAD_LETTER_FILE = path.resolve(__dirname, "../src/data/xp-role-dead-letter.json");
+const XP_ROLE_METRICS_FILE = path.resolve(__dirname, "../src/data/xp-role-metrics.json");
 const POINTS_DATA_FILE = path.resolve(__dirname, "../src/data/points.json");
 const POINTS_BACKUP_FILE = `${POINTS_DATA_FILE}.bak`;
 const EVENT_LOG_FILE = path.resolve(__dirname, "../src/data/events.jsonl");
@@ -2035,9 +2037,11 @@ type RoleSanityReport = {
     existingTierCount: number;
     missing: XpTierConfig[];
     hierarchyBlocked: Array<{ tier: XpTierConfig; rolePosition: number }>;
+    dryRunDiffs: string[];
     multiTierMembers: number;
     canManageRoles: boolean;
     botHighestRolePosition: number;
+    configurationErrors: string[];
 };
 
 type TicketSanityReport = {
@@ -3561,6 +3565,45 @@ const CASINO_GAME_ORDER: CasinoGameKey[] = [
 ];
 
 const XP_ROLE_SYNC_RUNNING_GUILDS = new Set<string>();
+const XP_ROLE_SYNC_RUNNING_MEMBERS = new Set<string>();
+const XP_ROLE_SYNC_QUEUE: Array<{ guild: Guild; userId: string; xp: number }> = [];
+let XP_ROLE_SYNC_QUEUE_RUNNING = false;
+let XP_ROLE_SYNC_PAUSED = process.env.XP_ROLE_SYNC_MAINTENANCE === "1";
+const XP_ROLE_NOTIFICATION_MODE = process.env.XP_ROLE_NOTIFICATION_MODE === "channel" ? "channel" : "dm";
+type XpRoleSyncMetrics = { lastSyncAt: number; lastSuccessAt: number; lastDeadLetterReplayAt: number; processed: number; added: number; removed: number; failed: number; retries: number; highestXp: number };
+
+function defaultXpRoleSyncMetrics(): XpRoleSyncMetrics {
+    return { lastSyncAt: 0, lastSuccessAt: 0, lastDeadLetterReplayAt: 0, processed: 0, added: 0, removed: 0, failed: 0, retries: 0, highestXp: 0 };
+}
+
+function parseXpRoleSyncMetrics(raw: unknown): XpRoleSyncMetrics | null {
+    if (!raw || typeof raw !== "object") return null;
+    const value = raw as Partial<XpRoleSyncMetrics>;
+    const seed = defaultXpRoleSyncMetrics();
+    return {
+        lastSyncAt: typeof value.lastSyncAt === "number" ? value.lastSyncAt : seed.lastSyncAt,
+        lastSuccessAt: typeof value.lastSuccessAt === "number" ? value.lastSuccessAt : seed.lastSuccessAt,
+        lastDeadLetterReplayAt: typeof value.lastDeadLetterReplayAt === "number" ? value.lastDeadLetterReplayAt : seed.lastDeadLetterReplayAt,
+        processed: typeof value.processed === "number" ? value.processed : seed.processed,
+        added: typeof value.added === "number" ? value.added : seed.added,
+        removed: typeof value.removed === "number" ? value.removed : seed.removed,
+        failed: typeof value.failed === "number" ? value.failed : seed.failed,
+        retries: typeof value.retries === "number" ? value.retries : seed.retries,
+        highestXp: typeof value.highestXp === "number" ? value.highestXp : seed.highestXp
+    };
+}
+
+const XP_ROLE_SYNC_METRICS: XpRoleSyncMetrics = readJsonWithBackup(XP_ROLE_METRICS_FILE, parseXpRoleSyncMetrics, defaultXpRoleSyncMetrics());
+
+function saveXpRoleSyncMetrics(): void {
+    if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1") return;
+    writeJsonAtomic(XP_ROLE_METRICS_FILE, XP_ROLE_SYNC_METRICS);
+}
+
+function updateXpRoleSyncMetrics(update: (metrics: XpRoleSyncMetrics) => void): void {
+    update(XP_ROLE_SYNC_METRICS);
+    saveXpRoleSyncMetrics();
+}
 
 const XP_ROLE_TIERS = [
     { xp: 1000, roleId: "1526854382199771166", name: "Tier 1" },
@@ -3597,6 +3640,40 @@ const XP_ROLE_TIERS = [
 ] as const;
 
 type XpRoleEntry = { xp: number; roleId: string; name: string };
+type XpRoleDeadLetter = { guildId: string; userId: string; xp: number; attempts: number; lastError: string; updatedAt: number };
+
+function readXpRoleDeadLetters(): XpRoleDeadLetter[] {
+    if (!fs.existsSync(XP_ROLE_DEAD_LETTER_FILE)) return [];
+    try {
+        const raw = fs.readJsonSync(XP_ROLE_DEAD_LETTER_FILE);
+        return Array.isArray(raw) ? raw.filter(entry => entry && typeof entry.guildId === "string" && typeof entry.userId === "string") : [];
+    } catch { return []; }
+}
+
+function saveXpRoleDeadLetters(entries: XpRoleDeadLetter[]): void {
+    fs.ensureDirSync(path.dirname(XP_ROLE_DEAD_LETTER_FILE));
+    fs.writeJsonSync(XP_ROLE_DEAD_LETTER_FILE, entries.slice(-500), { spaces: 2 });
+}
+
+function addXpRoleDeadLetter(job: { guild: Guild; userId: string; xp: number }, lastError: string): void {
+    const entries = readXpRoleDeadLetters();
+    const existing = entries.find(entry => entry.guildId === job.guild.id && entry.userId === job.userId);
+    if (existing) {
+        existing.xp = Math.max(existing.xp, job.xp);
+        existing.attempts += 1;
+        existing.lastError = lastError.slice(0, 240);
+        existing.updatedAt = Date.now();
+    } else {
+        entries.push({ guildId: job.guild.id, userId: job.userId, xp: job.xp, attempts: 1, lastError: lastError.slice(0, 240), updatedAt: Date.now() });
+    }
+    saveXpRoleDeadLetters(entries);
+}
+
+function clearXpRoleDeadLetter(guildId: string, userId: string): void {
+    const entries = readXpRoleDeadLetters();
+    const remaining = entries.filter(entry => !(entry.guildId === guildId && entry.userId === userId));
+    if (remaining.length !== entries.length) saveXpRoleDeadLetters(remaining);
+}
 
 function readXpRoleEntries(): XpRoleEntry[] {
     if (!fs.existsSync(XP_ROLE_DATA_FILE)) {
@@ -3615,6 +3692,14 @@ function readXpRoleEntries(): XpRoleEntry[] {
 function saveXpRoleEntries(entries: XpRoleEntry[]): void {
     fs.ensureDirSync(path.dirname(XP_ROLE_DATA_FILE));
     fs.writeJsonSync(XP_ROLE_DATA_FILE, { entries }, { spaces: 2 });
+}
+
+function upsertXpRoleEntry(entry: XpRoleEntry): XpRoleEntry[] {
+    const entries = getEffectiveXpRoleEntries().filter(item => item.xp !== entry.xp);
+    entries.push(entry);
+    entries.sort((a, b) => a.xp - b.xp);
+    saveXpRoleEntries(entries);
+    return entries;
 }
 
 function getPersistedXpRoleMap(): Map<number, XpRoleEntry> {
@@ -3638,6 +3723,48 @@ function getEffectiveXpRoleEntries(): XpRoleEntry[] {
         .sort((a, b) => a.xp - b.xp);
 }
 
+function getXpRoleProgress(xp: number): { currentRole?: XpRoleEntry; nextRole?: XpRoleEntry; progressText: string; progressBar: string; recentUnlocksText: string } {
+    const roleEntries = getEffectiveXpRoleEntries();
+    const currentRole = roleEntries.filter(entry => xp >= entry.xp).pop();
+    const nextRole = roleEntries.find(entry => entry.xp > xp);
+    const floor = currentRole?.xp || 0;
+    const ceiling = nextRole?.xp || floor;
+    const ratio = nextRole ? Math.max(0, Math.min(1, (xp - floor) / Math.max(1, ceiling - floor))) : 1;
+    const filled = Math.round(ratio * 10);
+    const progressBar = `[${"#".repeat(filled)}${"-".repeat(10 - filled)}] ${formatProgressPercent(ratio)}`;
+    const progressText = currentRole && nextRole
+        ? `${Math.max(0, xp - currentRole.xp).toLocaleString()}/${(nextRole.xp - currentRole.xp).toLocaleString()} XP`
+        : nextRole
+            ? `${xp.toLocaleString()}/${nextRole.xp.toLocaleString()} XP`
+            : "Highest configured role reached";
+    return { currentRole, nextRole, progressText, progressBar, recentUnlocksText: "" };
+}
+
+function formatXpRoleUnlocks(userId: string, limit = 5): string {
+    const user = ensureUser(userId);
+    const recent = user.xpRoleUnlocks.slice(-limit).reverse();
+    return recent.length
+        ? recent.map(unlock => `${unlock.roleName} • <t:${Math.floor(unlock.unlockedAt / 1000)}:R>`).join("\n")
+        : "No XP role unlocks yet";
+}
+
+function describeXpRoleDiff(member: GuildMember, xp: number, roleEntries: XpRoleEntry[], botHighestPosition: number): { hasChange: boolean; line: string } {
+    const existingEntries = roleEntries
+        .map(entry => ({ entry, role: member.guild.roles.cache.get(entry.roleId) || null }))
+        .filter((pair): pair is { entry: XpRoleEntry; role: NonNullable<typeof pair.role> } => Boolean(pair.role));
+    const unlockedPair = existingEntries.filter(pair => xp >= pair.entry.xp).pop();
+    const current = existingEntries.filter(pair => member.roles.cache.has(pair.entry.roleId));
+    const currentNames = current.map(pair => pair.entry.name).join(", ") || "none";
+    const removable = current.filter(pair => pair.entry.roleId !== unlockedPair?.entry.roleId && pair.role.position < botHighestPosition);
+    const missingExpected = Boolean(unlockedPair && !member.roles.cache.has(unlockedPair.entry.roleId));
+    const hierarchyBlocked = Boolean(unlockedPair && unlockedPair.role.position >= botHighestPosition);
+    const hasChange = missingExpected || removable.length > 0 || hierarchyBlocked;
+    return {
+        hasChange,
+        line: `<@${member.id}> ${xp.toLocaleString()} XP | has: ${currentNames} | expected: ${unlockedPair?.entry.name || "none"} | add: ${missingExpected ? unlockedPair?.entry.name : "none"} | remove: ${removable.map(pair => pair.entry.name).join(", ") || "none"}${hierarchyBlocked ? " | blocked: hierarchy" : ""}`
+    };
+}
+
 async function getEffectiveXpRoleEntriesForGuild(guild: Guild): Promise<XpRoleEntry[]> {
     const persisted = readXpRoleEntries()
         .filter(entry => Number.isFinite(entry.xp) && entry.xp > 0 && Boolean(entry.roleId) && Boolean(entry.name));
@@ -3649,6 +3776,42 @@ async function getEffectiveXpRoleEntriesForGuild(guild: Guild): Promise<XpRoleEn
     return XP_ROLE_TIERS
         .map(entry => ({ xp: entry.xp, roleId: entry.roleId, name: entry.name }))
         .sort((a, b) => a.xp - b.xp);
+}
+
+const XP_ROLE_COLORS = [0x64748b, 0x38bdf8, 0x22c55e, 0xeab308, 0xf97316, 0xef4444, 0xa855f7, 0x14b8a6] as const;
+
+async function ensureXpTierRoles(guild: Guild): Promise<XpRoleEntry[]> {
+    const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+    if (!me || !me.permissions.has(PermissionFlagsBits.ManageRoles)) return getEffectiveXpRoleEntriesForGuild(guild);
+    await guild.roles.fetch().catch(() => undefined);
+    const entries = await getEffectiveXpRoleEntriesForGuild(guild);
+    let changed = false;
+    for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index];
+        let role = guild.roles.cache.get(entry.roleId) || guild.roles.cache.find(candidate => candidate.name === entry.name) || null;
+        if (!role) {
+            role = await guild.roles.create({
+                name: entry.name,
+                color: XP_ROLE_COLORS[Math.min(index, XP_ROLE_COLORS.length - 1)],
+                reason: `Create missing XP tier role for ${entry.xp} XP`
+            }).catch(() => null);
+            if (!role) {
+                appendAuditEvent("xp_role_create_failed", { guildId: guild.id, xp: entry.xp, name: entry.name });
+                continue;
+            }
+            appendAuditEvent("xp_role_created", { guildId: guild.id, xp: entry.xp, roleId: role.id, name: entry.name });
+        }
+        if (role.position >= (me.roles.highest?.position || 0)) {
+            appendAuditEvent("xp_role_create_blocked", { guildId: guild.id, xp: entry.xp, roleId: role.id, reason: "role hierarchy" });
+            continue;
+        }
+        if (entry.roleId !== role.id) {
+            entries[index] = { ...entry, roleId: role.id };
+            changed = true;
+        }
+    }
+    if (changed) saveXpRoleEntries(entries);
+    return entries;
 }
 
 async function syncMemberXpRoles(member: GuildMember, xp: number, roleEntriesOverride?: XpRoleEntry[]): Promise<void> {
@@ -3687,12 +3850,50 @@ async function syncMemberXpRoles(member: GuildMember, xp: number, roleEntriesOve
     }
 
     if (unlockedRoleId && !refreshedMember.roles.cache.has(unlockedRoleId)) {
-        await refreshedMember.roles.add(unlockedRoleId).catch(() => undefined);
+        const added = await refreshedMember.roles.add(unlockedRoleId).then(() => true).catch(() => false);
+        updateXpRoleSyncMetrics(metrics => {
+            metrics.added += added ? 1 : 0;
+            metrics.failed += added ? 0 : 1;
+        });
+        appendAuditEvent(added ? "xp_role_added" : "xp_role_add_failed", {
+            guildId: refreshedMember.guild.id,
+            memberId: refreshedMember.id,
+            roleId: unlockedRoleId,
+            xp
+        });
     }
 
     const removeRoleIds = manageableTierRoleIds.filter(roleId => roleId !== unlockedRoleId && refreshedMember.roles.cache.has(roleId));
     if (removeRoleIds.length) {
-        await refreshedMember.roles.remove(removeRoleIds).catch(() => undefined);
+        const removed = await refreshedMember.roles.remove(removeRoleIds).then(() => true).catch(() => false);
+        updateXpRoleSyncMetrics(metrics => {
+            metrics.removed += removed ? removeRoleIds.length : 0;
+            metrics.failed += removed ? 0 : 1;
+        });
+        appendAuditEvent(removed ? "xp_roles_removed" : "xp_roles_remove_failed", {
+            guildId: refreshedMember.guild.id,
+            memberId: refreshedMember.id,
+            roleIds: removeRoleIds,
+            xp
+        });
+    }
+
+    if (unlockedRoleId || removeRoleIds.length) {
+        const verified = await refreshedMember.guild.members.fetch(refreshedMember.id).catch(() => null);
+        const stillMissingExpected = Boolean(unlockedRoleId && !verified?.roles.cache.has(unlockedRoleId));
+        const stillHasRemoved = removeRoleIds.filter(roleId => verified?.roles.cache.has(roleId));
+        if (stillMissingExpected || stillHasRemoved.length) {
+            updateXpRoleSyncMetrics(metrics => { metrics.failed += 1; });
+            appendAuditEvent("xp_role_post_mutation_verify_failed", {
+                guildId: refreshedMember.guild.id,
+                memberId: refreshedMember.id,
+                expectedRoleId: unlockedRoleId || null,
+                missingExpected: stillMissingExpected,
+                stillPresentRoleIds: stillHasRemoved,
+                xp
+            });
+            throw new Error("XP role post-mutation verification failed");
+        }
     }
 }
 
@@ -3719,7 +3920,14 @@ async function runGuildXpRoleSyncJob(guild: Guild, sourceChannelId: string | nul
             .join(",");
 
         const user = ensureUser(member.id);
-        await syncMemberXpRoles(member, user.xp, roleEntries);
+        try {
+            await syncMemberXpRoles(member, user.xp, roleEntries);
+        } catch (error) {
+            addXpRoleDeadLetter({ guild, userId: member.id, xp: user.xp }, error instanceof Error ? error.message : String(error));
+            skipped += 1;
+            processed += 1;
+            continue;
+        }
 
         const refreshed = member.guild.members.cache.get(member.id) ?? member;
         const after = roleEntries
@@ -3752,13 +3960,43 @@ async function runGuildXpRoleSyncJob(guild: Guild, sourceChannelId: string | nul
         synced,
         skipped
     });
+    updateXpRoleSyncMetrics(metrics => {
+        metrics.lastSyncAt = Date.now();
+        metrics.lastSuccessAt = Date.now();
+        metrics.processed += processed;
+        metrics.highestXp = Math.max(metrics.highestXp, ...ticketlessXpValues(guild));
+    });
 
     return { processed, synced, skipped };
 }
 
-async function syncXpRolesForUserInGuild(guild: Guild, userId: string, xp: number): Promise<void> {
+function ticketlessXpValues(guild: Guild): number[] {
+    return Array.from(guild.members.cache.values()).map(member => ensureUser(member.id).xp);
+}
+
+async function notifyXpThresholdUnlock(guild: Guild, userId: string, previousXp: number, nextXp: number): Promise<void> {
+    const entry = getEffectiveXpRoleEntries().filter(item => previousXp < item.xp && nextXp >= item.xp).pop();
+    if (!entry) return;
+    const userState = ensureUser(userId);
+    if (userState.xpRoleUnlocks.some(unlock => unlock.roleId === entry.roleId)) return;
+    userState.xpRoleUnlocks.push({ xp: entry.xp, roleName: entry.name, roleId: entry.roleId, unlockedAt: Date.now() });
+    savePoints();
+    const next = getEffectiveXpRoleEntries().find(item => item.xp > entry.xp);
+    const message = `XP role unlocked: **${entry.name}** (${entry.xp.toLocaleString()} XP).${next ? ` Next tier: ${next.name} at ${next.xp.toLocaleString()} XP.` : " You reached the highest configured tier."}`;
+    const user = await client.users.fetch(userId).catch(() => null);
+    if (XP_ROLE_NOTIFICATION_MODE === "dm" && user) await user.send(message).catch(() => undefined);
+    const channel = guild.channels.cache.get(ACTIVITY_CHANNEL_ID);
+    if (XP_ROLE_NOTIFICATION_MODE === "channel" && channel && channel.isTextBased() && "send" in channel) await channel.send({ content: `<@${userId}> ${message}`, allowedMentions: { users: [userId] } }).catch(() => undefined);
+    appendAuditEvent("xp_role_threshold_unlocked", { guildId: guild.id, userId, roleId: entry.roleId, roleName: entry.name, xp: nextXp, nextThreshold: next?.xp || null });
+}
+
+async function syncXpRolesForUserInGuild(guild: Guild, userId: string, xp: number): Promise<boolean> {
+    const syncKey = `${guild.id}:${userId}`;
+    if (XP_ROLE_SYNC_RUNNING_MEMBERS.has(syncKey)) return false;
+    XP_ROLE_SYNC_RUNNING_MEMBERS.add(syncKey);
+    try {
     const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
-    if (!member) return;
+    if (!member) return false;
 
     await syncMemberXpRoles(member, xp);
     // Retry once with a forced fetch to avoid cache/race misses at threshold crossings.
@@ -3766,6 +4004,75 @@ async function syncXpRolesForUserInGuild(guild: Guild, userId: string, xp: numbe
     if (refreshed) {
         await syncMemberXpRoles(refreshed, xp);
     }
+    appendAuditEvent("xp_role_auto_sync", { guildId: guild.id, memberId: userId, xp });
+    updateXpRoleSyncMetrics(metrics => {
+        metrics.lastSyncAt = Date.now();
+        metrics.lastSuccessAt = Date.now();
+        metrics.processed += 1;
+        metrics.highestXp = Math.max(metrics.highestXp, xp);
+    });
+    clearXpRoleDeadLetter(guild.id, userId);
+    return true;
+    } catch (error) {
+        appendAuditEvent("xp_role_auto_sync_failed", {
+            guildId: guild.id,
+            memberId: userId,
+            xp,
+            reason: error instanceof Error ? error.message : String(error)
+        });
+        return false;
+    } finally {
+        XP_ROLE_SYNC_RUNNING_MEMBERS.delete(syncKey);
+    }
+}
+
+async function retryXpRoleDeadLetters(): Promise<void> {
+    if (XP_ROLE_SYNC_PAUSED) return;
+    updateXpRoleSyncMetrics(metrics => { metrics.lastDeadLetterReplayAt = Date.now(); });
+    for (const entry of readXpRoleDeadLetters().slice(0, 25)) {
+        const guild = client.guilds.cache.get(entry.guildId);
+        if (guild) enqueueXpRoleSync(guild, entry.userId, entry.xp);
+    }
+}
+
+async function drainXpRoleSyncQueue(): Promise<void> {
+    if (XP_ROLE_SYNC_QUEUE_RUNNING || XP_ROLE_SYNC_PAUSED) return;
+    XP_ROLE_SYNC_QUEUE_RUNNING = true;
+    try {
+        while (XP_ROLE_SYNC_QUEUE.length) {
+            const job = XP_ROLE_SYNC_QUEUE.shift();
+            if (!job) continue;
+            let completed = false;
+            for (let attempt = 1; attempt <= 3 && !completed; attempt++) {
+                completed = await syncXpRolesForUserInGuild(job.guild, job.userId, job.xp);
+                if (!completed) {
+                    updateXpRoleSyncMetrics(metrics => { metrics.retries += 1; });
+                    await new Promise(resolve => setTimeout(resolve, attempt * 500));
+                }
+            }
+            if (!completed) {
+                addXpRoleDeadLetter(job, "sync attempts exhausted");
+                appendAuditEvent("xp_role_auto_sync_dead_letter", { guildId: job.guild.id, memberId: job.userId, xp: job.xp });
+            }
+        }
+    } finally {
+        XP_ROLE_SYNC_QUEUE_RUNNING = false;
+    }
+}
+
+function enqueueXpRoleSync(guild: Guild, userId: string, xp: number): void {
+    if (XP_ROLE_SYNC_PAUSED) return;
+    const existing = XP_ROLE_SYNC_QUEUE.find(job => job.guild.id === guild.id && job.userId === userId);
+    if (existing) {
+        existing.xp = Math.max(existing.xp, xp);
+    } else {
+        if (XP_ROLE_SYNC_QUEUE.length >= 1000) {
+            XP_ROLE_SYNC_QUEUE.shift();
+            appendAuditEvent("xp_role_sync_queue_overflow", { guildId: guild.id, memberId: userId, xp });
+        }
+        XP_ROLE_SYNC_QUEUE.push({ guild, userId, xp });
+    }
+    void drainXpRoleSyncQueue();
 }
 
 function getPrimaryGuild(): Guild | null {
@@ -3818,10 +4125,16 @@ function buildHealthEmbed(): EmbedBuilder {
                 name: "Ops",
                 value: [
                     `Active XP sync jobs: ${XP_ROLE_SYNC_RUNNING_GUILDS.size}`,
+                    `Sync queue: ${XP_ROLE_SYNC_QUEUE.length} | Retries: ${XP_ROLE_SYNC_METRICS.retries}`,
+                    `Dead letters: ${readXpRoleDeadLetters().length} | Processed: ${XP_ROLE_SYNC_METRICS.processed}`,
+                    `Last sync: ${XP_ROLE_SYNC_METRICS.lastSyncAt ? new Date(XP_ROLE_SYNC_METRICS.lastSyncAt).toISOString() : "never"}`,
+                    `Last success: ${XP_ROLE_SYNC_METRICS.lastSuccessAt ? new Date(XP_ROLE_SYNC_METRICS.lastSuccessAt).toISOString() : "never"}`,
+                    `Role mutations: +${XP_ROLE_SYNC_METRICS.added} / -${XP_ROLE_SYNC_METRICS.removed} | Failures: ${XP_ROLE_SYNC_METRICS.failed}`,
                     `tickets.json: ${statLabel(TICKET_DATA_FILE)}`,
                     `trades.json: ${statLabel(TRADE_DATA_FILE)}`,
                     `moderation.json: ${statLabel(MOD_DATA_FILE)}`,
                     `balance-telemetry.json: ${statLabel(BALANCE_TELEMETRY_FILE)}`,
+                    `xp-role-metrics.json: ${statLabel(XP_ROLE_METRICS_FILE)}`,
                     `runtime-metrics.json: ${statLabel(METRICS_DATA_FILE)}`
                 ].join("\n"),
                 inline: false
@@ -3849,31 +4162,46 @@ async function collectRoleSanityReport(guild: Guild): Promise<RoleSanityReport> 
     const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
     const botHighest = me?.roles.highest?.position ?? 0;
     const canManageRoles = Boolean(me?.permissions.has(PermissionFlagsBits.ManageRoles));
+    const configurationErrors: string[] = [];
+    const seenThresholds = new Set<number>();
+    const roleEntries = await getEffectiveXpRoleEntriesForGuild(guild);
+    for (const tier of roleEntries) {
+        if (seenThresholds.has(tier.xp)) configurationErrors.push(`Duplicate XP threshold: ${tier.xp}`);
+        seenThresholds.add(tier.xp);
+        if (!/^\d{15,22}$/.test(tier.roleId)) configurationErrors.push(`Invalid role ID for ${tier.name}: ${tier.roleId}`);
+    }
 
-    const existingTierRoles = XP_ROLE_TIERS
+    const existingTierRoles = roleEntries
         .map(tier => ({ tier, role: guild.roles.cache.get(tier.roleId) || null }))
         .filter(item => Boolean(item.role));
 
-    const missing = XP_ROLE_TIERS.filter(tier => !guild.roles.cache.has(tier.roleId));
+    const missing = roleEntries.filter(tier => !guild.roles.cache.has(tier.roleId));
     const hierarchyBlocked = existingTierRoles
         .filter(item => (item.role?.position || 0) >= botHighest)
         .map(item => ({ tier: item.tier, rolePosition: item.role?.position || 0 }));
 
     let multiTierMembers = 0;
+    const dryRunDiffs: string[] = [];
     for (const [, member] of guild.members.cache) {
         if (member.user.bot) continue;
-        const count = XP_ROLE_TIERS.filter(tier => member.roles.cache.has(tier.roleId)).length;
+        const count = roleEntries.filter(tier => member.roles.cache.has(tier.roleId)).length;
         if (count > 1) multiTierMembers += 1;
+        if (dryRunDiffs.length < 10) {
+            const diff = describeXpRoleDiff(member, ensureUser(member.id).xp, roleEntries, botHighest);
+            if (diff.hasChange) dryRunDiffs.push(diff.line);
+        }
     }
 
     return {
-        configuredTierCount: XP_ROLE_TIERS.length,
+        configuredTierCount: roleEntries.length,
         existingTierCount: existingTierRoles.length,
         missing,
         hierarchyBlocked,
+        dryRunDiffs,
         multiTierMembers,
         canManageRoles,
-        botHighestRolePosition: botHighest
+        botHighestRolePosition: botHighest,
+        configurationErrors
     };
 }
 
@@ -3883,7 +4211,8 @@ async function runRoleSanityFix(guild: Guild, startedByUserId: string, sourceCha
     }
 
     XP_ROLE_SYNC_RUNNING_GUILDS.add(guild.id);
-    void runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId)
+    void ensureXpTierRoles(guild)
+        .then(() => runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId))
         .catch(error => {
             appendAuditEvent("rolesanity_fix_failed", {
                 guildId: guild.id,
@@ -8798,6 +9127,36 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
 
         const guild = interaction.guild;
         if (!guild) return "This command can only be used in a server.";
+        const pause = interaction.options.getBoolean("pause");
+        const retry = interaction.options.getBoolean("retry") || false;
+        const configXp = interaction.options.getInteger("config_xp");
+        const configRole = interaction.options.getRole("config_role");
+        const configName = interaction.options.getString("config_name")?.trim();
+
+        if (configXp !== null || configRole || configName) {
+            if (!configXp || configXp <= 0 || !configRole) {
+                return "To configure an XP role tier, provide config_xp and config_role. config_name is optional.";
+            }
+            const configured = upsertXpRoleEntry({ xp: configXp, roleId: configRole.id, name: configName || configRole.name });
+            appendAuditEvent("xp_role_config_updated", {
+                guildId: guild.id,
+                actorId: interaction.user.id,
+                xp: configXp,
+                roleId: configRole.id,
+                name: configName || configRole.name,
+                configuredTierCount: configured.length
+            });
+            await ensureXpTierRoles(guild);
+            return `XP role tier configured: ${configXp.toLocaleString()} XP -> ${configName || configRole.name}. Run /rolesanity dry_run:true to preview member changes.`;
+        }
+
+        if (pause !== null) {
+            XP_ROLE_SYNC_PAUSED = pause;
+            appendAuditEvent("xp_role_sync_pause_changed", { guildId: guild.id, paused: pause, actorId: interaction.user.id });
+            if (!pause) void drainXpRoleSyncQueue();
+        }
+        if (retry) void retryXpRoleDeadLetters();
+        if (XP_ROLE_SYNC_PAUSED) return "XP role synchronization is paused for maintenance.";
 
         if (XP_ROLE_SYNC_RUNNING_GUILDS.has(guild.id)) {
             return "An XP role sync is already running for this server. Please wait for it to finish.";
@@ -8979,6 +9338,14 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             ? formatProgressPercent(xpIntoLevel / levelSpan)
             : "100%";
         const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
+        const roleEntries = getEffectiveXpRoleEntries();
+        const currentRole = roleEntries.filter(entry => user.xp >= entry.xp).pop();
+        const nextRole = roleEntries.find(entry => entry.xp > user.xp);
+        const roleProgress = currentRole && nextRole
+            ? `${Math.max(0, user.xp - currentRole.xp).toLocaleString()}/${(nextRole.xp - currentRole.xp).toLocaleString()} XP`
+            : nextRole
+                ? `${user.xp.toLocaleString()}/${nextRole.xp.toLocaleString()} XP`
+                : "Highest configured role reached";
         const streakText = user.dailyStreak > 0 ? `${user.dailyStreak} day streak` : "No active streak";
         const achievements = user.achievements.length > 0
             ? user.achievements.slice(0, 4).join("\n")
@@ -8999,6 +9366,16 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                         `Level: **${engagementLevel.toLocaleString()}**`,
                         `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
                         `Completion: **${progressPercent}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🎖️ XP Role",
+                    value: [
+                        `Current: **${currentRole?.name || "No role yet"}**`,
+                        `Progress: **${roleProgress}**`,
+                        `Next: **${nextRole ? `${nextRole.name} at ${nextRole.xp.toLocaleString()} XP` : "Maximum tier"}**`,
+                        `Unlock history: **${user.xpRoleUnlocks.length}**`
                     ].join("\n"),
                     inline: true
                 },
@@ -9070,6 +9447,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             ? user.achievements.slice(0, 6).join("\n")
             : "No achievements yet";
         const pmcProgress = getPmcProgress(user.pmcXP);
+        const roleProgress = getXpRoleProgress(user.xp);
         const embed = new EmbedBuilder()
             .setColor(prestigeBadge.color)
             .setTitle("📊 XP Intelligence Report")
@@ -9095,6 +9473,16 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                         `📆 Daily streak: **${user.dailyStreak.toLocaleString()}**`,
                         `⏱️ Last XP: **${lastXpAt}**`,
                         `🏆 Achievements: **${user.achievements.length.toLocaleString()}**`
+                    ].join("\n"),
+                    inline: true
+                },
+                {
+                    name: "🎖️ XP Role Track",
+                    value: [
+                        `Current: **${roleProgress.currentRole?.name || "No role yet"}**`,
+                        `Next: **${roleProgress.nextRole ? `${roleProgress.nextRole.name} at ${roleProgress.nextRole.xp.toLocaleString()} XP` : "Maximum tier"}**`,
+                        roleProgress.progressBar,
+                        roleProgress.progressText
                     ].join("\n"),
                     inline: true
                 },
@@ -9136,8 +9524,13 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                     inline: true
                 },
                 {
-                    name: "✨ Recent Unlocks",
+                    name: "✨ Recent Achievements",
                     value: achievements,
+                    inline: false
+                },
+                {
+                    name: "🎖️ Recent Role Unlocks",
+                    value: formatXpRoleUnlocks(interaction.user.id, 5),
                     inline: false
                 }
             )
@@ -9260,7 +9653,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const snapshot = getXpPersistenceSnapshot(target.id);
         const effectiveXp = Math.max(snapshot.memoryXp, snapshot.primaryXp ?? 0, snapshot.backupXp ?? 0);
         const level = getXPLevel(effectiveXp);
-        const unlocked = XP_ROLE_TIERS.filter(entry => effectiveXp >= entry.xp).pop();
+        const unlocked = getEffectiveXpRoleEntries().filter(entry => effectiveXp >= entry.xp).pop();
 
         let roleStatus = "No XP tier unlocked yet (below first threshold).";
         if (interaction.guild && unlocked) {
@@ -9328,10 +9721,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const guild = interaction.guild;
         if (!guild) return "This command can only be used in a server.";
         const fix = interaction.options.getBoolean("fix") || false;
+        const dryRun = interaction.options.getBoolean("dry_run") || false;
         const report = await collectRoleSanityReport(guild);
         let fixNote = "No remediation requested.";
 
-        if (fix) {
+        if (fix && !dryRun) {
             const fixResult = await runRoleSanityFix(guild, interaction.user.id, interaction.channelId || null);
             fixNote = fixResult.started
                 ? "Remediation started: background XP role sync launched."
@@ -9364,10 +9758,36 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                 },
                 {
                     name: "Fix Mode",
-                    value: fixNote,
+                    value: dryRun ? "Dry run: no roles or members will be changed." : fixNote,
+                    inline: false
+                },
+                {
+                    name: "Sync Metrics",
+                    value: [
+                        `Queue: ${XP_ROLE_SYNC_QUEUE.length}`,
+                        `Retries: ${XP_ROLE_SYNC_METRICS.retries}`,
+                        `Dead letters: ${readXpRoleDeadLetters().length}`,
+                        `Processed: ${XP_ROLE_SYNC_METRICS.processed}`,
+                        `Mutations: +${XP_ROLE_SYNC_METRICS.added} / -${XP_ROLE_SYNC_METRICS.removed}`,
+                        `Failures: ${XP_ROLE_SYNC_METRICS.failed}`,
+                        `Last sync: ${XP_ROLE_SYNC_METRICS.lastSyncAt ? new Date(XP_ROLE_SYNC_METRICS.lastSyncAt).toISOString() : "never"}`,
+                        `Last success: ${XP_ROLE_SYNC_METRICS.lastSuccessAt ? new Date(XP_ROLE_SYNC_METRICS.lastSuccessAt).toISOString() : "never"}`,
+                        `Last dead-letter replay: ${XP_ROLE_SYNC_METRICS.lastDeadLetterReplayAt ? new Date(XP_ROLE_SYNC_METRICS.lastDeadLetterReplayAt).toISOString() : "never"}`
+                    ].join("\n"),
+                    inline: false
+                },
+                {
+                    name: "Dry-Run Member Diff",
+                    value: dryRun
+                        ? (report.dryRunDiffs.length ? report.dryRunDiffs.join("\n").slice(0, 1024) : "No sampled member changes detected.")
+                        : "Use dry_run:true to preview sampled add/remove changes before fixing.",
                     inline: false
                 }
             );
+
+            if (report.configurationErrors.length) {
+                embed.addFields({ name: "Configuration Errors", value: report.configurationErrors.slice(0, 10).join("\n"), inline: false });
+            }
 
         if (report.missing.length) {
             embed.addFields({
@@ -10730,6 +11150,8 @@ client.once("clientReady", async () => {
         if (guild) {
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
+            await ensureXpTierRoles(guild);
+            await retryXpRoleDeadLetters();
             purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
@@ -11862,6 +12284,7 @@ client.on("messageCreate", async message => {
         message.attachments.size > 0;
 
     if (isCommunicationEvent) {
+        const currentXp = ensureUser(message.author.id).xp;
         const nextXp = addXP(message.author.id, 1);
         appendAuditEvent("engagement_xp", {
             userId: message.author.id,
@@ -11874,7 +12297,12 @@ client.on("messageCreate", async message => {
             attachmentCount: message.attachments.size
         });
         if (message.guild) {
-            await syncXpRolesForUserInGuild(message.guild, message.author.id, nextXp);
+            const roleEntries = getEffectiveXpRoleEntries();
+            const crossedThreshold = roleEntries.some(entry => currentXp < entry.xp && nextXp >= entry.xp);
+            if (crossedThreshold) {
+                enqueueXpRoleSync(message.guild, message.author.id, nextXp);
+                void notifyXpThresholdUnlock(message.guild, message.author.id, currentXp, nextXp);
+            }
         }
     }
 

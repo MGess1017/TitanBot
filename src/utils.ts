@@ -41,6 +41,7 @@ export type UserState = {
     casinoLossToday: number;
     casinoJackpotContribution: number;
     casinoAchievements: string[];
+    xpRoleUnlocks: Array<{ xp: number; roleName: string; roleId: string; unlockedAt: number }>;
     raidHistory: Array<{
         timestamp: number;
         tension: string;
@@ -213,6 +214,7 @@ function defaultUserState(): UserState {
         casinoLossToday: 0,
         casinoJackpotContribution: 0,
         casinoAchievements: [],
+        xpRoleUnlocks: [],
         raidHistory: [],
         lastRaid: 0,
         inventory: {},
@@ -390,6 +392,7 @@ export function ensureUser(userId: string): UserState {
     if (user.casinoLossToday === undefined) user.casinoLossToday = 0;
     if (user.casinoJackpotContribution === undefined) user.casinoJackpotContribution = 0;
     if (!Array.isArray(user.casinoAchievements)) user.casinoAchievements = [];
+    if (!Array.isArray(user.xpRoleUnlocks)) user.xpRoleUnlocks = [];
     if (!Array.isArray(user.raidHistory)) user.raidHistory = [];
     if (user.lastRaid === undefined) user.lastRaid = 0;
     if (!user.inventory || typeof user.inventory !== "object") user.inventory = {};
