@@ -169,6 +169,7 @@ const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
 const STRICT_ENV_REQUIRED = readEnvFlag("STRICT_ENV_REQUIRED", false);
 const ENABLE_STARTUP_AUTOPANELS = readEnvFlag("ENABLE_STARTUP_AUTOPANELS", true);
 const ENABLE_STARTUP_DEPLOYMENT_SUMMARY = readEnvFlag("ENABLE_STARTUP_DEPLOYMENT_SUMMARY", true);
+const MESSAGE_XP_GAIN = 2;
 const XP_COOLDOWN_MS = 0;
 const RAID_COOLDOWN_MS = 5 * 1000;
 const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
@@ -12285,12 +12286,12 @@ client.on("messageCreate", async message => {
 
     if (isCommunicationEvent) {
         const currentXp = ensureUser(message.author.id).xp;
-        const nextXp = addXP(message.author.id, 1);
+        const nextXp = addXP(message.author.id, MESSAGE_XP_GAIN);
         appendAuditEvent("engagement_xp", {
             userId: message.author.id,
             guildId: message.guildId,
             channelId: message.channelId,
-            xpDelta: 1,
+            xpDelta: MESSAGE_XP_GAIN,
             totalXp: nextXp,
             reference: Boolean(message.reference),
             mentionCount: message.mentions.users.size,
