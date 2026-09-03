@@ -11693,10 +11693,21 @@ client.on("interactionCreate", async interaction => {
 
     if (interaction.isButton() && interaction.customId === RAID_RESULT_ACTION_IDS.bosses) {
         const payload = JSON.parse(buildBossRosterPayload());
-        await interaction.reply({
-            embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
-            flags: MessageFlags.Ephemeral
-        }).catch(() => undefined);
+        try {
+            await interaction.reply({
+                embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
+                flags: MessageFlags.Ephemeral
+            });
+        } catch (error) {
+            console.error("Boss roster rich response failed:", error);
+            const fallback = RaidDomain.RAID_BOSS_ROSTER
+                .map(boss => `${boss.name} • ${boss.homeMapLabel} • Ferocity ${boss.ferocity.toFixed(2)}`)
+                .join("\n");
+            await interaction.reply({
+                content: `Raid Boss Roster\n${fallback}`.slice(0, 2000),
+                flags: MessageFlags.Ephemeral
+            }).catch(() => undefined);
+        }
         return;
     }
 
