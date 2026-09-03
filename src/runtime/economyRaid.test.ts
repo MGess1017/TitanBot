@@ -50,6 +50,7 @@ import {
     discoverRareExtractionRoute,
     getBossCombatModifiers,
     getBossCombatProfile,
+    getBossWeaponDropWeight,
     getBossRotationTable,
     getMapReputationProgress,
     getRaidBranchModifiers,
@@ -58,7 +59,8 @@ import {
     mapProjection,
     resolveRaidApproach,
     rollBossSuccessRewards,
-    shouldTriggerRaidDecision
+    shouldTriggerRaidDecision,
+    RAID_APEX_WEAPON_DISCOVERY_TABLE
 } from "../raid/domain";
 
 function cloneUserState(userId: string) {
@@ -210,6 +212,18 @@ function runEconomyAndRaidTests(): void {
         }
         assert.ok(CRAFT_RECIPES.some(recipe => recipe.outputId === "plasma_carbine" && recipe.inputs.plasma_focusing_lens === 2));
         assert.ok(CRAFT_RECIPES.some(recipe => recipe.outputId === "chaos_staff" && recipe.inputs.chaos_splinter === 2));
+        const scaledRaidWeaponIds = ["emberfall_carbine", "gravecoil_rifle", "voidspike_halberd", "bloodmoon_arbalest", "nullstorm_cannon", "abyssal_railgun", "black_sun_lance", "titanbreaker_maul"];
+        for (const weaponId of scaledRaidWeaponIds) {
+            assert.equal(ITEM_DEFS[weaponId].kind, "weapon");
+            assert.ok(!SHOP_ITEMS.includes(weaponId), `${weaponId} should be found in raids, not bought in shop`);
+            assert.ok(RAID_WEAPON_DISCOVERY_TABLE.some(entry => entry.id === weaponId), `${weaponId} should be in raid weapon discovery`);
+        }
+        assert.ok((ITEM_DEFS.emberfall_carbine.raidAttack || 0) < (ITEM_DEFS.voidspike_halberd.raidAttack || 0));
+        assert.ok((ITEM_DEFS.voidspike_halberd.raidAttack || 0) < (ITEM_DEFS.nullstorm_cannon.raidAttack || 0));
+        assert.ok((ITEM_DEFS.nullstorm_cannon.raidAttack || 0) < (ITEM_DEFS.titanbreaker_maul.raidAttack || 0));
+        assert.ok(RAID_APEX_WEAPON_DISCOVERY_TABLE.some(entry => entry.id === "titanbreaker_maul"));
+        assert.ok(getBossWeaponDropWeight("titanbreaker_maul", "Cataclysmic") > getBossWeaponDropWeight("titanbreaker_maul", "Beginner"));
+        assert.ok(getBossWeaponDropWeight("titanbreaker_maul", "Cataclysmic") > getBossWeaponDropWeight("emberfall_carbine", "Cataclysmic"));
         const newHardMapKeys = ["obsidian_spire", "nullforge_depths", "bloodmoon_cathedral", "eclipse_bastion", "titanfall_crucible"] as const;
         for (const key of newHardMapKeys) {
             assert.ok(RAID_MAPS[key], `${key} should be registered`);
@@ -402,6 +416,9 @@ function runEconomyAndRaidTests(): void {
         assert.ok(premiumRaidPayload.components[0].components.some((component: { custom_id: string }) => component.custom_id === RAID_RESULT_ACTION_IDS.mastery));
 
         for (const mapCfg of Object.values(RAID_MAPS)) {
+            for (const itemId of [...mapCfg.successWeapons, ...mapCfg.failureWeapons, ...mapCfg.successArmor, ...mapCfg.failureArmor, mapCfg.bossKit.weaponId, mapCfg.bossKit.armorId]) {
+                assert.ok(ITEM_DEFS[itemId], `${mapCfg.key} references unknown gear item ${itemId}`);
+            }
             for (const item of [...mapCfg.bonusLootPool, ...mapCfg.crateDropTable, ...mapCfg.bossCrateDropTable]) {
                 assert.ok(ITEM_DEFS[item.id], `${mapCfg.key} references unknown loot item ${item.id}`);
             }
