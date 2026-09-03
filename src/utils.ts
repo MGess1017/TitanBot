@@ -11,6 +11,8 @@ export type UserState = {
     pmcBossKills: number;
     pmcPrestige: number;
     pmcMasteryLevel: number;
+    pmcPrestigePerks: string[];
+    pmcMilestonesClaimed: number[];
     pmcCallsign: string;
     pmcBanner: string;
     lastXP: number;
@@ -181,6 +183,8 @@ function defaultUserState(): UserState {
         pmcBossKills: 0,
         pmcPrestige: 0,
         pmcMasteryLevel: 0,
+        pmcPrestigePerks: [],
+        pmcMilestonesClaimed: [],
         pmcCallsign: "Rookie",
         pmcBanner: "standard",
         lastXP: 0,
@@ -356,6 +360,8 @@ export function ensureUser(userId: string): UserState {
     if (user.pmcBossKills === undefined) user.pmcBossKills = 0;
     if (user.pmcPrestige === undefined) user.pmcPrestige = 0;
     if (user.pmcMasteryLevel === undefined) user.pmcMasteryLevel = 0;
+    if (!Array.isArray(user.pmcPrestigePerks)) user.pmcPrestigePerks = [];
+    if (!Array.isArray(user.pmcMilestonesClaimed)) user.pmcMilestonesClaimed = [];
     if (user.pmcCallsign === undefined) user.pmcCallsign = "Rookie";
     if (user.pmcBanner === undefined) user.pmcBanner = "standard";
     if (user.lastXP === undefined) user.lastXP = 0;
@@ -811,6 +817,7 @@ export function performPmcPrestige(userId: string): { error?: string; prestige?:
     user.pmcXP = 0;
     user.rxp = 0;
     const tier = getPmcPrestigeTier(user.pmcPrestige);
+    user.pmcPrestigePerks = Array.from(new Set([...user.pmcPrestigePerks, `prestige_${user.pmcPrestige}_raid_mastery`]));
     user.achievements.push(`${tier.badge} PMC Prestige ${tier.numeral}: ${tier.label}`);
     savePoints();
     return { prestige: user.pmcPrestige, tier };
@@ -994,9 +1001,10 @@ export function applyPmcMilestoneRewards(userId: string): { claimed: number[]; m
     const currentMastery = getPmcMasteryLevel(user.pmcXP);
     for (let milestone = 1000; milestone <= level; milestone += 1000) {
         const marker = `PMC Milestone ${milestone}`;
-        if (user.achievements.some(entry => entry.includes(marker))) continue;
+        if (user.pmcMilestonesClaimed.includes(milestone)) continue;
         user.achievements.push(`${milestone >= PMC_LEVEL_CAP ? "🌌" : "🏅"} ${marker} secured`);
         user.inventory.upgrade_core = (user.inventory.upgrade_core || 0) + (milestone % 5000 === 0 ? 2 : 1);
+        user.pmcMilestonesClaimed.push(milestone);
         claimed.push(milestone);
     }
     if (currentMastery > previous) {

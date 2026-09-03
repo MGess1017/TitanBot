@@ -118,6 +118,8 @@ function defaultUserState() {
         pmcBossKills: 0,
         pmcPrestige: 0,
         pmcMasteryLevel: 0,
+        pmcPrestigePerks: [],
+        pmcMilestonesClaimed: [],
         pmcCallsign: "Rookie",
         pmcBanner: "standard",
         lastXP: 0,
@@ -272,6 +274,10 @@ function ensureUser(userId) {
         user.pmcPrestige = 0;
     if (user.pmcMasteryLevel === undefined)
         user.pmcMasteryLevel = 0;
+    if (!Array.isArray(user.pmcPrestigePerks))
+        user.pmcPrestigePerks = [];
+    if (!Array.isArray(user.pmcMilestonesClaimed))
+        user.pmcMilestonesClaimed = [];
     if (user.pmcCallsign === undefined)
         user.pmcCallsign = "Rookie";
     if (user.pmcBanner === undefined)
@@ -692,6 +698,7 @@ function performPmcPrestige(userId) {
     user.pmcXP = 0;
     user.rxp = 0;
     const tier = getPmcPrestigeTier(user.pmcPrestige);
+    user.pmcPrestigePerks = Array.from(new Set([...user.pmcPrestigePerks, `prestige_${user.pmcPrestige}_raid_mastery`]));
     user.achievements.push(`${tier.badge} PMC Prestige ${tier.numeral}: ${tier.label}`);
     savePoints();
     return { prestige: user.pmcPrestige, tier };
@@ -852,10 +859,11 @@ function applyPmcMilestoneRewards(userId) {
     const currentMastery = getPmcMasteryLevel(user.pmcXP);
     for (let milestone = 1000; milestone <= level; milestone += 1000) {
         const marker = `PMC Milestone ${milestone}`;
-        if (user.achievements.some(entry => entry.includes(marker)))
+        if (user.pmcMilestonesClaimed.includes(milestone))
             continue;
         user.achievements.push(`${milestone >= exports.PMC_LEVEL_CAP ? "🌌" : "🏅"} ${marker} secured`);
         user.inventory.upgrade_core = (user.inventory.upgrade_core || 0) + (milestone % 5000 === 0 ? 2 : 1);
+        user.pmcMilestonesClaimed.push(milestone);
         claimed.push(milestone);
     }
     if (currentMastery > previous) {

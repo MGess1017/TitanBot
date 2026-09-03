@@ -108,6 +108,7 @@ const POINTS_BACKUP_FILE = `${POINTS_DATA_FILE}.bak`;
 const EVENT_LOG_FILE = path_1.default.resolve(__dirname, "../src/data/events.jsonl");
 const BALANCE_TELEMETRY_FILE = path_1.default.resolve(__dirname, "../src/data/balance-telemetry.json");
 const METRICS_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/runtime-metrics.json");
+const OPS_DEAD_LETTER_FILE = path_1.default.resolve(__dirname, "../src/data/ops-alert-dead-letter.jsonl");
 const TICKET_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/tickets.json");
 const TICKET_TRANSCRIPT_DIR = path_1.default.resolve(__dirname, "../src/data/ticket-transcripts");
 const DEFAULT_TICKET_HANDLER_ROLE_ID = "1506184638207361145";
@@ -220,6 +221,12 @@ function postOpsAlert(level, title, details = {}) {
     });
     req.on("error", error => {
         console.error(`Ops alert webhook error: ${toSafeString(error)}`);
+        try {
+            fs_extra_1.default.appendFileSync(OPS_DEAD_LETTER_FILE, `${JSON.stringify({ at: Date.now(), level, title, details, error: toSafeString(error) })}\n`, "utf8");
+        }
+        catch {
+            // Alert failures must never interrupt bot operation.
+        }
     });
     req.write(body);
     req.end();
@@ -756,6 +763,7 @@ function readRuntimeMetrics() {
 }
 const runtimeMetrics = readRuntimeMetrics();
 let shutdownMetricMarked = false;
+const emittedAuditEventIds = new Set();
 function saveRuntimeMetrics() {
     if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1")
         return;
@@ -830,7 +838,12 @@ function appendAuditEvent(eventType, payload) {
         return;
     try {
         fs_extra_1.default.ensureDirSync(path_1.default.dirname(EVENT_LOG_FILE));
+        const eventId = node_crypto_1.default.createHash("sha256").update(JSON.stringify({ eventType, payload })).digest("hex").slice(0, 24);
+        if (emittedAuditEventIds.has(eventId))
+            return;
+        emittedAuditEventIds.add(eventId);
         const line = JSON.stringify({
+            eventId,
             ts: new Date().toISOString(),
             eventType,
             ...payload
@@ -1094,7 +1107,11 @@ function writeJsonAtomic(filePath, data) {
         }
     }
     try {
-        fs_extra_1.default.writeJsonSync(tempPath, data, { spaces: 2 });
+        const checksum = node_crypto_1.default.createHash("sha256").update(JSON.stringify(data)).digest("hex");
+        const output = filePath === METRICS_DATA_FILE && data && typeof data === "object"
+            ? { ...data, checksum }
+            : data;
+        fs_extra_1.default.writeJsonSync(tempPath, output, { spaces: 2 });
         fs_extra_1.default.moveSync(tempPath, filePath, { overwrite: true });
         try {
             fs_extra_1.default.copyFileSync(filePath, backupPath);
@@ -2003,6 +2020,12 @@ function buildGearActionModal(action) {
     const label = action === "craft" ? "Recipe output ID" : "Item ID";
     return modal.addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("item").setLabel(label).setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(80)));
 }
+function buildPmcIdentityModal() {
+    return new discord_js_1.ModalBuilder()
+        .setCustomId("pmc_identity_modal")
+        .setTitle("PMC Identity")
+        .addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("callsign").setLabel("Callsign").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(24).setPlaceholder("Your field callsign")), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("banner").setLabel("Banner name").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(24).setPlaceholder("standard, veteran, apex")));
+}
 function buildAdminReportPanelPayload(guildName) {
     const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
         .setColor(0x0ea5e9)
@@ -2780,7 +2803,8 @@ const CASINO_UI_IDS = {
 const PMC_PRESTIGE_IDS = {
     request: "pmc_prestige_request",
     confirm: "pmc_prestige_confirm",
-    cancel: "pmc_prestige_cancel"
+    cancel: "pmc_prestige_cancel",
+    identity: "pmc_identity"
 };
 const activeRaidEncounters = new Set();
 const GEAR_MODAL_PREFIX = "gear_modal:";
@@ -5211,6 +5235,8 @@ function buildPmcProfilePayload(user) {
                     ? `Status: Ready for Prestige ${nextPrestigeTier.numeral}`
                     : `Eligibility: PMC Level ${utils_1.PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} • ${Math.max(0, utils_1.PMC_PRESTIGE_LEVEL_REQUIREMENT - progress.level).toLocaleString()} levels remaining`,
             `Permanent: +${(prestigeBonuses.successBonus * 100).toFixed(1)}% success • +${(prestigeBonuses.tokenBonus * 100).toFixed(1)}% tokens • +${(prestigeBonuses.defenseBonus * 100).toFixed(1)}% defense • +${(prestigeBonuses.xpBonus * 100).toFixed(1)}% raid XP`,
+            `Perks: ${state.pmcPrestigePerks.length ? state.pmcPrestigePerks.join(", ") : "None unlocked"}`,
+            `Milestone Rewards: ${state.pmcMilestonesClaimed.length} claimed • Post-Cap Mastery: ${(0, utils_1.getPmcMasteryLevel)(state.pmcXP)}`,
             `Reset Scope: PMC Level and Raid XP only • Inventory, currency, map REP, trophies, and records preserved`,
             `Overlevel Option: Continue advancing to Level ${utils_1.PMC_LEVEL_CAP.toLocaleString()} without prestiging`
         ].join("\n"),
@@ -5258,6 +5284,9 @@ function buildPmcProfilePayload(user) {
         inline: false
     });
     const prestigeRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(PMC_PRESTIGE_IDS.identity)
+        .setLabel("Edit Callsign")
+        .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
         .setCustomId(PMC_PRESTIGE_IDS.request)
         .setLabel(state.pmcPrestige >= utils_1.PMC_PRESTIGE_CAP ? "Prestige X Achieved" : `Prestige to ${nextPrestigeTier.numeral}`)
         .setStyle(discord_js_1.ButtonStyle.Primary)
@@ -7501,7 +7530,12 @@ const commandHandlers = {
     },
     status: async () => {
         const memory = process.memoryUsage();
-        return (0, health_1.buildStatusLines)(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())).join("\n");
+        const deployment = getGitDeploymentInfo();
+        return [
+            ...(0, health_1.buildStatusLines)(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())),
+            `Deployment: ${deployment.shortCommit || "unknown"} • ${deployment.branch || "unknown"}`,
+            `Build: ${deployment.subject || "unknown"}`
+        ].join("\n");
     },
     balance: async (interaction) => (0, coreCommands_1.handleCoreCommand)("balance", interaction),
     bank: async (interaction) => (0, coreCommands_1.handleCoreCommand)("bank", interaction),
@@ -10168,6 +10202,18 @@ client.on("interactionCreate", async (interaction) => {
             .addFields({ name: "Will Reset", value: `PMC Level ${level.toLocaleString()} → 0\nRaid XP ${state.pmcXP.toLocaleString()} → 0`, inline: true }, { name: "Will Remain", value: "Inventory and currency\nMap reputation and raid records\nBoss hearts, kills, and achievements", inline: true }, { name: "Permanent Rank", value: `Prestige ${nextTier.numeral} • ${nextTier.label}\nHigher raid XP, success, token, and defense bonuses`, inline: false });
         const confirmRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.confirm).setLabel(`Confirm Prestige ${nextTier.numeral}`).setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.cancel).setLabel("Cancel").setStyle(discord_js_1.ButtonStyle.Secondary));
         await interaction.reply({ embeds: [confirmEmbed], components: [confirmRow], flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.identity) {
+        await interaction.showModal(buildPmcIdentityModal()).catch(() => undefined);
+        return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId === "pmc_identity_modal") {
+        const user = (0, utils_1.ensureUser)(interaction.user.id);
+        user.pmcCallsign = (interaction.fields.getTextInputValue("callsign") || "Rookie").replace(/[^a-z0-9 _-]/gi, "").trim().slice(0, 24) || "Rookie";
+        user.pmcBanner = (interaction.fields.getTextInputValue("banner") || "standard").replace(/[^a-z0-9 _-]/gi, "").trim().toLowerCase().slice(0, 24) || "standard";
+        (0, utils_1.savePoints)();
+        await interaction.reply({ content: `PMC identity updated: ${user.pmcCallsign} • ${user.pmcBanner}.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
     if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.confirm) {

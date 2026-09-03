@@ -45,6 +45,7 @@ import {
     getMapReputationEntry,
     getPmcBuffs,
     getPmcLevel,
+    getPmcMasteryLevel,
     getPmcPrestigeBonuses,
     getPmcPrestigeTier,
     getPmcProgress,
@@ -187,6 +188,7 @@ const POINTS_BACKUP_FILE = `${POINTS_DATA_FILE}.bak`;
 const EVENT_LOG_FILE = path.resolve(__dirname, "../src/data/events.jsonl");
 const BALANCE_TELEMETRY_FILE = path.resolve(__dirname, "../src/data/balance-telemetry.json");
 const METRICS_DATA_FILE = path.resolve(__dirname, "../src/data/runtime-metrics.json");
+const OPS_DEAD_LETTER_FILE = path.resolve(__dirname, "../src/data/ops-alert-dead-letter.jsonl");
 const TICKET_DATA_FILE = path.resolve(__dirname, "../src/data/tickets.json");
 const TICKET_TRANSCRIPT_DIR = path.resolve(__dirname, "../src/data/ticket-transcripts");
 const DEFAULT_TICKET_HANDLER_ROLE_ID = "1506184638207361145";
@@ -304,6 +306,11 @@ function postOpsAlert(level: "warn" | "error", title: string, details: Record<st
 
     req.on("error", error => {
         console.error(`Ops alert webhook error: ${toSafeString(error)}`);
+        try {
+            fs.appendFileSync(OPS_DEAD_LETTER_FILE, `${JSON.stringify({ at: Date.now(), level, title, details, error: toSafeString(error) })}\n`, "utf8");
+        } catch {
+            // Alert failures must never interrupt bot operation.
+        }
     });
 
     req.write(body);
@@ -1015,6 +1022,7 @@ function readRuntimeMetrics(): RuntimeMetricsStore {
 
 const runtimeMetrics = readRuntimeMetrics();
 let shutdownMetricMarked = false;
+const emittedAuditEventIds = new Set<string>();
 
 function saveRuntimeMetrics(): void {
     if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1") return;
@@ -1092,7 +1100,11 @@ function appendAuditEvent(eventType: string, payload: Record<string, unknown>): 
     if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1") return;
     try {
         fs.ensureDirSync(path.dirname(EVENT_LOG_FILE));
+        const eventId = crypto.createHash("sha256").update(JSON.stringify({ eventType, payload })).digest("hex").slice(0, 24);
+        if (emittedAuditEventIds.has(eventId)) return;
+        emittedAuditEventIds.add(eventId);
         const line = JSON.stringify({
+            eventId,
             ts: new Date().toISOString(),
             eventType,
             ...payload
@@ -1370,7 +1382,11 @@ function writeJsonAtomic(filePath: string, data: unknown): void {
     }
 
     try {
-        fs.writeJsonSync(tempPath, data, { spaces: 2 });
+        const checksum = crypto.createHash("sha256").update(JSON.stringify(data)).digest("hex");
+        const output = filePath === METRICS_DATA_FILE && data && typeof data === "object"
+            ? { ...(data as Record<string, unknown>), checksum }
+            : data;
+        fs.writeJsonSync(tempPath, output, { spaces: 2 });
         fs.moveSync(tempPath, filePath, { overwrite: true });
         try {
             fs.copyFileSync(filePath, backupPath);
@@ -2569,6 +2585,16 @@ function buildGearActionModal(action: string): ModalBuilder {
     ));
 }
 
+function buildPmcIdentityModal(): ModalBuilder {
+    return new ModalBuilder()
+        .setCustomId("pmc_identity_modal")
+        .setTitle("PMC Identity")
+        .addComponents(
+            new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("callsign").setLabel("Callsign").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(24).setPlaceholder("Your field callsign")),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("banner").setLabel("Banner name").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(24).setPlaceholder("standard, veteran, apex"))
+        );
+}
+
 function buildAdminReportPanelPayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x0ea5e9)
@@ -3512,7 +3538,8 @@ const CASINO_UI_IDS = {
 const PMC_PRESTIGE_IDS = {
     request: "pmc_prestige_request",
     confirm: "pmc_prestige_confirm",
-    cancel: "pmc_prestige_cancel"
+    cancel: "pmc_prestige_cancel",
+    identity: "pmc_identity"
 } as const;
 
 const activeRaidEncounters = new Set<string>();
@@ -6262,6 +6289,8 @@ function buildPmcProfilePayload(user: User): string {
                             ? `Status: Ready for Prestige ${nextPrestigeTier.numeral}`
                             : `Eligibility: PMC Level ${PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} • ${Math.max(0, PMC_PRESTIGE_LEVEL_REQUIREMENT - progress.level).toLocaleString()} levels remaining`,
                     `Permanent: +${(prestigeBonuses.successBonus * 100).toFixed(1)}% success • +${(prestigeBonuses.tokenBonus * 100).toFixed(1)}% tokens • +${(prestigeBonuses.defenseBonus * 100).toFixed(1)}% defense • +${(prestigeBonuses.xpBonus * 100).toFixed(1)}% raid XP`,
+                    `Perks: ${state.pmcPrestigePerks.length ? state.pmcPrestigePerks.join(", ") : "None unlocked"}`,
+                    `Milestone Rewards: ${state.pmcMilestonesClaimed.length} claimed • Post-Cap Mastery: ${getPmcMasteryLevel(state.pmcXP)}`,
                     `Reset Scope: PMC Level and Raid XP only • Inventory, currency, map REP, trophies, and records preserved`,
                     `Overlevel Option: Continue advancing to Level ${PMC_LEVEL_CAP.toLocaleString()} without prestiging`
                 ].join("\n"),
@@ -6317,6 +6346,10 @@ function buildPmcProfilePayload(user: User): string {
         );
 
     const prestigeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(PMC_PRESTIGE_IDS.identity)
+            .setLabel("Edit Callsign")
+            .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
             .setCustomId(PMC_PRESTIGE_IDS.request)
             .setLabel(state.pmcPrestige >= PMC_PRESTIGE_CAP ? "Prestige X Achieved" : `Prestige to ${nextPrestigeTier.numeral}`)
@@ -8790,7 +8823,12 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     },
     status: async () => {
         const memory = process.memoryUsage();
-        return buildStatusLines(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())).join("\n");
+        const deployment = getGitDeploymentInfo();
+        return [
+            ...buildStatusLines(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())),
+            `Deployment: ${deployment.shortCommit || "unknown"} • ${deployment.branch || "unknown"}`,
+            `Build: ${deployment.subject || "unknown"}`
+        ].join("\n");
     },
     balance: async interaction => handleCoreCommand("balance", interaction),
     bank: async interaction => handleCoreCommand("bank", interaction),
@@ -11610,6 +11648,20 @@ client.on("interactionCreate", async interaction => {
             new ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.cancel).setLabel("Cancel").setStyle(ButtonStyle.Secondary)
         );
         await interaction.reply({ embeds: [confirmEmbed], components: [confirmRow], flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.identity) {
+        await interaction.showModal(buildPmcIdentityModal()).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === "pmc_identity_modal") {
+        const user = ensureUser(interaction.user.id);
+        user.pmcCallsign = (interaction.fields.getTextInputValue("callsign") || "Rookie").replace(/[^a-z0-9 _-]/gi, "").trim().slice(0, 24) || "Rookie";
+        user.pmcBanner = (interaction.fields.getTextInputValue("banner") || "standard").replace(/[^a-z0-9 _-]/gi, "").trim().toLowerCase().slice(0, 24) || "standard";
+        savePoints();
+        await interaction.reply({ content: `PMC identity updated: ${user.pmcCallsign} • ${user.pmcBanner}.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
 

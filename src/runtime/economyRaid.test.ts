@@ -26,6 +26,7 @@ import {
 import { getRaidRewards } from "../game/raid";
 import { ITEM_DEFS, SHOP_ITEMS } from "../game/catalog";
 import { getRouteAccessItemDropChance } from "../raid/runtime";
+import { getBossPortraitUrl } from "../game/bossPortraits";
 import { CRAFT_RECIPES, craftItem, createAuctionListing, dismantleGear, getDynamicVendorPrice, calculateDynamicLootValue, getGearDurability, insureGear, placeAuctionBid, repairGear, resolveGearLoss, saveLoadout, upgradeGear } from "../game/gearEconomy";
 import { buildBossBattlePayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildShopPayload, GEAR_UI_IDS, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
 import {
@@ -34,6 +35,8 @@ import {
     RAID_APPROACHES,
     RAID_BOSS_ROSTER,
     RAID_MAPS,
+    RAID_WEAPON_DISCOVERY_TABLE,
+    RAID_ARMOR_DISCOVERY_TABLE,
     RARE_EXTRACTION_ROUTES,
     calculateMapReputationGain,
     discoverRareExtractionRoute,
@@ -268,6 +271,25 @@ function runEconomyAndRaidTests(): void {
             assert.ok(profile.phases.length >= 2);
             assert.equal(profile.phases[0].thresholdPct, 100);
             assert.ok(profile.traits.every(key => Boolean(BOSS_TRAITS[key])));
+        }
+        const specialBosses = RAID_BOSS_ROSTER.filter(boss => ["Acid Wraith", "DogMeat", "Wizard Of Chaos", "Queen Of Doom"].includes(boss.name));
+        assert.equal(specialBosses.length, 4);
+        assert.ok(specialBosses.every(boss => boss.ferocity >= 1.48));
+        const chaosBoss = specialBosses.find(boss => boss.name === "Wizard Of Chaos");
+        assert.ok(chaosBoss && chaosBoss.ferocity >= 2.5 && chaosBoss.bonusXpRange[0] >= 1000 && chaosBoss.tokenRewardRange[0] >= 800);
+        assert.ok((chaosBoss?.spawnWeight || 1) < 0.05);
+        assert.ok(["Acid Wraith", "DogMeat", "Queen Of Doom"].every(name => (specialBosses.find(boss => boss.name === name)?.spawnWeight || 1) < 0.5));
+        assert.equal(RAID_WEAPON_DISCOVERY_TABLE.filter(entry => ["acid_spitter", "caustic_reaper", "hellhound_carbine", "bloodfang_blade", "doom_scepter", "widow_arc", "chaos_staff", "reality_breaker", "eclipse_glaive", "demoncore_lance"].includes(entry.id)).length, 10);
+        assert.equal(RAID_ARMOR_DISCOVERY_TABLE.filter(entry => ["acidbound_shell", "venomward_suit", "hellhide_harness", "doomplate_carapace", "crownfall_raiment", "chaos_mantle", "apocalypse_aegis", "eclipse_bulwark", "demoncore_mail", "wraithveil_hood"].includes(entry.id)).length, 10);
+        assert.equal(ITEM_DEFS.chaos_staff.rarity, "mythic");
+        assert.equal(ITEM_DEFS.chaos_mantle.rarity, "mythic");
+        assert.ok((ITEM_DEFS.chaos_staff.raidAttack || 0) >= 0.15);
+        assert.ok((ITEM_DEFS.chaos_mantle.raidDefense || 0) >= 0.17);
+        for (const boss of RAID_BOSS_ROSTER) {
+            const portrait = getBossPortraitUrl(boss.name, boss.title);
+            assert.ok(portrait?.includes("photorealistic"));
+            assert.ok(portrait?.includes(encodeURIComponent(boss.name)));
+            assert.equal(portrait, getBossPortraitUrl(boss.name, boss.title));
         }
         const assaultCounter = getBossCombatModifiers("The Grave Warden", "assault");
         const reconMatch = getBossCombatModifiers("The Grave Warden", "recon");
