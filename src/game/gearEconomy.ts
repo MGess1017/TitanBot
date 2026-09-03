@@ -59,7 +59,14 @@ export type CraftRecipe = { outputId: string; quantity: number; inputs: Record<s
 export const CRAFT_RECIPES: CraftRecipe[] = [
     { outputId: "upgrade_core", quantity: 1, inputs: { scrap: 30, rare_material: 4, servo_motor: 1 } },
     { outputId: "blueprint_bossbreaker", quantity: 1, inputs: { encrypted_chip: 8, upgrade_core: 2, boss_intel_fragment: 1 }, minVendorReputation: 3 },
-    { outputId: "tactical_overdrive", quantity: 1, inputs: { upgrade_core: 1, combat_stim: 2, power_cell: 2 } }
+    { outputId: "tactical_overdrive", quantity: 1, inputs: { upgrade_core: 1, combat_stim: 2, power_cell: 2 } },
+    { outputId: "plasma_carbine", quantity: 1, inputs: { plasma_focusing_lens: 2, weapon_bolts: 8, rare_material: 5 } },
+    { outputId: "rail_sniper", quantity: 1, inputs: { rail_barrel: 1, plasma_focusing_lens: 1, weapon_bolts: 10, encrypted_chip: 4 } },
+    { outputId: "reactor_blade", quantity: 1, inputs: { reactor_edge_core: 1, upgrade_core: 2, rare_material: 6 } },
+    { outputId: "nullburst_launcher", quantity: 1, inputs: { nullburst_chamber: 1, reactor_matrix: 2, mythic_circuit: 1, upgrade_core: 3 }, minVendorReputation: 2 },
+    { outputId: "eclipse_glaive", quantity: 1, inputs: { eclipse_blade_fragment: 2, reactor_edge_core: 1, black_ice_lens: 1, upgrade_core: 3 }, minVendorReputation: 3 },
+    { outputId: "demoncore_lance", quantity: 1, inputs: { demoncore_shaft: 1, reactor_edge_core: 1, hydra_capacitor: 1, upgrade_core: 4 }, minVendorReputation: 3 },
+    { outputId: "chaos_staff", quantity: 1, inputs: { chaos_splinter: 2, nullburst_chamber: 1, mythic_circuit: 2, black_ice_lens: 2 }, minVendorReputation: 5 }
 ];
 
 export function craftItem(user: UserState, recipe: CraftRecipe): GearOperationResult {

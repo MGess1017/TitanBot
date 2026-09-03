@@ -277,14 +277,28 @@ export function rollRaidLoot(input: {
         { id: "collector_marrow_lantern", weight: 1.08 },
         { id: "collector_cipher_tablet", weight: 1.14 },
         { id: "collector_voidcarved_urn", weight: 0.95 },
-        { id: "collector_riftbone_fang", weight: 0.9 }
+        { id: "collector_riftbone_fang", weight: 0.9 },
+        { id: "collector_ember_contract", weight: 0.78 },
+        { id: "collector_sable_vault_coin", weight: 0.62 },
+        { id: "collector_nullglass_eye", weight: 0.48 },
+        { id: "collector_warlock_seal", weight: 0.36 },
+        { id: "collector_bloodmoon_deed", weight: 0.24 }
     ].filter(entry => COLLECTIBLE_ITEM_IDS.includes(entry.id as (typeof COLLECTIBLE_ITEM_IDS)[number]));
 
     const ultraCollectiblePool: Array<{ id: string; weight: number }> = [
         { id: "collector_eternal_halo", weight: 1 },
         { id: "collector_omega_reliquary", weight: 1 },
         { id: "collector_paradox_shard", weight: 1 },
-        { id: "collector_blackstar_diadem", weight: 1 }
+        { id: "collector_blackstar_diadem", weight: 1 },
+        { id: "collector_abyss_ledger", weight: 0.62 },
+        { id: "collector_void_saint_relic", weight: 0.38 },
+        { id: "collector_starless_codex", weight: 0.2 },
+        { id: "collector_titan_vault_core", weight: 0.08 },
+        { id: "collector_eclipse_vault_deed", weight: 0.035 },
+        { id: "collector_void_emperor_crown", weight: 0.02 },
+        { id: "collector_abyssal_world_key", weight: 0.012 },
+        { id: "collector_black_sun_heart", weight: 0.007 },
+        { id: "collector_eternity_contract", weight: 0.003 }
     ].filter(entry => ULTRA_RARE_COLLECTIBLE_IDS.includes(entry.id as (typeof ULTRA_RARE_COLLECTIBLE_IDS)[number]));
 
     for (let i = 0; i < totalRollCount; i++) {

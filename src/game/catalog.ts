@@ -10,6 +10,22 @@ export type ItemDef = {
 };
 
 export const COLLECTIBLE_FIXED_VENDOR_PRICE = 100_000_000;
+export const VENDOR_SELL_PRICE_OVERRIDES: Record<string, number> = {
+    collector_ember_contract: 25_000,
+    collector_sable_vault_coin: 50_000,
+    collector_nullglass_eye: 75_000,
+    collector_warlock_seal: 100_000,
+    collector_bloodmoon_deed: 150_000,
+    collector_abyss_ledger: 250_000,
+    collector_void_saint_relic: 400_000,
+    collector_starless_codex: 650_000,
+    collector_titan_vault_core: 1_000_000,
+    collector_eclipse_vault_deed: 10_000_000,
+    collector_void_emperor_crown: 25_000_000,
+    collector_abyssal_world_key: 50_000_000,
+    collector_black_sun_heart: 75_000_000,
+    collector_eternity_contract: 100_000_000
+};
 
 export const BOSS_HEART_DEFS: Record<string, { id: string; name: string; desc: string }> = {
     "The Grave Warden": {
@@ -114,6 +130,20 @@ export const ITEM_DEFS: Record<string, ItemDef> = {
     collector_omega_reliquary: { id: "collector_omega_reliquary", name: "Omega Reliquary", desc: "Extremely rare collectible reliquary once held by sovereign war priests. Vendor payout is fixed at 100,000,000 FN Token$.", rarity: "mythic", price: 1, kind: "collectible" },
     collector_paradox_shard: { id: "collector_paradox_shard", name: "Paradox Shard", desc: "Extremely rare collectible paradox crystal with unstable temporal signatures. Vendor payout is fixed at 100,000,000 FN Token$.", rarity: "mythic", price: 1, kind: "collectible" },
     collector_blackstar_diadem: { id: "collector_blackstar_diadem", name: "Blackstar Diadem", desc: "Extremely rare collectible diadem from the deepest collapsed citadels. Vendor payout is fixed at 100,000,000 FN Token$.", rarity: "mythic", price: 1, kind: "collectible" },
+    collector_ember_contract: { id: "collector_ember_contract", name: "Ember Contract", desc: "Rare sealed bounty contract with a fixed vendor payout of 25,000 FN Token$.", rarity: "rare", price: 25000, kind: "collectible" },
+    collector_sable_vault_coin: { id: "collector_sable_vault_coin", name: "Sable Vault Coin", desc: "Rare black-mint vault coin with a fixed vendor payout of 50,000 FN Token$.", rarity: "rare", price: 50000, kind: "collectible" },
+    collector_nullglass_eye: { id: "collector_nullglass_eye", name: "Nullglass Eye", desc: "Legendary surveillance relic with a fixed vendor payout of 75,000 FN Token$.", rarity: "legendary", price: 75000, kind: "collectible" },
+    collector_warlock_seal: { id: "collector_warlock_seal", name: "Warlock Seal", desc: "Legendary command sigil with a fixed vendor payout of 100,000 FN Token$.", rarity: "legendary", price: 100000, kind: "collectible" },
+    collector_bloodmoon_deed: { id: "collector_bloodmoon_deed", name: "Bloodmoon Deed", desc: "Legendary forbidden land deed with a fixed vendor payout of 150,000 FN Token$.", rarity: "legendary", price: 150000, kind: "collectible" },
+    collector_abyss_ledger: { id: "collector_abyss_ledger", name: "Abyss Ledger", desc: "Mythic black-market ledger with a fixed vendor payout of 250,000 FN Token$.", rarity: "mythic", price: 250000, kind: "collectible" },
+    collector_void_saint_relic: { id: "collector_void_saint_relic", name: "Void Saint Relic", desc: "Super-rare mythic shrine relic with a fixed vendor payout of 400,000 FN Token$.", rarity: "mythic", price: 400000, kind: "collectible" },
+    collector_starless_codex: { id: "collector_starless_codex", name: "Starless Codex", desc: "Super-rare mythic codex with a fixed vendor payout of 650,000 FN Token$.", rarity: "mythic", price: 650000, kind: "collectible" },
+    collector_titan_vault_core: { id: "collector_titan_vault_core", name: "Titan Vault Core", desc: "Super-rare apex vault core with a fixed vendor payout of 1,000,000 FN Token$.", rarity: "mythic", price: 1000000, kind: "collectible" },
+    collector_eclipse_vault_deed: { id: "collector_eclipse_vault_deed", name: "Eclipse Vault Deed", desc: "Extremely rare vault deed with a fixed vendor payout of 10,000,000 FN Token$.", rarity: "mythic", price: 10000000, kind: "collectible" },
+    collector_void_emperor_crown: { id: "collector_void_emperor_crown", name: "Void Emperor Crown", desc: "Extremely rare sovereign crown with a fixed vendor payout of 25,000,000 FN Token$.", rarity: "mythic", price: 25000000, kind: "collectible" },
+    collector_abyssal_world_key: { id: "collector_abyssal_world_key", name: "Abyssal World Key", desc: "Extremely rare world-key relic with a fixed vendor payout of 50,000,000 FN Token$.", rarity: "mythic", price: 50000000, kind: "collectible" },
+    collector_black_sun_heart: { id: "collector_black_sun_heart", name: "Black Sun Heart", desc: "Extremely rare stellar relic with a fixed vendor payout of 75,000,000 FN Token$.", rarity: "mythic", price: 75000000, kind: "collectible" },
+    collector_eternity_contract: { id: "collector_eternity_contract", name: "Eternity Contract", desc: "Extremely rare immortal bounty contract with a fixed vendor payout of 100,000,000 FN Token$.", rarity: "mythic", price: 100000000, kind: "collectible" },
     data_shard: { id: "data_shard", name: "Data Shard", desc: "Compact raid intel slice with a reliable vendor floor.", rarity: "uncommon", price: 140, kind: "intel" },
     intel_cache: { id: "intel_cache", name: "Intel Cache", desc: "Recovered command cache with actionable raid information.", rarity: "rare", price: 220, kind: "intel" },
     blacksite_map: { id: "blacksite_map", name: "Blacksite Map", desc: "Elite intel map pointing at hidden cache routes.", rarity: "legendary", price: 520, kind: "intel" },
@@ -129,6 +159,13 @@ export const ITEM_DEFS: Record<string, ItemDef> = {
     power_cell: { id: "power_cell", name: "Power Cell", desc: "Portable energy cell used in advanced systems and salvage chains.", rarity: "uncommon", price: 96, kind: "module" },
     signal_array: { id: "signal_array", name: "Signal Array", desc: "High-grade relay module recovered from command tech.", rarity: "rare", price: 310, kind: "module" },
     vault_keycard: { id: "vault_keycard", name: "Vault Keycard", desc: "Restricted access card used for sealed vault logistics.", rarity: "epic", price: 360, kind: "key" },
+    rail_barrel: { id: "rail_barrel", name: "Rail Barrel", desc: "Raid-only precision barrel used to assemble Rail Sniper platforms.", rarity: "legendary", price: 1800, kind: "module" },
+    plasma_focusing_lens: { id: "plasma_focusing_lens", name: "Plasma Focusing Lens", desc: "Raid-only optic core used to assemble Plasma Carbines.", rarity: "epic", price: 1250, kind: "module" },
+    reactor_edge_core: { id: "reactor_edge_core", name: "Reactor Edge Core", desc: "Drop-only blade core used to forge Reactor Blade variants.", rarity: "legendary", price: 2400, kind: "module" },
+    nullburst_chamber: { id: "nullburst_chamber", name: "Nullburst Chamber", desc: "Exclusive boss-drop chamber used for Nullburst Launcher assembly.", rarity: "mythic", price: 5200, kind: "module" },
+    eclipse_blade_fragment: { id: "eclipse_blade_fragment", name: "Eclipse Blade Fragment", desc: "Exclusive deep-map fragment used to craft Eclipse Glaives.", rarity: "mythic", price: 7600, kind: "module" },
+    demoncore_shaft: { id: "demoncore_shaft", name: "Demoncore Shaft", desc: "Exclusive boss-forged haft used to craft Demoncore Lances.", rarity: "mythic", price: 9000, kind: "module" },
+    chaos_splinter: { id: "chaos_splinter", name: "Chaos Splinter", desc: "Extremely rare Wizard-touched weapon part required for Chaos Staff construction.", rarity: "mythic", price: 18500, kind: "module" },
     boneway_key: { id: "boneway_key", name: "Boneway Key", desc: "Mythic ossuary key that can expose a hidden Catacomb Smuggler extraction.", rarity: "mythic", price: 18500, kind: "key" },
     null_route_cipher: { id: "null_route_cipher", name: "Null Route Cipher", desc: "Mythic blacksite sequence capable of stabilizing a hidden rift extraction.", rarity: "mythic", price: 24000, kind: "intel" },
     sovereign_evac_transponder: { id: "sovereign_evac_transponder", name: "Sovereign Evac Transponder", desc: "Mythic command credential for dormant high-security evacuation lifts.", rarity: "mythic", price: 32000, kind: "key" },
@@ -283,19 +320,44 @@ export const COLLECTIBLE_ITEM_IDS = [
     "collector_eternal_halo",
     "collector_omega_reliquary",
     "collector_paradox_shard",
-    "collector_blackstar_diadem"
+    "collector_blackstar_diadem",
+    "collector_ember_contract",
+    "collector_sable_vault_coin",
+    "collector_nullglass_eye",
+    "collector_warlock_seal",
+    "collector_bloodmoon_deed",
+    "collector_abyss_ledger",
+    "collector_void_saint_relic",
+    "collector_starless_codex",
+    "collector_titan_vault_core",
+    "collector_eclipse_vault_deed",
+    "collector_void_emperor_crown",
+    "collector_abyssal_world_key",
+    "collector_black_sun_heart",
+    "collector_eternity_contract"
 ] as const;
 
 export const ULTRA_RARE_COLLECTIBLE_IDS = [
     "collector_eternal_halo",
     "collector_omega_reliquary",
     "collector_paradox_shard",
-    "collector_blackstar_diadem"
+    "collector_blackstar_diadem",
+    "collector_abyss_ledger",
+    "collector_void_saint_relic",
+    "collector_starless_codex",
+    "collector_titan_vault_core",
+    "collector_eclipse_vault_deed",
+    "collector_void_emperor_crown",
+    "collector_abyssal_world_key",
+    "collector_black_sun_heart",
+    "collector_eternity_contract"
 ] as const;
 
 const COLLECTIBLE_ITEM_ID_SET = new Set<string>(COLLECTIBLE_ITEM_IDS);
 
 export function getVendorSellPrice(itemId: string): number {
+    const override = VENDOR_SELL_PRICE_OVERRIDES[itemId];
+    if (override) return override;
     if (COLLECTIBLE_ITEM_ID_SET.has(itemId)) return COLLECTIBLE_FIXED_VENDOR_PRICE;
     const item = ITEM_DEFS[itemId];
     if (!item) return 0;

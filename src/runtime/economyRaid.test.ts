@@ -24,7 +24,7 @@ import {
     withdrawFromBank
 } from "../utils";
 import { getRaidRewards } from "../game/raid";
-import { ITEM_DEFS, SHOP_ITEMS } from "../game/catalog";
+import { COLLECTIBLE_ITEM_IDS, getVendorSellPrice, ITEM_DEFS, SHOP_ITEMS, ULTRA_RARE_COLLECTIBLE_IDS } from "../game/catalog";
 import { getRouteAccessItemDropChance } from "../raid/runtime";
 import { getBossPortraitUrl } from "../game/bossPortraits";
 import { CRAFT_RECIPES, craftItem, createAuctionListing, dismantleGear, getDynamicVendorPrice, calculateDynamicLootValue, getGearDurability, insureGear, placeAuctionBid, repairGear, resolveGearLoss, saveLoadout, upgradeGear } from "../game/gearEconomy";
@@ -158,6 +158,30 @@ function runEconomyAndRaidTests(): void {
         for (const route of RARE_EXTRACTION_ROUTES) {
             assert.equal(ITEM_DEFS[route.requiredItemId]?.rarity, "mythic");
             assert.ok(!SHOP_ITEMS.includes(route.requiredItemId));
+        }
+        assert.equal(ITEM_DEFS.collector_titan_vault_core.rarity, "mythic");
+        assert.equal(getVendorSellPrice("collector_titan_vault_core"), 1000000);
+        assert.equal(getVendorSellPrice("collector_eclipse_vault_deed"), 10000000);
+        assert.equal(getVendorSellPrice("collector_void_emperor_crown"), 25000000);
+        assert.equal(getVendorSellPrice("collector_abyssal_world_key"), 50000000);
+        assert.equal(getVendorSellPrice("collector_black_sun_heart"), 75000000);
+        assert.equal(getVendorSellPrice("collector_eternity_contract"), 100000000);
+        assert.equal(getVendorSellPrice("collector_starless_codex"), 650000);
+        assert.equal(getVendorSellPrice("collector_ember_contract"), 25000);
+        assert.ok(COLLECTIBLE_ITEM_IDS.includes("collector_bloodmoon_deed"));
+        assert.ok(ULTRA_RARE_COLLECTIBLE_IDS.includes("collector_titan_vault_core"));
+        assert.ok(ULTRA_RARE_COLLECTIBLE_IDS.includes("collector_eternity_contract"));
+        for (const partId of ["rail_barrel", "plasma_focusing_lens", "reactor_edge_core", "nullburst_chamber", "eclipse_blade_fragment", "demoncore_shaft", "chaos_splinter"]) {
+            assert.ok(ITEM_DEFS[partId], `${partId} should be defined`);
+            assert.ok(!SHOP_ITEMS.includes(partId), `${partId} should be found in raid, not bought in shop`);
+        }
+        assert.ok(CRAFT_RECIPES.some(recipe => recipe.outputId === "plasma_carbine" && recipe.inputs.plasma_focusing_lens === 2));
+        assert.ok(CRAFT_RECIPES.some(recipe => recipe.outputId === "chaos_staff" && recipe.inputs.chaos_splinter === 2));
+        const newHardMapKeys = ["obsidian_spire", "nullforge_depths", "bloodmoon_cathedral", "eclipse_bastion", "titanfall_crucible"] as const;
+        for (const key of newHardMapKeys) {
+            assert.ok(RAID_MAPS[key], `${key} should be registered`);
+            assert.ok(RAID_MAPS[key].bossSpawnChance >= 0.39, `${key} should have high boss spawn`);
+            assert.equal(RAID_MAPS[key].recommendedTension, "high");
         }
         assert.equal(getRouteAccessItemDropChance({ ultraRareBaseChance: 0.003, legendaryChanceBonus: 0.095, bossDefeated: true, success: true }), 0.0012);
         assert.equal(getRouteAccessItemDropChance({ ultraRareBaseChance: 0.003, legendaryChanceBonus: 0.095, bossDefeated: true, success: false }), 0);
@@ -339,6 +363,9 @@ function runEconomyAndRaidTests(): void {
         assert.ok(premiumRaidPayload.components[0].components.some((component: { custom_id: string }) => component.custom_id === RAID_RESULT_ACTION_IDS.mastery));
 
         for (const mapCfg of Object.values(RAID_MAPS)) {
+            for (const item of [...mapCfg.bonusLootPool, ...mapCfg.crateDropTable, ...mapCfg.bossCrateDropTable]) {
+                assert.ok(ITEM_DEFS[item.id], `${mapCfg.key} references unknown loot item ${item.id}`);
+            }
             const table = getBossRotationTable(mapCfg);
             const totalShare = table.reduce((sum, entry) => sum + entry.sharePct, 0);
             assert.ok(totalShare >= 99.5 && totalShare <= 100.5);

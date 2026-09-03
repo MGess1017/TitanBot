@@ -11409,7 +11409,8 @@ client.on("interactionCreate", async interaction => {
             result = saveLoadout(user, interaction.fields.getTextInputValue("name"), interaction.fields.getTextInputValue("weapon") || null, interaction.fields.getTextInputValue("armor") || null, interaction.fields.getTextInputValue("ammo") || null);
         } else if (action === "craft") {
             const recipe = CRAFT_RECIPES.find(entry => entry.outputId === interaction.fields.getTextInputValue("item").trim().toLowerCase());
-            result = recipe ? craftItem(user, recipe) : { error: "Unknown recipe output. Use upgrade_core, blueprint_bossbreaker, or tactical_overdrive." };
+            const recipeExamples = CRAFT_RECIPES.slice(0, 8).map(entry => entry.outputId).join(", ");
+            result = recipe ? craftItem(user, recipe) : { error: `Unknown recipe output. Use one of: ${recipeExamples}.` };
         } else {
             const itemId = interaction.fields.getTextInputValue("item").trim().toLowerCase();
             result = action === "repair" ? repairGear(user, itemId) : action === "insure" ? insureGear(user, itemId) : action === "upgrade" ? upgradeGear(user, itemId) : dismantleGear(user, itemId);
