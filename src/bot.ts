@@ -6567,7 +6567,6 @@ function buildCasinoLobbyPayload(userId: string, bet: number): string {
             new ButtonBuilder()
                 .setCustomId(buildCasinoActionCustomIdForUser("launch", game.key, stake, userId, defaultCasinoArgForGame(game.key)))
                 .setLabel(game.label)
-                .setEmoji(game.emoji)
                 .setStyle(game.key === "magicslots" ? ButtonStyle.Primary : ButtonStyle.Secondary)
         )).toJSON()
     );

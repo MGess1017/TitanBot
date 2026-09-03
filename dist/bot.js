@@ -5485,7 +5485,6 @@ function buildCasinoLobbyPayload(userId, bet) {
     const rows = [games.slice(0, 5), games.slice(5)].map(group => new discord_js_1.ActionRowBuilder().addComponents(...group.map(game => new discord_js_1.ButtonBuilder()
         .setCustomId(buildCasinoActionCustomIdForUser("launch", game.key, stake, userId, defaultCasinoArgForGame(game.key)))
         .setLabel(game.label)
-        .setEmoji(game.emoji)
         .setStyle(game.key === "magicslots" ? discord_js_1.ButtonStyle.Primary : discord_js_1.ButtonStyle.Secondary))).toJSON());
     const profileLines = games.map(game => `${game.emoji} **${game.label}** • ${casinoBalance_1.CASINO_PROFILES[game.key].rtp} • ${casinoBalance_1.CASINO_PROFILES[game.key].volatility}`);
     const vip = (0, utils_1.getCasinoVipTier)(userId);
