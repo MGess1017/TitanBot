@@ -34,6 +34,7 @@ import {
     addPoints,
     addXP,
     addTokens,
+    awardSirGruRaidXp,
     applyPmcMilestoneRewards,
     claimCasinoDaily,
     addInventoryItem,
@@ -50,6 +51,10 @@ import {
     getPmcPrestigeTier,
     getPmcProgress,
     getPmcTierForLevel,
+    getSirGruProgress,
+    getSirGruRaidBonuses,
+    getSirGruStats,
+    getSirGruUnlockedAbilities,
     getBossProgressEntry,
     getGameStatsSummary,
     getCasinoVipTier,
@@ -69,6 +74,7 @@ import {
     recordGameResult,
     recordBossProgress,
     recordMapReputation,
+    rollSirGruRaidAssist,
     performPmcPrestige,
     savePoints,
     transferWalletTokens,
@@ -5762,6 +5768,12 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     bossHeartUpgradeLevel?: number;
     bossAlternateFormUnlocked?: boolean;
     alternateBossForm?: boolean;
+    sirGruXpGained?: number;
+    sirGruLevel?: number;
+    sirGruLevelBefore?: number;
+    sirGruMaxPerkUnlocked?: boolean;
+    sirGruAbilities?: string[];
+    sirGruTriggeredAbilities?: string[];
 } {
     const user = ensureUser(userId);
     const now = Date.now();
@@ -5794,6 +5806,8 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     const pmcLevelBeforeRaid = getPmcLevel(user.pmcXP);
     const pmcTierBeforeRaid = getPmcTierForLevel(pmcLevelBeforeRaid);
     const pmcBuffs = getPmcBuffs(pmcLevelBeforeRaid, user.pmcPrestige);
+    const sirGru = user.followers?.sir_gru;
+    const followerBonuses = getSirGruRaidBonuses(sirGru);
     const levelPressure = Math.max(0, Math.min(0.11, pmcLevelBeforeRaid * 0.00075));
     const tensionPressure = tension === "high" ? 0.05 : tension === "medium" ? 0.02 : -0.01;
     const difficultyScalar = 1 + levelPressure + Math.max(0, tensionPressure);
@@ -5820,17 +5834,19 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     const bossPressurePenalty = bossSpawned
         ? (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure + (boss?.successPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * mapDifficultyBossScale * latePmcBossScale
         : 0;
+    const followerPreAssist = rollSirGruRaidAssist(sirGru, { bet, bossSpawned });
     const finalSuccessChance = Math.max(
         0.06,
-        Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + approach.successDelta + branchModifiers.successDelta + (mapEvent?.successDelta || 0) + mapReputationBeforeProgress.tier.successBonus - bossPressurePenalty)
+        Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + followerBonuses.successBonus + followerPreAssist.successBonus + approach.successDelta + branchModifiers.successDelta + (mapEvent?.successDelta || 0) + mapReputationBeforeProgress.tier.successBonus - bossPressurePenalty)
     );
 
     const success = Math.random() < finalSuccessChance;
+    const followerAssist = rollSirGruRaidAssist(sirGru, { bet, success, bossSpawned });
     removeTokens(userId, bet);
 
     let rewardTokens = 0;
     if (success) {
-        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + approach.tokenMultiplierDelta + branchModifiers.tokenMultiplierDelta + (mapEvent?.tokenMultiplierDelta || 0) + mapReputationBeforeProgress.tier.tokenBonus;
+        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + followerBonuses.tokenBonus + followerAssist.tokenBonus + approach.tokenMultiplierDelta + branchModifiers.tokenMultiplierDelta + (mapEvent?.tokenMultiplierDelta || 0) + mapReputationBeforeProgress.tier.tokenBonus;
         rewardTokens = Math.max(1, Math.floor(bet * (conditionTokenBoost + (Math.random() * 0.12 - 0.07))));
         addTokens(userId, rewardTokens);
     }
@@ -5848,7 +5864,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
         const mapAndBossKillPenalty = (mapCfg.bossKillPenalty + mapCfg.bossRaidPressure + (boss?.killPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * (1 + mapDifficultyIndex * 0.05) * latePmcBossScale;
         const pmcRaidMastery = Math.max(0, Math.min(0.14, pmcLevelBeforeRaid * 0.00085));
-        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta + approach.bossKillDelta + mapReputationBeforeProgress.tier.bossKillBonus + (bossCombat?.counterBonus || 0) - mapAndBossKillPenalty - (bossCombat?.killPenalty || 0)));
+        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + followerBonuses.bossKillBonus + followerPreAssist.bossKillBonus + tensionBossDelta + approach.bossKillDelta + mapReputationBeforeProgress.tier.bossKillBonus + (bossCombat?.counterBonus || 0) - mapAndBossKillPenalty - (bossCombat?.killPenalty || 0)));
         bossDefeated = Math.random() < bossKillChance;
         if (bossDefeated) {
             const rolledBossReward = RaidDomain.rollBossSuccessRewards({
@@ -5921,7 +5937,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         : null;
 
     const bossPhaseLootRoll = bossDefeated && (bossCombat?.phases.length || 0) >= 3 ? 1 : 0;
-    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll + branchModifiers.bonusLootRolls + (mapEvent?.lootBonusRolls || 0) });
+    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll + branchModifiers.bonusLootRolls + (mapEvent?.lootBonusRolls || 0) + followerAssist.bonusLootRolls });
     for (const drop of loot) {
         addInventoryItem(userId, drop.id, drop.qty);
     }
@@ -5933,7 +5949,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus) * approach.xpMultiplier,
         mapCfg
     );
-    const progressionScale = RaidDomain.getPmcXpGainScale(pmcLevelBeforeRaid, mapCfg, tension, success);
+    const progressionScale = RaidDomain.getPmcXpGainScale(pmcLevelBeforeRaid, mapCfg, tension, success) * (1 + followerBonuses.xpBonus + followerAssist.xpBonus);
     const scaledRaidXpGain = Math.max(1, Math.floor(baseRaidXpGain * progressionScale * RaidDomain.RAID_PMC_XP_SCALE));
     const rxpGain = scaledRaidXpGain + bossBonusXp;
     user.rxp += rxpGain;
@@ -5944,6 +5960,16 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
 
     const pmcLevelAfterRaid = getPmcLevel(user.pmcXP);
     applyPmcMilestoneRewards(userId);
+    const followerRaidProgress = awardSirGruRaidXp(user, { success, bossSpawned, bossDefeated, tension, mapDifficulty: mapCfg.difficulty });
+    if (followerRaidProgress.levelAfter > followerRaidProgress.levelBefore) {
+        appendAuditEvent("sir_gru_level_up", {
+            userId,
+            levelBefore: followerRaidProgress.levelBefore,
+            levelAfter: followerRaidProgress.levelAfter,
+            xpGained: followerRaidProgress.xpGained,
+            maxPerkUnlocked: followerRaidProgress.maxPerkUnlocked
+        });
+    }
     for (const gearId of [gearBonus.weapon?.id, gearBonus.armor?.id].filter((id): id is string => Boolean(id))) {
         resolveGearLoss(user, gearId, success);
     }
@@ -5952,7 +5978,7 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         ? pmcTierAfterRaid
         : null;
 
-    const failureMitigation = success ? 0 : Math.floor(bet * (gearBonus.defenseBoost + pmcBuffs.defenseBonus) * 0.7);
+    const failureMitigation = success ? 0 : Math.floor(bet * (gearBonus.defenseBoost + pmcBuffs.defenseBonus + followerBonuses.defenseBonus + followerAssist.defenseBonus) * 0.7) + followerAssist.flatFailureMitigation;
     if (failureMitigation > 0) addTokens(userId, failureMitigation);
     const baseRewardTokens = rewardTokens;
     const outcomeBonusTokens = reward.tokens;
@@ -6000,6 +6026,8 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         selectedWeaponId: gearBonus.weapon?.id || null,
         selectedArmorId: gearBonus.armor?.id || null,
         pmcBuffs,
+        followerBonuses,
+        followerAssist: followerAssist.triggeredAbilities,
         tension,
         condition: condition.label,
         approach: approach.key,
@@ -6035,7 +6063,13 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         pmcPrestige: user.pmcPrestige,
         pmcLevel: pmcLevelAfterRaid,
         pmcTierUnlockedLevel: pmcTierUnlocked?.level || null,
-        pmcTierUnlockedLabel: pmcTierUnlocked?.label || null
+        pmcTierUnlockedLabel: pmcTierUnlocked?.label || null,
+        sirGruXpGained: followerRaidProgress.xpGained,
+        sirGruLevel: followerRaidProgress.levelAfter,
+        sirGruLevelBefore: followerRaidProgress.levelBefore,
+        sirGruMaxPerkUnlocked: followerRaidProgress.maxPerkUnlocked,
+        sirGruAbilities: followerAssist.unlockedAbilities.map(ability => ability.name),
+        sirGruTriggeredAbilities: followerAssist.triggeredAbilities
     });
 
     return {
@@ -6095,7 +6129,13 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
         pmcXP: user.pmcXP,
         pmcLevel: pmcLevelAfterRaid,
         pmcPrestige: user.pmcPrestige,
-        pmcPrestigeLabel: getPmcPrestigeTier(user.pmcPrestige).label
+        pmcPrestigeLabel: getPmcPrestigeTier(user.pmcPrestige).label,
+        sirGruXpGained: followerRaidProgress.xpGained,
+        sirGruLevel: followerRaidProgress.levelAfter || undefined,
+        sirGruLevelBefore: followerRaidProgress.levelBefore || undefined,
+        sirGruMaxPerkUnlocked: followerRaidProgress.maxPerkUnlocked,
+        sirGruAbilities: followerAssist.unlockedAbilities.map(ability => ability.name),
+        sirGruTriggeredAbilities: followerAssist.triggeredAbilities
     };
 }
 
@@ -6545,6 +6585,14 @@ function buildPmcProfilePayload(user: User): string {
     const prestigeEligible = progress.level >= PMC_PRESTIGE_LEVEL_REQUIREMENT && state.pmcPrestige < PMC_PRESTIGE_CAP;
     const nextPrestigeTier = getPmcPrestigeTier(Math.min(PMC_PRESTIGE_CAP, state.pmcPrestige + 1));
     const buffs = getPmcBuffs(progress.level, state.pmcPrestige);
+    const sirGru = state.followers?.sir_gru || null;
+    const sirGruProgress = sirGru ? getSirGruProgress(sirGru) : null;
+    const sirGruStats = sirGruProgress ? getSirGruStats(sirGruProgress.level) : null;
+    const sirGruBonuses = sirGru ? getSirGruRaidBonuses(sirGru) : null;
+    const sirGruAbilities = getSirGruUnlockedAbilities(sirGru || undefined);
+    const nextSirGruAbility = sirGruProgress
+        ? getSirGruUnlockedAbilities({ ...sirGru!, level: 100, xp: Number.MAX_SAFE_INTEGER }).find(ability => ability.level > sirGruProgress.level)
+        : null;
     const tier = getPmcTierForLevel(progress.level);
     const tierVisual = getPmcTierVisual(progress.level);
     const raids = Math.max(0, state.pmcRaids);
@@ -6642,6 +6690,19 @@ function buildPmcProfilePayload(user: User): string {
                     `Loss Mitigation: +${(buffs.defenseBonus * 100).toFixed(2)}%`,
                     `Raid XP Gain: +${(buffs.xpBonus * 100).toFixed(2)}%`
                 ].join(" | "),
+                inline: false
+            },
+            {
+                name: "Follower: Sir Gru",
+                value: sirGru && sirGruProgress && sirGruStats && sirGruBonuses ? [
+                    `Status: Active • Level ${sirGruProgress.level}/100${sirGruProgress.capped ? " • Max perk active" : ""}`,
+                    `Progress: ${sirGruProgress.capped ? "MAX" : `${sirGruProgress.intoLevel}/${Math.max(1, sirGruProgress.nextThreshold - sirGruProgress.currentThreshold)} XP • ${sirGruProgress.needForNext} to next level`}`,
+                    `Stats: Scouting ${sirGruStats.scouting} • Firepower ${sirGruStats.firepower} • Guard ${sirGruStats.guard} • Loyalty ${sirGruStats.loyalty}`,
+                    `Abilities: ${sirGruAbilities.map(ability => ability.name).join(", ") || "None"}`,
+                    `Next Ability: ${nextSirGruAbility ? `Lv ${nextSirGruAbility.level} • ${nextSirGruAbility.name}` : "All abilities unlocked"}`,
+                    `Raid Perks: +${(sirGruBonuses.successBonus * 100).toFixed(2)}% success • +${(sirGruBonuses.tokenBonus * 100).toFixed(2)}% tokens • +${(sirGruBonuses.defenseBonus * 100).toFixed(2)}% defense • +${(sirGruBonuses.xpBonus * 100).toFixed(2)}% raid XP • +${(sirGruBonuses.bossKillBonus * 100).toFixed(2)}% boss kill`,
+                    `History: ${sirGru.raids} raids • ${sirGru.bossAssists} boss assists`
+                ].join("\n") : "Unlocks automatically at PMC Prestige I.",
                 inline: false
             },
             {

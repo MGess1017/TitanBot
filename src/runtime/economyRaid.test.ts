@@ -9,8 +9,16 @@ import {
     getPmcBuffs,
     getPmcLevel,
     getPmcPrestigeTier,
+    getSirGruLevelFromXp,
+    getSirGruLevelXp,
+    getSirGruRaidBonuses,
+    getSirGruUnlockedAbilities,
     getTokens,
+    awardSirGruRaidXp,
+    rollSirGruRaidAssist,
     performPmcPrestige,
+    SIR_GRU_FOLLOWER_ID,
+    SIR_GRU_MAX_LEVEL,
     PMC_LEVEL_CAP,
     PMC_LEVEL_THRESHOLDS,
     PMC_PRESTIGE_CAP,
@@ -117,6 +125,7 @@ function runEconomyAndRaidTests(): void {
         assert.ok(prestigedBuffs.xpBonus > veteranBuffs.xpBonus);
 
         delete (points[userB] as Partial<typeof points[string]>).pmcPrestige;
+        delete (points[userB] as Partial<typeof points[string]>).followers;
         assert.equal(ensureUser(userB).pmcPrestige, 0);
         points[userB].pmcXP = PMC_LEVEL_THRESHOLDS[PMC_PRESTIGE_LEVEL_REQUIREMENT - 1];
         points[userB].rxp = 999;
@@ -133,6 +142,30 @@ function runEconomyAndRaidTests(): void {
         assert.equal(points[userB].fnTokens, 4321);
         assert.equal(points[userB].pmcBossKills, 8);
         assert.equal(points[userB].mapReputation.plagued_cemetary.points, 100);
+        assert.equal(points[userB].followers[SIR_GRU_FOLLOWER_ID].name, "Sir Gru");
+        assert.equal(points[userB].followers[SIR_GRU_FOLLOWER_ID].level, 1);
+        const firstFollowerRaid = awardSirGruRaidXp(points[userB], { success: true, bossSpawned: true, bossDefeated: true, tension: "high", mapDifficulty: "Cataclysmic" });
+        assert.ok(firstFollowerRaid.xpGained < getSirGruLevelXp(3));
+        assert.equal(points[userB].followers[SIR_GRU_FOLLOWER_ID].raids, 1);
+        assert.equal(points[userB].followers[SIR_GRU_FOLLOWER_ID].bossAssists, 1);
+        points[userB].followers[SIR_GRU_FOLLOWER_ID].xp = getSirGruLevelXp(SIR_GRU_MAX_LEVEL);
+        const maxFollower = ensureUser(userB).followers[SIR_GRU_FOLLOWER_ID];
+        assert.equal(maxFollower.level, SIR_GRU_MAX_LEVEL);
+        assert.equal(getSirGruLevelFromXp(maxFollower.xp), SIR_GRU_MAX_LEVEL);
+        assert.equal(getSirGruRaidBonuses(maxFollower).maxPerkActive, true);
+        assert.deepEqual(getSirGruUnlockedAbilities(maxFollower).map(ability => ability.name), ["Scout Ahead", "Ammo Runner", "Guardian Intercept", "Boss Mark", "Cache Sniffer", "Gru's Last Stand"]);
+        const maxAssist = rollSirGruRaidAssist(maxFollower, { bet: 1000, success: true, bossSpawned: true, random: () => 0 });
+        assert.ok(maxAssist.successBonus > 0);
+        assert.ok(maxAssist.tokenBonus > 0);
+        assert.ok(maxAssist.bossKillBonus > 0);
+        assert.ok(maxAssist.bonusLootRolls >= 2);
+        assert.ok(maxAssist.triggeredAbilities.some(name => name.includes("Cache Sniffer")));
+        const failedAssist = rollSirGruRaidAssist(maxFollower, { bet: 1000, success: false, bossSpawned: false, random: () => 1 });
+        assert.ok(failedAssist.flatFailureMitigation >= 40);
+        assert.ok(failedAssist.triggeredAbilities.some(name => name.includes("Guardian Intercept")));
+        points[userA].pmcPrestige = 1;
+        delete (points[userA] as Partial<typeof points[string]>).followers;
+        assert.equal(ensureUser(userA).followers[SIR_GRU_FOLLOWER_ID].name, "Sir Gru");
         points[userB].pmcPrestige = PMC_PRESTIGE_CAP;
         points[userB].pmcXP = PMC_LEVEL_THRESHOLDS[PMC_PRESTIGE_LEVEL_REQUIREMENT - 1];
         assert.ok(performPmcPrestige(userB).error);
@@ -350,6 +383,11 @@ function runEconomyAndRaidTests(): void {
                 mapReputationTierUnlocked: "Pathfinder",
                 pmcPrestige: 3,
                 pmcPrestigeLabel: "Vanguard",
+                sirGruXpGained: 17,
+                sirGruLevel: 4,
+                sirGruLevelBefore: 3,
+                sirGruAbilities: ["Scout Ahead"],
+                sirGruTriggeredAbilities: ["Scout Ahead: safer route marked"],
                 extractionRouteLabel: "Catacomb Smuggler Exit",
                 branchDecisionLabel: "Breach Catacomb Smuggler Exit Cache"
             },
@@ -358,6 +396,7 @@ function runEconomyAndRaidTests(): void {
             armyIconUrl: "https://example.com/army.png"
         }));
         assert.ok(premiumRaidPayload.embed.fields.some((field: { name: string }) => field.name === "Combat Sequence"));
+        assert.ok(premiumRaidPayload.embed.fields.some((field: { name: string }) => field.name === "Follower Support"));
         assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Summary")?.value.includes("Prestige 3"));
         assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Summary")?.value.includes("Catacomb Smuggler Exit"));
         assert.ok(premiumRaidPayload.components[0].components.some((component: { custom_id: string }) => component.custom_id === RAID_RESULT_ACTION_IDS.mastery));

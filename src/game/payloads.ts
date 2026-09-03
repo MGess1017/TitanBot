@@ -491,6 +491,12 @@ export function buildRaidResultPayload(input: {
         bossIntelLevel?: number;
         bossHeartUpgradeLevel?: number;
         bossAlternateFormUnlocked?: boolean;
+        sirGruXpGained?: number;
+        sirGruLevel?: number;
+        sirGruLevelBefore?: number;
+        sirGruMaxPerkUnlocked?: boolean;
+        sirGruAbilities?: string[];
+        sirGruTriggeredAbilities?: string[];
     };
     mapCfg: { label: string; bossName: string; lootTier: string };
     fallbackTension: string;
@@ -534,6 +540,8 @@ export function buildRaidResultPayload(input: {
         result.bossHeartUnlockedName ? `Boss Heart: ${result.bossHeartUnlockedName}` : null,
         result.pmcTierUnlockedLabel ? `${result.pmcTierUnlockedBadge || "🏅"} ${result.pmcTierUnlockedLabel}` : null,
         result.mapReputationTierUnlocked ? `Territory Rank: ${result.mapReputationTierUnlocked}` : null,
+        result.sirGruLevel && result.sirGruLevelBefore && result.sirGruLevel > result.sirGruLevelBefore ? `Sir Gru Level ${result.sirGruLevel}` : null,
+        result.sirGruMaxPerkUnlocked ? "Sir Gru max perk unlocked" : null,
         enhancedDrops.length ? `Enhanced: ${enhancedDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null,
         mythicDrops.length ? `Mythic: ${mythicDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null
     ].filter(Boolean) as string[];
@@ -566,10 +574,11 @@ export function buildRaidResultPayload(input: {
                 value: [
                     `Net: ${signedNet} FN Token$`,
                     `Raid XP: +${result.rxpGain || 0}`,
+                    result.sirGruXpGained ? `Sir Gru XP: +${result.sirGruXpGained}${result.sirGruLevel ? ` • Lv ${result.sirGruLevel}/100` : ""}` : null,
                     `Boss XP: +${result.bossBonusXp || 0}`,
                     `Loot: ${lootEntries.length} item${lootEntries.length === 1 ? "" : "s"}`,
                     `Map REP: +${result.mapReputationGain || 0}`
-                ].join("\n"),
+                ].filter(Boolean).join("\n"),
                 inline: true
             },
             {
@@ -592,6 +601,15 @@ export function buildRaidResultPayload(input: {
                     `Threat Reward Scale: ${(result.bossCombatRewardMultiplier || 1).toFixed(2)}x`,
                     `Streak: ${result.bossCurrentStreak || 0} current / ${result.bossBestStreak || 0} best • Intel Lv ${result.bossIntelLevel || 0}`,
                     `Heart Upgrade: ${result.bossHeartUpgradeLevel || 0}/3 • Alternate Form: ${result.bossAlternateFormUnlocked ? "Unlocked" : "Locked"}`
+                ].join("\n"),
+                inline: false
+            }] : []),
+            ...(result.sirGruXpGained ? [{
+                name: "Follower Support",
+                value: [
+                    `Sir Gru: Level ${result.sirGruLevel || 1}/100 • +${result.sirGruXpGained} XP`,
+                    `Abilities: ${result.sirGruAbilities?.join(", ") || "Scout Ahead"}`,
+                    `Triggered: ${result.sirGruTriggeredAbilities?.length ? result.sirGruTriggeredAbilities.join("\n") : "Deployed with the raid team"}`
                 ].join("\n"),
                 inline: false
             }] : []),
