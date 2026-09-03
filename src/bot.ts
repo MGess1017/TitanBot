@@ -6203,7 +6203,8 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
     const bossName = result.bossName;
     const bossHpMax = result.bossHpMax;
     const pmcHpMax = result.pmcHpMax;
-    const totalTurns = Math.max(3, Math.min(5, result.bossPhaseNames?.length || 3));
+    const phaseCount = result.bossPhaseNames?.length || 3;
+    const totalTurns = Math.max(6, Math.min(8, phaseCount + 4));
     let action: "attack" | "defend" | "heal" | "scan" | undefined;
     let battleBossHp = bossHpMax;
     let battlePmcHp = pmcHpMax;
@@ -6281,10 +6282,10 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
             if (action === "attack") {
                 battleBossHp = Math.max(0, battleBossHp - damageRoll - Math.floor(armorBreak * 0.12));
                 armorBreak = Math.min(100, armorBreak + 18);
-                rage = Math.min(100, rage + 14);
+                rage = Math.min(100, rage + 10);
             } else if (action === "defend") {
                 battlePmcHp = Math.max(0, battlePmcHp - Math.max(4, Math.floor(damageRoll * 0.28)));
-                rage = Math.max(0, rage - 8);
+                rage = Math.max(0, rage - 14);
             } else if (action === "heal") {
                 if (getInventoryCount(interaction.user.id, "med_patch") > 0) {
                     removeInventoryItem(interaction.user.id, "med_patch", 1);

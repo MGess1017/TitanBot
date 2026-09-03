@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import {
     addTokens,
     depositToBank,
@@ -415,6 +417,8 @@ function runEconomyAndRaidTests(): void {
         assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Summary")?.value.includes("Prestige 3"));
         assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Summary")?.value.includes("Catacomb Smuggler Exit"));
         assert.ok(premiumRaidPayload.components[0].components.some((component: { custom_id: string }) => component.custom_id === RAID_RESULT_ACTION_IDS.mastery));
+        const botSource = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
+        assert.match(botSource, /const totalTurns = Math\.max\(6, Math\.min\(8, phaseCount \+ 4\)\)/);
 
         for (const mapCfg of Object.values(RAID_MAPS)) {
             for (const itemId of [...mapCfg.successWeapons, ...mapCfg.failureWeapons, ...mapCfg.successArmor, ...mapCfg.failureArmor, mapCfg.bossKit.weaponId, mapCfg.bossKit.armorId]) {
