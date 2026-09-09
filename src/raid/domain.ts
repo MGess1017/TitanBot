@@ -1,4 +1,4 @@
-import { ITEM_DEFS } from "../game/catalog";
+import { ITEM_DEFS, RAID_FIELD_GEAR } from "../game/catalog";
 
 export type RaidConditionKey = "storm" | "fog" | "night" | "heatwave" | "urban" | "radiation" | "drizzle" | "crosswind" | "low_power" | "ashfall";
 
@@ -49,7 +49,21 @@ export const RAID_APPROACHES: Record<RaidApproachKey, RaidApproach> = {
 
 export const RAID_APPROACH_CHOICES = Object.values(RAID_APPROACHES).map(approach => ({ name: approach.label, value: approach.key }));
 
-export type RaidBranchDecisionKey = "hidden_exit" | "route_cache" | "secure_perimeter" | "push_objective" | "stay_course";
+export type RaidBranchDecisionKey = "hidden_exit" | "route_cache" | "secure_perimeter" | "push_objective" | "stay_course" | "survey_site" | "rescue_patrol";
+
+export const RAID_TACTICAL_OBJECTIVES = [
+    { key: "survey_site", label: "Survey Site", description: "-3% token multiplier. Successful extraction grants +4 map REP.", successDelta: 0, tokenMultiplierDelta: -0.03, xpMultiplier: 1, reputationBonus: 4 },
+    { key: "rescue_patrol", label: "Rescue Patrol", description: "-2% extraction chance. Successful extraction grants +10% base raid XP and +8 map REP.", successDelta: -0.02, tokenMultiplierDelta: 0, xpMultiplier: 1.1, reputationBonus: 8 }
+] as const;
+
+export function getRaidObjectiveRewards(decision: RaidBranchDecisionKey, success: boolean) {
+    const objective = RAID_TACTICAL_OBJECTIVES.find(entry => entry.key === decision);
+    return {
+        xpMultiplier: success && objective ? objective.xpMultiplier : 1,
+        reputationBonus: success && objective ? objective.reputationBonus : 0,
+        outcome: objective ? `${objective.label}: ${success ? `complete • +${objective.reputationBonus} REP${objective.xpMultiplier > 1 ? " • +10% base raid XP" : ""}` : "not completed"}` : undefined
+    };
+}
 
 export type RareExtractionRoute = {
     key: string;
@@ -96,6 +110,8 @@ export function getRaidBranchModifiers(route: RareExtractionRoute | null, decisi
     tokenMultiplierDelta: number;
     bonusLootRolls: number;
 } {
+    const objective = RAID_TACTICAL_OBJECTIVES.find(entry => entry.key === decision);
+    if (objective) return { label: objective.label, successDelta: objective.successDelta, tokenMultiplierDelta: objective.tokenMultiplierDelta, bonusLootRolls: 0 };
     if (decision === "secure_perimeter") {
         return { label: "Secure the Perimeter", successDelta: 0.03, tokenMultiplierDelta: -0.04, bonusLootRolls: 0 };
     }
@@ -129,6 +145,11 @@ export type RaidMapEvent = {
 };
 
 export const RAID_MAP_EVENTS: RaidMapEvent[] = [
+    { key: "spire_blackbox", label: "Spire Blackbox Recovery", description: "A fallen survey drone broadcasts a recoverable vault signature.", mapKeys: ["obsidian_spire"], chance: 0.1, successDelta: -0.02, tokenMultiplierDelta: 0.05, lootBonusRolls: 1 },
+    { key: "coolant_override", label: "Nullforge Coolant Override", description: "Emergency cooling opens a safer route through the foundry.", mapKeys: ["nullforge_depths"], chance: 0.1, successDelta: 0.025, tokenMultiplierDelta: -0.025, lootBonusRolls: 0 },
+    { key: "cathedral_evac", label: "Cathedral Evacuation", description: "An abandoned evacuation convoy exposes guarded supply cases.", mapKeys: ["bloodmoon_cathedral"], chance: 0.08, successDelta: -0.03, tokenMultiplierDelta: 0.1, lootBonusRolls: 1 },
+    { key: "eclipse_relay", label: "Eclipse Relay Access", description: "Local contacts unlock a command relay and mark a cleaner exit.", mapKeys: ["eclipse_bastion"], chance: 0.08, successDelta: 0.02, tokenMultiplierDelta: 0.03, lootBonusRolls: 0, requiredReputationLevel: 2 },
+    { key: "crucible_lockbox", label: "Crucible Lockbox", description: "A reputation-backed access code exposes a heavily contested armory.", mapKeys: ["titanfall_crucible"], chance: 0.06, successDelta: -0.04, tokenMultiplierDelta: 0.12, lootBonusRolls: 2, requiredReputationLevel: 3 },
     { key: "locked_side_room", label: "Locked Side Room", description: "A sealed side room contains a bonus cache if the route can be breached.", mapKeys: ["plagued_cemetary", "slaughterhouse"], chance: 0.12, successDelta: -0.015, tokenMultiplierDelta: 0.03, lootBonusRolls: 1 },
     { key: "random_cache", label: "Unmarked Supply Cache", description: "A randomized cache signal appears off the primary route.", mapKeys: ["boogerswoodz", "megayachtolopolis", "warlords_warcamp", "sunken_village"], chance: 0.1, successDelta: -0.01, tokenMultiplierDelta: 0.04, lootBonusRolls: 1 },
     { key: "faction_invasion", label: "Faction Invasion", description: "A rival faction has entered the operation and changed the threat profile.", mapKeys: ["slaughterhouse", "warlords_warcamp"], chance: 0.08, successDelta: -0.04, tokenMultiplierDelta: 0.12, lootBonusRolls: 1 },
@@ -666,15 +687,19 @@ export const ARMOR_TRAITS: Partial<Record<string, GearTrait>> = {
 };
 
 export const RAID_WEAPON_DISCOVERY_TABLE: Array<{ id: string; weight: number }> = [
+    ...RAID_FIELD_GEAR.filter(item => item.kind === "weapon").map((item, index) => ({ id: item.id, weight: [2, 1.5, 0.9, 0.6, 0.25, 0.1][index] })),
     { id: "scrap_shotgun", weight: 18 }, { id: "breach_pistol", weight: 18 }, { id: "hush_repeater", weight: 16 }, { id: "arc_rifle", weight: 14 }, { id: "volt_smg", weight: 14 }, { id: "dune_cutter", weight: 13 }, { id: "widowmaker_dmr", weight: 12 }, { id: "aurora_smg", weight: 11 }, { id: "magma_caster", weight: 10 }, { id: "echo_lancer", weight: 10 }, { id: "grav_pike", weight: 9 }, { id: "venom_flechette", weight: 9 }, { id: "rift_carbine", weight: 8 }, { id: "basilisk_dmr", weight: 7 }, { id: "obsidian_repeater", weight: 6 }, { id: "siege_cannon", weight: 5 }, { id: "frostfang_rifle", weight: 5 }, { id: "stormpiercer", weight: 4 }, { id: "overclock_minigun", weight: 4 }, { id: "emberfall_carbine", weight: 4 }, { id: "gravecoil_rifle", weight: 3 }, { id: "voidspike_halberd", weight: 2 }, { id: "bloodmoon_arbalest", weight: 1.5 }, { id: "nullburst_launcher", weight: 3 }, { id: "phantom_scythe", weight: 3 }, { id: "nebula_glaive", weight: 2 }, { id: "sunflare_accelerator", weight: 2 }, { id: "starforged_reaper", weight: 1 }, { id: "nullstorm_cannon", weight: 0.75 }, { id: "abyssal_railgun", weight: 0.45 }, { id: "black_sun_lance", weight: 0.12 }, { id: "titanbreaker_maul", weight: 0.07 }, { id: "enhanced_pulse_rifle", weight: 4 }, { id: "enhanced_marksman_dmr", weight: 3 }, { id: "enhanced_thermal_lance", weight: 3 }, { id: "enhanced_plasma_carbine", weight: 3 }, { id: "enhanced_rail_sniper", weight: 2 }, { id: "enhanced_reactor_blade", weight: 2 }, { id: "acid_spitter", weight: 2 }, { id: "caustic_reaper", weight: 2 }, { id: "hellhound_carbine", weight: 2 }, { id: "bloodfang_blade", weight: 2 }, { id: "doom_scepter", weight: 1 }, { id: "widow_arc", weight: 1 }, { id: "chaos_staff", weight: 0.05 }, { id: "reality_breaker", weight: 0.4 }, { id: "eclipse_glaive", weight: 0.5 }, { id: "demoncore_lance", weight: 0.3 }
 ];
 export const RAID_ARMOR_DISCOVERY_TABLE: Array<{ id: string; weight: number }> = [
+    ...RAID_FIELD_GEAR.filter(item => item.kind === "armor").map((item, index) => ({ id: item.id, weight: [2, 1.5, 0.9, 0.6, 0.25, 0.1][index] })),
     { id: "patchwork_rig", weight: 18 }, { id: "breacher_webbing", weight: 18 }, { id: "fogrunner_wrap", weight: 16 }, { id: "arcskin_vest", weight: 15 }, { id: "warden_harness", weight: 14 }, { id: "emberguard_mail", weight: 13 }, { id: "coastwatch_shell", weight: 13 }, { id: "nomad_carbon", weight: 12 }, { id: "nightglass_cloak", weight: 11 }, { id: "bulwark_plating", weight: 10 }, { id: "shockframe_suit", weight: 10 }, { id: "gravebark_mesh", weight: 9 }, { id: "riftguard_coat", weight: 8 }, { id: "bastion_weave", weight: 7 }, { id: "siegebreaker_plate", weight: 6 }, { id: "hollowbastion", weight: 5 }, { id: "stormforged_aegis", weight: 5 }, { id: "cryptsteel_exoshell", weight: 4 }, { id: "leviathan_shell", weight: 4 }, { id: "tidelock_panoply", weight: 3 }, { id: "dreadnought_cuirass", weight: 3 }, { id: "voidscale_regalia", weight: 2 }, { id: "eclipse_ward", weight: 2 }, { id: "sovereign_bastion", weight: 1 }, { id: "acidbound_shell", weight: 2 }, { id: "venomward_suit", weight: 2 }, { id: "hellhide_harness", weight: 2 }, { id: "doomplate_carapace", weight: 1 }, { id: "crownfall_raiment", weight: 1 }, { id: "chaos_mantle", weight: 0.05 }, { id: "apocalypse_aegis", weight: 0.4 }, { id: "eclipse_bulwark", weight: 0.5 }, { id: "demoncore_mail", weight: 0.3 }, { id: "wraithveil_hood", weight: 1 }
 ];
 export const RAID_APEX_WEAPON_DISCOVERY_TABLE: Array<{ id: string; weight: number }> = [
+    ...RAID_FIELD_GEAR.filter(item => item.kind === "weapon" && item.rarity === "mythic").map((item, index) => ({ id: item.id, weight: [1.2, 0.8, 0.4, 0.15][index] })),
     { id: "nullburst_launcher", weight: 3 }, { id: "phantom_scythe", weight: 3 }, { id: "sunflare_accelerator", weight: 2 }, { id: "starforged_reaper", weight: 1 }, { id: "overclock_minigun", weight: 2 }, { id: "nebula_glaive", weight: 2 }, { id: "nullstorm_cannon", weight: 1.2 }, { id: "abyssal_railgun", weight: 0.8 }, { id: "black_sun_lance", weight: 0.28 }, { id: "titanbreaker_maul", weight: 0.16 }, { id: "enhanced_nullburst_launcher", weight: 2 }, { id: "enhanced_starforged_reaper", weight: 1 }
 ];
 export const RAID_APEX_ARMOR_DISCOVERY_TABLE: Array<{ id: string; weight: number }> = [
+    ...RAID_FIELD_GEAR.filter(item => item.kind === "armor" && item.rarity === "mythic").map((item, index) => ({ id: item.id, weight: [1.2, 0.8, 0.4, 0.15][index] })),
     { id: "tidelock_panoply", weight: 3 }, { id: "dreadnought_cuirass", weight: 3 }, { id: "voidscale_regalia", weight: 2 }, { id: "leviathan_shell", weight: 2 }, { id: "eclipse_ward", weight: 2 }, { id: "sovereign_bastion", weight: 1 }
 ];
 

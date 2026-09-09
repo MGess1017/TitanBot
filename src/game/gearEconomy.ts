@@ -7,7 +7,7 @@ export const GEAR_MAX_DURABILITY = 100;
 export const GEAR_MIN_OPERATION_DURABILITY = 5;
 
 export function getGearDurability(user: UserState, itemId: string): number {
-    if (!user.gearDurability[itemId]) user.gearDurability[itemId] = GEAR_MAX_DURABILITY;
+    if (user.gearDurability[itemId] === undefined) user.gearDurability[itemId] = GEAR_MAX_DURABILITY;
     return Math.max(0, Math.min(GEAR_MAX_DURABILITY, Math.floor(user.gearDurability[itemId])));
 }
 
@@ -23,6 +23,7 @@ export function repairGear(user: UserState, itemId: string, amount = GEAR_MAX_DU
     if ((user.inventory[itemId] || 0) < 1) return { error: "You do not own that gear." };
     const current = getGearDurability(user, itemId);
     const changed = Math.max(0, Math.min(GEAR_MAX_DURABILITY, Math.floor(amount)) - current);
+    if (changed === 0) return { changed: 0, cost: 0 };
     const cost = Math.max(1, Math.ceil((item.price || 1) * (changed / GEAR_MAX_DURABILITY) * 0.18));
     if ((user.inventory.repair_kit || 0) < 1 && (user.fnTokens || 0) < cost) return { error: `Repair requires 1 Repair Kit or ${cost} FN Token$.` };
     if ((user.inventory.repair_kit || 0) > 0) user.inventory.repair_kit -= 1;

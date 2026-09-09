@@ -31,6 +31,8 @@ exports.RAID_ENCOUNTER_IDS = {
     securePerimeter: "raid_branch_secure_perimeter",
     pushObjective: "raid_branch_push_objective",
     stayCourse: "raid_route_stay_course",
+    surveySite: "raid_objective_survey",
+    rescuePatrol: "raid_objective_rescue",
     attack: "raid_boss_attack",
     defend: "raid_boss_defend",
     heal: "raid_boss_heal",
@@ -444,7 +446,7 @@ function buildRaidResultPayload(input) {
             `Route: ${result.extractionRouteLabel ? `${result.extractionRouteLabel} • ${result.branchDecisionLabel || "Original Route"}` : result.branchDecisionLabel || "Standard extraction lanes"}`,
             `Map Event: ${result.mapEventLabel || "None"}`,
             `PMC: Prestige ${result.pmcPrestige || 0} • ${result.pmcPrestigeLabel || "Unprestiged"}`,
-            `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}`,
+            `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}${result.loadoutSetLabel ? ` • ${result.loadoutSetLabel} set` : ""}`,
             `Territory: ${result.mapReputationTier || "Unproven"} • ${result.mapReputationPoints || 0} REP`
         ].join("\n"),
         inline: false
@@ -456,6 +458,7 @@ function buildRaidResultPayload(input) {
             result.sirGruXpGained ? `Sir Gru XP: +${result.sirGruXpGained}${result.sirGruLevel ? ` • Lv ${result.sirGruLevel}/100` : ""}` : null,
             `Boss XP: +${result.bossBonusXp || 0}`,
             `Loot: ${lootEntries.reduce((total, entry) => total + entry.qty, 0)} items • ${lootEntries.length} stacks`,
+            `Loot Vendor Value: ${lootEntries.reduce((total, entry) => total + (0, catalog_1.getVendorSellPrice)(entry.id) * entry.qty, 0).toLocaleString()} FN Token$ (unsold)`,
             `Map REP: +${result.mapReputationGain || 0}`
         ].filter(Boolean).join("\n"),
         inline: true
@@ -485,10 +488,18 @@ function buildRaidResultPayload(input) {
         }] : []), ...(result.sirGruXpGained ? [{
             name: "Follower Support",
             value: [
-                `Sir Gru: Level ${result.sirGruLevel || 1}/100 • +${result.sirGruXpGained} XP`,
+                `Sir Gru: Level ${result.sirGruLevel || 1}/100 • +${result.sirGruXpGained} XP • ${result.sirGruSupportRole || "Balanced"}`,
                 `Abilities: ${result.sirGruAbilities?.join(", ") || "Scout Ahead"}`,
                 `Triggered: ${result.sirGruTriggeredAbilities?.length ? result.sirGruTriggeredAbilities.join("\n") : "Deployed with the raid team"}`
             ].join("\n"),
+            inline: false
+        }] : []), ...(result.objectiveOutcome || result.mapEventDetails ? [{
+            name: "Field Report",
+            value: [result.objectiveOutcome, result.mapEventDetails].filter(Boolean).join("\n\n").slice(0, 1024),
+            inline: false
+        }] : []), ...(result.newGearNames?.length ? [{
+            name: "New Gear Discovered",
+            value: result.newGearNames.slice(0, 6).join("\n").slice(0, 1024),
             inline: false
         }] : []), {
         name: "Recovered Loot",
@@ -630,8 +641,8 @@ function buildRaidBranchDecisionPayload(input) {
         .setColor(0x0ea5e9)
         .setTitle("Mid-Raid Tactical Fork")
         .setDescription(`The operation on **${input.mapLabel}** has reached an unstable decision point.`)
-        .addFields({ name: "Secure Perimeter", value: "+3% extraction chance\n-4% token multiplier", inline: true }, { name: "Push Objective", value: "-3% extraction chance\n+6% token multiplier\n+1 loot roll", inline: true }, { name: "Stay Course", value: `Keep the original ${input.tension} tension plan.`, inline: true })
+        .addFields({ name: "Secure Perimeter", value: "+3% extraction chance\n-4% token multiplier", inline: true }, { name: "Push Objective", value: "-3% extraction chance\n+6% token multiplier\n+1 loot roll", inline: true }, ...domain_1.RAID_TACTICAL_OBJECTIVES.map(objective => ({ name: objective.label, value: objective.description, inline: true })), { name: "Stay Course", value: `Keep the original ${input.tension} tension plan.`, inline: true })
         .setFooter({ text: "Decision window: 15 seconds. Timeout keeps the original plan." });
-    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.securePerimeter).setLabel("Secure Perimeter").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.pushObjective).setLabel("Push Objective").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.stayCourse).setLabel("Stay Course").setStyle(discord_js_1.ButtonStyle.Secondary));
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.securePerimeter).setLabel("Secure Perimeter").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.pushObjective).setLabel("Push Objective").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.surveySite).setLabel("Survey Site").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.rescuePatrol).setLabel("Rescue Patrol").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.stayCourse).setLabel("Stay Course").setStyle(discord_js_1.ButtonStyle.Secondary));
     return JSON.stringify({ embed: embed.toJSON(), components: [row.toJSON()] });
 }

@@ -52,6 +52,19 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
 - Invalid loadouts are rejected before route decisions. Decision buttons are restricted to the deployed player; expired controls receive a private response.
 - `npm run test:runtime:raid-qol` checks combat, every boss's phase thresholds and intel card limits, loot summaries, and mocked Discord battle interactions without logging in or writing player data.
 
+## PMC and Raid Expansion
+- `/pmc` now has owner-controlled Overview, Follower, Prestige, Mastery, and Collection views. Overview includes equipment condition and field supplies; collection and mastery details are loaded only when selected.
+- Sir Gru has persistent Balanced, Scout, Guardian, and Quartermaster support roles. Scout trades follower token yield for extraction support; Guardian trades follower boss support for mitigation; Quartermaster trades follower extraction support for token yield. Roles affect passive follower bonuses, not ability unlocks, and cannot change during an active raid.
+- The follower view includes all six ability milestones, XP remaining to the next unlock, and current role bonuses. Existing followers default to Balanced, and their XP and role survive prestige.
+- Prestige still requires PMC level 20,000 and caps at X. The preview shows XP to eligibility and permanent bonus growth separately from post-reset total bonuses. Confirmation is tied to the reviewed rank, old confirmations are rejected, and active raids block prestige. Currency, gear, follower progress, mastery records, and trophies remain intact.
+- PMC level lookup now uses binary search instead of scanning all 50,000 thresholds. Follower level lookup uses the inverse XP curve.
+- Twelve new raid-only equipment pieces form six sets: Cinderline, Tideglass, Nullweave, Stormvault, Reliquary, and Chronicle. Each matched pair grants +2.5% raid XP multiplier; its preferred condition also adds +0.8 percentage points extraction chance and +1% token multiplier. Existing loadout caps still apply. Pieces drop through successful-raid discovery tables and are not sold or crafted.
+- Tactical forks now include **Survey Site** (-3% token multiplier, +4 REP on extraction) and **Rescue Patrol** (-2 percentage points extraction chance, +10% base raid XP and +8 REP on extraction). Failed extraction awards no objective bonus. Timeout still stays on the original course.
+- Five new field events cover Obsidian Spire, Nullforge Depths, Bloodmoon Cathedral, Eclipse Bastion, and Titanfall Crucible. The last two require territory reputation. Results show event effects, completed objectives, equipped sets, new gear discoveries, and unsold loot vendor value.
+- All 13 ultra-rare collectibles sell for at least **55,000,000 FN Token$** each. Existing 75-million and 100-million payouts are preserved. Drop probabilities are unchanged. This deliberately raises the expected token value of affected discoveries, including previously owned items.
+- Vendor purchases now enforce the shop allowlist, preventing direct-ID purchases of raid-only gear or collectible resale exploits. Fully repaired gear costs nothing to repair, and zero durability is no longer mistaken for full durability.
+- `npm run test:runtime:pmc-expansion` covers all 50,000 PMC threshold boundaries, follower role tradeoffs, prestige preservation and stale confirmations, profile payload limits, new gear drops, set bonuses, objective rewards, map events, repairs, and purchase restrictions.
+
 ### VPS Update
 Run from the existing bot repository on the VPS. Keep the current `.env` and `src/data` files. A fast-forward pull stops on conflicting local changes; resolve those without discarding live player data.
 

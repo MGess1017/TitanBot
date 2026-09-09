@@ -1,4 +1,4 @@
-import { ARMOR_IDS, COLLECTIBLE_ITEM_IDS, ITEM_DEFS, ULTRA_RARE_COLLECTIBLE_IDS, type ItemDef, WEAPON_IDS } from "../game/catalog";
+import { ARMOR_IDS, COLLECTIBLE_ITEM_IDS, ITEM_DEFS, RAID_FIELD_SETS, ULTRA_RARE_COLLECTIBLE_IDS, type ItemDef, WEAPON_IDS } from "../game/catalog";
 import {
     ARMOR_TRAITS,
     RAID_APEX_ARMOR_DISCOVERY_TABLE,
@@ -25,6 +25,7 @@ export type RaidLoadoutBonus = {
     weapon: ItemDef | null;
     armor: ItemDef | null;
     notes: string[];
+    setLabel?: string;
 };
 
 function rarityWeight(rarity: string | undefined): number {
@@ -128,6 +129,17 @@ export function getRaidLoadoutBonus(input: {
         }
     }
 
+    const matchedSet = RAID_FIELD_SETS.find(set => set.weaponId === weapon?.id && set.armorId === armor?.id);
+    if (matchedSet) {
+        xpMultiplier += 0.025;
+        notes.push(`${matchedSet.label} set: +2.5% raid XP.`);
+        if (condition.key === matchedSet.condition) {
+            attackBoost += 0.008;
+            tokenBoost += 0.01;
+            notes.push(`${matchedSet.label} environment match: +0.8% extraction and +1% tokens.`);
+        }
+    }
+
     if (selectedWeaponId && weapon) notes.push(`Manual weapon selected: ${weapon.name}`);
     if (selectedArmorId && armor) notes.push(`Manual armor selected: ${armor.name}`);
 
@@ -139,6 +151,7 @@ export function getRaidLoadoutBonus(input: {
         negatedCondition,
         weapon,
         armor,
+        setLabel: matchedSet?.label,
         notes
     };
 }

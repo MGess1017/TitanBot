@@ -1,6 +1,6 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } from "discord.js";
 import { getVendorSellPrice, ITEM_DEFS, type ItemDef } from "./catalog";
-import { BOSS_TRAITS, RAID_APPROACHES, RAID_BOSS_ROSTER, getBossCombatProfile, type RareExtractionRoute } from "../raid/domain";
+import { BOSS_TRAITS, RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_TACTICAL_OBJECTIVES, getBossCombatProfile, type RareExtractionRoute } from "../raid/domain";
 
 export const RAID_RESULT_ACTION_IDS = {
     inventory: "raid_result_inventory",
@@ -17,6 +17,8 @@ export const RAID_ENCOUNTER_IDS = {
     securePerimeter: "raid_branch_secure_perimeter",
     pushObjective: "raid_branch_push_objective",
     stayCourse: "raid_route_stay_course",
+    surveySite: "raid_objective_survey",
+    rescuePatrol: "raid_objective_rescue",
     attack: "raid_boss_attack",
     defend: "raid_boss_defend",
     heal: "raid_boss_heal",
@@ -489,6 +491,11 @@ export function buildRaidResultPayload(input: {
         extractionRouteLabel?: string;
         branchDecisionLabel?: string;
         mapEventLabel?: string;
+        mapEventDetails?: string;
+        objectiveOutcome?: string;
+        loadoutSetLabel?: string;
+        newGearNames?: string[];
+        sirGruSupportRole?: string;
         bossCurrentStreak?: number;
         bossBestStreak?: number;
         bossIntelLevel?: number;
@@ -570,7 +577,7 @@ export function buildRaidResultPayload(input: {
                     `Route: ${result.extractionRouteLabel ? `${result.extractionRouteLabel} • ${result.branchDecisionLabel || "Original Route"}` : result.branchDecisionLabel || "Standard extraction lanes"}`,
                     `Map Event: ${result.mapEventLabel || "None"}`,
                     `PMC: Prestige ${result.pmcPrestige || 0} • ${result.pmcPrestigeLabel || "Unprestiged"}`,
-                    `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}`,
+                    `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}${result.loadoutSetLabel ? ` • ${result.loadoutSetLabel} set` : ""}`,
                     `Territory: ${result.mapReputationTier || "Unproven"} • ${result.mapReputationPoints || 0} REP`
                 ].join("\n"),
                 inline: false
@@ -583,6 +590,7 @@ export function buildRaidResultPayload(input: {
                     result.sirGruXpGained ? `Sir Gru XP: +${result.sirGruXpGained}${result.sirGruLevel ? ` • Lv ${result.sirGruLevel}/100` : ""}` : null,
                     `Boss XP: +${result.bossBonusXp || 0}`,
                     `Loot: ${lootEntries.reduce((total, entry) => total + entry.qty, 0)} items • ${lootEntries.length} stacks`,
+                    `Loot Vendor Value: ${lootEntries.reduce((total, entry) => total + getVendorSellPrice(entry.id) * entry.qty, 0).toLocaleString()} FN Token$ (unsold)`,
                     `Map REP: +${result.mapReputationGain || 0}`
                 ].filter(Boolean).join("\n"),
                 inline: true
@@ -615,10 +623,20 @@ export function buildRaidResultPayload(input: {
             ...(result.sirGruXpGained ? [{
                 name: "Follower Support",
                 value: [
-                    `Sir Gru: Level ${result.sirGruLevel || 1}/100 • +${result.sirGruXpGained} XP`,
+                    `Sir Gru: Level ${result.sirGruLevel || 1}/100 • +${result.sirGruXpGained} XP • ${result.sirGruSupportRole || "Balanced"}`,
                     `Abilities: ${result.sirGruAbilities?.join(", ") || "Scout Ahead"}`,
                     `Triggered: ${result.sirGruTriggeredAbilities?.length ? result.sirGruTriggeredAbilities.join("\n") : "Deployed with the raid team"}`
                 ].join("\n"),
+                inline: false
+            }] : []),
+            ...(result.objectiveOutcome || result.mapEventDetails ? [{
+                name: "Field Report",
+                value: [result.objectiveOutcome, result.mapEventDetails].filter(Boolean).join("\n\n").slice(0, 1024),
+                inline: false
+            }] : []),
+            ...(result.newGearNames?.length ? [{
+                name: "New Gear Discovered",
+                value: result.newGearNames.slice(0, 6).join("\n").slice(0, 1024),
                 inline: false
             }] : []),
             {
@@ -848,12 +866,15 @@ export function buildRaidBranchDecisionPayload(input: { mapLabel: string; tensio
         .addFields(
             { name: "Secure Perimeter", value: "+3% extraction chance\n-4% token multiplier", inline: true },
             { name: "Push Objective", value: "-3% extraction chance\n+6% token multiplier\n+1 loot roll", inline: true },
+            ...RAID_TACTICAL_OBJECTIVES.map(objective => ({ name: objective.label, value: objective.description, inline: true })),
             { name: "Stay Course", value: `Keep the original ${input.tension} tension plan.`, inline: true }
         )
         .setFooter({ text: "Decision window: 15 seconds. Timeout keeps the original plan." });
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.securePerimeter).setLabel("Secure Perimeter").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.pushObjective).setLabel("Push Objective").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.surveySite).setLabel("Survey Site").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.rescuePatrol).setLabel("Rescue Patrol").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.stayCourse).setLabel("Stay Course").setStyle(ButtonStyle.Secondary)
     );
     return JSON.stringify({ embed: embed.toJSON(), components: [row.toJSON()] });

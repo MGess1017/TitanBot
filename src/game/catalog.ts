@@ -9,6 +9,29 @@ export type ItemDef = {
     raidDefense?: number;
 };
 
+export const RAID_FIELD_GEAR: ItemDef[] = [
+    { id: "cinderline_carbine", name: "Cinderline Carbine", desc: "Raid-only thermal carbine. Pairs with Cinderwatch Plate for ashfall operations.", rarity: "legendary", price: 4200, kind: "weapon", raidAttack: 0.07 },
+    { id: "tideglass_dmr", name: "Tideglass DMR", desc: "Raid-only precision rifle. Pairs with Tideglass Mantle for fog operations.", rarity: "legendary", price: 4800, kind: "weapon", raidAttack: 0.078 },
+    { id: "nullweave_repeater", name: "Nullweave Repeater", desc: "Raid-only anomaly repeater. Pairs with Nullweave Suit for radiation operations.", rarity: "mythic", price: 6200, kind: "weapon", raidAttack: 0.092 },
+    { id: "stormvault_lancer", name: "Stormvault Lancer", desc: "Raid-only capacitor lance. Pairs with Stormvault Aegis for storm operations.", rarity: "mythic", price: 8200, kind: "weapon", raidAttack: 0.11 },
+    { id: "reliquary_railgun", name: "Reliquary Railgun", desc: "Raid-only siege relic. Pairs with Reliquary Exoframe for urban operations.", rarity: "mythic", price: 12000, kind: "weapon", raidAttack: 0.135 },
+    { id: "chronicle_breaker", name: "Chronicle Breaker", desc: "Raid-only temporal weapon. Pairs with Chronicle Shroud for low-power operations.", rarity: "mythic", price: 16000, kind: "weapon", raidAttack: 0.148 },
+    { id: "cinderwatch_plate", name: "Cinderwatch Plate", desc: "Raid-only thermal plate; Cinderline set armor.", rarity: "legendary", price: 4100, kind: "armor", raidDefense: 0.068 },
+    { id: "tideglass_mantle", name: "Tideglass Mantle", desc: "Raid-only refractive mantle; Tideglass set armor.", rarity: "legendary", price: 4700, kind: "armor", raidDefense: 0.076 },
+    { id: "nullweave_suit", name: "Nullweave Suit", desc: "Raid-only anomaly suit; Nullweave set armor.", rarity: "mythic", price: 6100, kind: "armor", raidDefense: 0.091 },
+    { id: "stormvault_aegis", name: "Stormvault Aegis", desc: "Raid-only capacitor armor; Stormvault set armor.", rarity: "mythic", price: 8000, kind: "armor", raidDefense: 0.105 },
+    { id: "reliquary_exoframe", name: "Reliquary Exoframe", desc: "Raid-only siege frame; Reliquary set armor.", rarity: "mythic", price: 11800, kind: "armor", raidDefense: 0.13 },
+    { id: "chronicle_shroud", name: "Chronicle Shroud", desc: "Raid-only temporal shroud; Chronicle set armor.", rarity: "mythic", price: 15800, kind: "armor", raidDefense: 0.15 }
+];
+export const RAID_FIELD_SETS = [
+    { label: "Cinderline", weaponId: "cinderline_carbine", armorId: "cinderwatch_plate", condition: "ashfall" },
+    { label: "Tideglass", weaponId: "tideglass_dmr", armorId: "tideglass_mantle", condition: "fog" },
+    { label: "Nullweave", weaponId: "nullweave_repeater", armorId: "nullweave_suit", condition: "radiation" },
+    { label: "Stormvault", weaponId: "stormvault_lancer", armorId: "stormvault_aegis", condition: "storm" },
+    { label: "Reliquary", weaponId: "reliquary_railgun", armorId: "reliquary_exoframe", condition: "urban" },
+    { label: "Chronicle", weaponId: "chronicle_breaker", armorId: "chronicle_shroud", condition: "low_power" }
+];
+
 export const COLLECTIBLE_FIXED_VENDOR_PRICE = 100_000_000;
 export const VENDOR_SELL_PRICE_OVERRIDES: Record<string, number> = {
     collector_ember_contract: 25_000,
@@ -93,6 +116,7 @@ export const BOSS_HEART_DEFS: Record<string, { id: string; name: string; desc: s
 export const BOSS_HEART_IDS = new Set(Object.values(BOSS_HEART_DEFS).map(def => def.id));
 
 export const ITEM_DEFS: Record<string, ItemDef> = {
+    ...Object.fromEntries(RAID_FIELD_GEAR.map(item => [item.id, item])),
     scrap: { id: "scrap", name: "Scrap", desc: "Common salvage used for trading and crafting.", rarity: "common", price: 2, kind: "resource" },
     common_crate: { id: "common_crate", name: "Common Crate", desc: "Contains common goods and a chance for cosmetic tokens.", rarity: "common", price: 24, kind: "crate" },
     rare_crate: { id: "rare_crate", name: "Rare Crate", desc: "Better loot with rare materials and token chance.", rarity: "rare", price: 70, kind: "crate" },
@@ -135,13 +159,13 @@ export const ITEM_DEFS: Record<string, ItemDef> = {
     collector_nullglass_eye: { id: "collector_nullglass_eye", name: "Nullglass Eye", desc: "Legendary surveillance relic with a fixed vendor payout of 75,000 FN Token$.", rarity: "legendary", price: 75000, kind: "collectible" },
     collector_warlock_seal: { id: "collector_warlock_seal", name: "Warlock Seal", desc: "Legendary command sigil with a fixed vendor payout of 100,000 FN Token$.", rarity: "legendary", price: 100000, kind: "collectible" },
     collector_bloodmoon_deed: { id: "collector_bloodmoon_deed", name: "Bloodmoon Deed", desc: "Legendary forbidden land deed with a fixed vendor payout of 150,000 FN Token$.", rarity: "legendary", price: 150000, kind: "collectible" },
-    collector_abyss_ledger: { id: "collector_abyss_ledger", name: "Abyss Ledger", desc: "Mythic black-market ledger with a fixed vendor payout of 250,000 FN Token$.", rarity: "mythic", price: 250000, kind: "collectible" },
-    collector_void_saint_relic: { id: "collector_void_saint_relic", name: "Void Saint Relic", desc: "Super-rare mythic shrine relic with a fixed vendor payout of 400,000 FN Token$.", rarity: "mythic", price: 400000, kind: "collectible" },
-    collector_starless_codex: { id: "collector_starless_codex", name: "Starless Codex", desc: "Super-rare mythic codex with a fixed vendor payout of 650,000 FN Token$.", rarity: "mythic", price: 650000, kind: "collectible" },
-    collector_titan_vault_core: { id: "collector_titan_vault_core", name: "Titan Vault Core", desc: "Super-rare apex vault core with a fixed vendor payout of 1,000,000 FN Token$.", rarity: "mythic", price: 1000000, kind: "collectible" },
-    collector_eclipse_vault_deed: { id: "collector_eclipse_vault_deed", name: "Eclipse Vault Deed", desc: "Extremely rare vault deed with a fixed vendor payout of 10,000,000 FN Token$.", rarity: "mythic", price: 10000000, kind: "collectible" },
-    collector_void_emperor_crown: { id: "collector_void_emperor_crown", name: "Void Emperor Crown", desc: "Extremely rare sovereign crown with a fixed vendor payout of 25,000,000 FN Token$.", rarity: "mythic", price: 25000000, kind: "collectible" },
-    collector_abyssal_world_key: { id: "collector_abyssal_world_key", name: "Abyssal World Key", desc: "Extremely rare world-key relic with a fixed vendor payout of 50,000,000 FN Token$.", rarity: "mythic", price: 50000000, kind: "collectible" },
+    collector_abyss_ledger: { id: "collector_abyss_ledger", name: "Abyss Ledger", desc: "Mythic black-market ledger. Vendor payout: 55,000,000 FN Token$.", rarity: "mythic", price: 55000000, kind: "collectible" },
+    collector_void_saint_relic: { id: "collector_void_saint_relic", name: "Void Saint Relic", desc: "Super-rare mythic shrine relic. Vendor payout: 55,000,000 FN Token$.", rarity: "mythic", price: 55000000, kind: "collectible" },
+    collector_starless_codex: { id: "collector_starless_codex", name: "Starless Codex", desc: "Super-rare mythic codex. Vendor payout: 55,000,000 FN Token$.", rarity: "mythic", price: 55000000, kind: "collectible" },
+    collector_titan_vault_core: { id: "collector_titan_vault_core", name: "Titan Vault Core", desc: "Super-rare apex vault core. Vendor payout: 55,000,000 FN Token$.", rarity: "mythic", price: 55000000, kind: "collectible" },
+    collector_eclipse_vault_deed: { id: "collector_eclipse_vault_deed", name: "Eclipse Vault Deed", desc: "Extremely rare vault deed. Vendor payout: 55,000,000 FN Token$.", rarity: "mythic", price: 55000000, kind: "collectible" },
+    collector_void_emperor_crown: { id: "collector_void_emperor_crown", name: "Void Emperor Crown", desc: "Extremely rare sovereign crown. Vendor payout: 55,000,000 FN Token$.", rarity: "mythic", price: 55000000, kind: "collectible" },
+    collector_abyssal_world_key: { id: "collector_abyssal_world_key", name: "Abyssal World Key", desc: "Extremely rare world-key relic. Vendor payout: 55,000,000 FN Token$.", rarity: "mythic", price: 55000000, kind: "collectible" },
     collector_black_sun_heart: { id: "collector_black_sun_heart", name: "Black Sun Heart", desc: "Extremely rare stellar relic with a fixed vendor payout of 75,000,000 FN Token$.", rarity: "mythic", price: 75000000, kind: "collectible" },
     collector_eternity_contract: { id: "collector_eternity_contract", name: "Eternity Contract", desc: "Extremely rare immortal bounty contract with a fixed vendor payout of 100,000,000 FN Token$.", rarity: "mythic", price: 100000000, kind: "collectible" },
     data_shard: { id: "data_shard", name: "Data Shard", desc: "Compact raid intel slice with a reliable vendor floor.", rarity: "uncommon", price: 140, kind: "intel" },
@@ -362,9 +386,12 @@ export const ULTRA_RARE_COLLECTIBLE_IDS = [
 ] as const;
 
 const COLLECTIBLE_ITEM_ID_SET = new Set<string>(COLLECTIBLE_ITEM_IDS);
+const ULTRA_RARE_COLLECTIBLE_ID_SET = new Set<string>(ULTRA_RARE_COLLECTIBLE_IDS);
+export const ULTRA_RARE_VENDOR_FLOOR = 55_000_000;
 
 export function getVendorSellPrice(itemId: string): number {
     const override = VENDOR_SELL_PRICE_OVERRIDES[itemId];
+    if (ULTRA_RARE_COLLECTIBLE_ID_SET.has(itemId)) return Math.max(ULTRA_RARE_VENDOR_FLOOR, override || COLLECTIBLE_FIXED_VENDOR_PRICE);
     if (override) return override;
     if (COLLECTIBLE_ITEM_ID_SET.has(itemId)) return COLLECTIBLE_FIXED_VENDOR_PRICE;
     const item = ITEM_DEFS[itemId];
@@ -372,5 +399,5 @@ export function getVendorSellPrice(itemId: string): number {
     return Math.max(1, Math.floor(item.price * 0.6));
 }
 
-export const WEAPON_IDS = ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade", "scrap_shotgun", "breach_pistol", "hush_repeater", "arc_rifle", "volt_smg", "dune_cutter", "widowmaker_dmr", "magma_caster", "echo_lancer", "grav_pike", "venom_flechette", "rift_carbine", "obsidian_repeater", "siege_cannon", "frostfang_rifle", "stormpiercer", "aurora_smg", "basilisk_dmr", "overclock_minigun", "nebula_glaive", "nullburst_launcher", "phantom_scythe", "sunflare_accelerator", "starforged_reaper", "enhanced_pulse_rifle", "enhanced_marksman_dmr", "enhanced_thermal_lance", "enhanced_plasma_carbine", "enhanced_rail_sniper", "enhanced_reactor_blade", "enhanced_nullburst_launcher", "enhanced_starforged_reaper", "emberfall_carbine", "gravecoil_rifle", "voidspike_halberd", "bloodmoon_arbalest", "nullstorm_cannon", "abyssal_railgun", "black_sun_lance", "titanbreaker_maul", "acid_spitter", "caustic_reaper", "hellhound_carbine", "bloodfang_blade", "doom_scepter", "widow_arc", "chaos_staff", "reality_breaker", "eclipse_glaive", "demoncore_lance"];
-export const ARMOR_IDS = ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace", "patchwork_rig", "breacher_webbing", "fogrunner_wrap", "arcskin_vest", "warden_harness", "emberguard_mail", "coastwatch_shell", "nomad_carbon", "nightglass_cloak", "bulwark_plating", "shockframe_suit", "gravebark_mesh", "riftguard_coat", "bastion_weave", "siegebreaker_plate", "hollowbastion", "stormforged_aegis", "cryptsteel_exoshell", "leviathan_shell", "tidelock_panoply", "dreadnought_cuirass", "voidscale_regalia", "eclipse_ward", "sovereign_bastion", "acidbound_shell", "venomward_suit", "hellhide_harness", "doomplate_carapace", "crownfall_raiment", "chaos_mantle", "apocalypse_aegis", "eclipse_bulwark", "demoncore_mail", "wraithveil_hood"];
+export const WEAPON_IDS = ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade", "scrap_shotgun", "breach_pistol", "hush_repeater", "arc_rifle", "volt_smg", "dune_cutter", "widowmaker_dmr", "magma_caster", "echo_lancer", "grav_pike", "venom_flechette", "rift_carbine", "obsidian_repeater", "siege_cannon", "frostfang_rifle", "stormpiercer", "aurora_smg", "basilisk_dmr", "overclock_minigun", "nebula_glaive", "nullburst_launcher", "phantom_scythe", "sunflare_accelerator", "starforged_reaper", "enhanced_pulse_rifle", "enhanced_marksman_dmr", "enhanced_thermal_lance", "enhanced_plasma_carbine", "enhanced_rail_sniper", "enhanced_reactor_blade", "enhanced_nullburst_launcher", "enhanced_starforged_reaper", "emberfall_carbine", "gravecoil_rifle", "voidspike_halberd", "bloodmoon_arbalest", "nullstorm_cannon", "abyssal_railgun", "black_sun_lance", "titanbreaker_maul", "acid_spitter", "caustic_reaper", "hellhound_carbine", "bloodfang_blade", "doom_scepter", "widow_arc", "chaos_staff", "reality_breaker", "eclipse_glaive", "demoncore_lance", ...RAID_FIELD_GEAR.filter(item => item.kind === "weapon").map(item => item.id)];
+export const ARMOR_IDS = ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace", "patchwork_rig", "breacher_webbing", "fogrunner_wrap", "arcskin_vest", "warden_harness", "emberguard_mail", "coastwatch_shell", "nomad_carbon", "nightglass_cloak", "bulwark_plating", "shockframe_suit", "gravebark_mesh", "riftguard_coat", "bastion_weave", "siegebreaker_plate", "hollowbastion", "stormforged_aegis", "cryptsteel_exoshell", "leviathan_shell", "tidelock_panoply", "dreadnought_cuirass", "voidscale_regalia", "eclipse_ward", "sovereign_bastion", "acidbound_shell", "venomward_suit", "hellhide_harness", "doomplate_carapace", "crownfall_raiment", "chaos_mantle", "apocalypse_aegis", "eclipse_bulwark", "demoncore_mail", "wraithveil_hood", ...RAID_FIELD_GEAR.filter(item => item.kind === "armor").map(item => item.id)];

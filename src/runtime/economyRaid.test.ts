@@ -215,13 +215,19 @@ function runEconomyAndRaidTests(): void {
             assert.ok(!SHOP_ITEMS.includes(route.requiredItemId));
         }
         assert.equal(ITEM_DEFS.collector_titan_vault_core.rarity, "mythic");
-        assert.equal(getVendorSellPrice("collector_titan_vault_core"), 1000000);
-        assert.equal(getVendorSellPrice("collector_eclipse_vault_deed"), 10000000);
-        assert.equal(getVendorSellPrice("collector_void_emperor_crown"), 25000000);
-        assert.equal(getVendorSellPrice("collector_abyssal_world_key"), 50000000);
+        assert.equal(getVendorSellPrice("collector_titan_vault_core"), 55000000);
+        assert.equal(getVendorSellPrice("collector_eclipse_vault_deed"), 55000000);
+        assert.equal(getVendorSellPrice("collector_void_emperor_crown"), 55000000);
+        assert.equal(getVendorSellPrice("collector_abyssal_world_key"), 55000000);
         assert.equal(getVendorSellPrice("collector_black_sun_heart"), 75000000);
         assert.equal(getVendorSellPrice("collector_eternity_contract"), 100000000);
-        assert.equal(getVendorSellPrice("collector_starless_codex"), 650000);
+        assert.equal(getVendorSellPrice("collector_starless_codex"), 55000000);
+        assert.equal(getVendorSellPrice("collector_eternal_halo"), 100000000);
+        for (const itemId of ULTRA_RARE_COLLECTIBLE_IDS) {
+            assert.ok(getVendorSellPrice(itemId) > 50000000);
+            assert.ok(!SHOP_ITEMS.includes(itemId));
+            assert.ok(!CRAFT_RECIPES.some(recipe => recipe.outputId === itemId));
+        }
         assert.equal(getVendorSellPrice("collector_ember_contract"), 25000);
         assert.ok(COLLECTIBLE_ITEM_IDS.includes("collector_bloodmoon_deed"));
         assert.ok(ULTRA_RARE_COLLECTIBLE_IDS.includes("collector_titan_vault_core"));
@@ -318,7 +324,7 @@ function runEconomyAndRaidTests(): void {
         assert.equal(routePayload.components[0].components.length, 3);
         assert.deepEqual(routePayload.components[0].components.map((component: { custom_id: string }) => component.custom_id), [RAID_ENCOUNTER_IDS.hiddenExit, RAID_ENCOUNTER_IDS.routeCache, RAID_ENCOUNTER_IDS.stayCourse]);
         const branchPayload = JSON.parse(buildRaidBranchDecisionPayload({ mapLabel: "FN Plagued Cemetery", tension: "high" }));
-        assert.deepEqual(branchPayload.components[0].components.map((component: { custom_id: string }) => component.custom_id), [RAID_ENCOUNTER_IDS.securePerimeter, RAID_ENCOUNTER_IDS.pushObjective, RAID_ENCOUNTER_IDS.stayCourse]);
+        assert.deepEqual(branchPayload.components[0].components.map((component: { custom_id: string }) => component.custom_id), [RAID_ENCOUNTER_IDS.securePerimeter, RAID_ENCOUNTER_IDS.pushObjective, RAID_ENCOUNTER_IDS.surveySite, RAID_ENCOUNTER_IDS.rescuePatrol, RAID_ENCOUNTER_IDS.stayCourse]);
         const battleOpening = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 0, totalTurns: 3 }));
         const battleFinal = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 3, totalTurns: 3 }));
         assert.equal(battleOpening.components[0].components.length, 5);

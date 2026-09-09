@@ -106,6 +106,16 @@ function getRaidLoadoutBonus(input) {
             notes.push("Enhanced weapon bonus applied.");
         }
     }
+    const matchedSet = catalog_1.RAID_FIELD_SETS.find(set => set.weaponId === weapon?.id && set.armorId === armor?.id);
+    if (matchedSet) {
+        xpMultiplier += 0.025;
+        notes.push(`${matchedSet.label} set: +2.5% raid XP.`);
+        if (condition.key === matchedSet.condition) {
+            attackBoost += 0.008;
+            tokenBoost += 0.01;
+            notes.push(`${matchedSet.label} environment match: +0.8% extraction and +1% tokens.`);
+        }
+    }
     if (selectedWeaponId && weapon)
         notes.push(`Manual weapon selected: ${weapon.name}`);
     if (selectedArmorId && armor)
@@ -118,6 +128,7 @@ function getRaidLoadoutBonus(input) {
         negatedCondition,
         weapon,
         armor,
+        setLabel: matchedSet?.label,
         notes
     };
 }

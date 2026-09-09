@@ -48,6 +48,7 @@ import {
     getPmcLevel,
     getPmcMasteryLevel,
     getPmcPrestigeBonuses,
+    getPmcPrestigePreview,
     getPmcPrestigeTier,
     getPmcProgress,
     getPmcTierForLevel,
@@ -55,6 +56,11 @@ import {
     getSirGruRaidBonuses,
     getSirGruStats,
     getSirGruUnlockedAbilities,
+    getSirGruLevelXp,
+    getFollowerSupportRole,
+    FOLLOWER_SUPPORT_ROLES,
+    SIR_GRU_ABILITIES,
+    type FollowerSupportRole,
     getBossProgressEntry,
     getGameStatsSummary,
     getCasinoVipTier,
@@ -3555,6 +3561,13 @@ const PMC_PRESTIGE_IDS = {
     identity: "pmc_identity"
 } as const;
 
+const PMC_PROFILE_IDS = {
+    view: "pmc_profile_view",
+    followerRole: "pmc_follower_role"
+} as const;
+const PMC_PROFILE_VIEWS = { overview: "Overview", follower: "Follower", prestige: "Prestige", mastery: "Mastery", collection: "Collection" } as const;
+type PmcProfileView = keyof typeof PMC_PROFILE_VIEWS;
+
 const activeRaidEncounters = new Set<string>();
 const GEAR_MODAL_PREFIX = "gear_modal:";
 
@@ -5499,6 +5512,7 @@ function pushLootStack(loot: Array<{ id: string; qty: number }>, id: string, qty
 function buyItem(userId: string, itemId: string, qty: number): { error?: string; cost?: number; total?: number } {
     const item = ITEM_DEFS[itemId];
     if (!item) return { error: "Item does not exist." };
+    if (!SHOP_ITEMS.includes(itemId)) return { error: "This item is not sold by the vendor. Raid-only discoveries must be recovered in raids." };
     if (qty < 1) return { error: "Quantity must be at least 1." };
     const cost = getDynamicVendorPrice(ensureUser(userId), itemId) * qty;
     if (!canAffordTokens(userId, cost)) return { error: `You need ${cost} FN Token$.` };
@@ -5768,6 +5782,11 @@ function performRaidUnbatched(userId: string, bet: number, tension: string, mapK
     extractionRouteLabel?: string;
     branchDecisionLabel?: string;
     mapEventLabel?: string;
+    mapEventDetails?: string;
+    objectiveOutcome?: string;
+    loadoutSetLabel?: string;
+    newGearNames?: string[];
+    sirGruSupportRole?: string;
     bossCurrentStreak?: number;
     bossBestStreak?: number;
     bossIntelLevel?: number;
@@ -5944,15 +5963,17 @@ function performRaidUnbatched(userId: string, bet: number, tension: string, mapK
 
     const bossPhaseLootRoll = bossDefeated && (bossCombat?.phases.length || 0) >= 3 ? 1 : 0;
     const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll + branchModifiers.bonusLootRolls + (mapEvent?.lootBonusRolls || 0) + followerAssist.bonusLootRolls });
+    const newGearNames = Array.from(new Set(loot.filter(drop => ["weapon", "armor"].includes(ITEM_DEFS[drop.id]?.kind || "") && getInventoryCount(userId, drop.id) === 0).map(drop => ITEM_DEFS[drop.id].name)));
     for (const drop of loot) {
         addInventoryItem(userId, drop.id, drop.qty);
     }
 
+    const objectiveRewards = RaidDomain.getRaidObjectiveRewards(branchDecision, success);
     const baseRaidXpGain = RaidDomain.rollRaidXpGain(
         tension,
         success,
         bet,
-        effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus) * approach.xpMultiplier,
+        effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus) * approach.xpMultiplier * objectiveRewards.xpMultiplier,
         mapCfg
     );
     const progressionScale = RaidDomain.getPmcXpGainScale(pmcLevelBeforeRaid, mapCfg, tension, success) * (1 + followerBonuses.xpBonus + followerAssist.xpBonus);
@@ -5989,7 +6010,7 @@ function performRaidUnbatched(userId: string, bet: number, tension: string, mapK
     const baseRewardTokens = rewardTokens;
     const outcomeBonusTokens = reward.tokens;
     const net = baseRewardTokens + outcomeBonusTokens + bossTokenBonus + failureMitigation - bet;
-    const mapReputationGain = RaidDomain.calculateMapReputationGain({ mapDifficulty: mapCfg.difficulty, tension, success, bossSpawned, bossDefeated });
+    const mapReputationGain = RaidDomain.calculateMapReputationGain({ mapDifficulty: mapCfg.difficulty, tension, success, bossSpawned, bossDefeated }) + objectiveRewards.reputationBonus;
     const mapReputationResult = recordMapReputation({ userId, mapKey: mapCfg.key, points: mapReputationGain, success, bossSpawned, bossDefeated, timestamp: now });
     const mapReputationAfterProgress = RaidDomain.getMapReputationProgress(mapReputationResult.entry.points);
     const mapReputationTierUnlocked = mapReputationAfterProgress.tier.level > mapReputationBeforeProgress.tier.level
@@ -6103,6 +6124,11 @@ function performRaidUnbatched(userId: string, bet: number, tension: string, mapK
         extractionRouteLabel: extractionRoute?.label,
         branchDecisionLabel: branchModifiers.label,
         mapEventLabel: mapEvent?.label,
+        mapEventDetails: mapEvent ? `${mapEvent.description}\nExtraction ${mapEvent.successDelta >= 0 ? "+" : ""}${(mapEvent.successDelta * 100).toFixed(1)}% • Tokens ${mapEvent.tokenMultiplierDelta >= 0 ? "+" : ""}${(mapEvent.tokenMultiplierDelta * 100).toFixed(1)}% • Bonus loot rolls ${mapEvent.lootBonusRolls}` : undefined,
+        objectiveOutcome: objectiveRewards.outcome,
+        loadoutSetLabel: gearBonus.setLabel,
+        newGearNames,
+        sirGruSupportRole: FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru)].label,
         bossCurrentStreak: bossProgress?.currentStreak,
         bossBestStreak: bossProgress?.bestStreak,
         bossIntelLevel: bossProgress?.intelLevel,
@@ -6186,10 +6212,12 @@ async function resolveRaidBranchDecision(interaction: ChatInputCommandInteractio
         embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
         components: payload.components
     });
-    const selected = await awaitRaidDecision(interaction, message, [RAID_ENCOUNTER_IDS.securePerimeter, RAID_ENCOUNTER_IDS.pushObjective, RAID_ENCOUNTER_IDS.stayCourse], 15_000);
+    const selected = await awaitRaidDecision(interaction, message, [RAID_ENCOUNTER_IDS.securePerimeter, RAID_ENCOUNTER_IDS.pushObjective, RAID_ENCOUNTER_IDS.surveySite, RAID_ENCOUNTER_IDS.rescuePatrol, RAID_ENCOUNTER_IDS.stayCourse], 15_000);
     if (!selected) return "stay_course";
     if (selected.customId === RAID_ENCOUNTER_IDS.securePerimeter) return "secure_perimeter";
     if (selected.customId === RAID_ENCOUNTER_IDS.pushObjective) return "push_objective";
+    if (selected.customId === RAID_ENCOUNTER_IDS.surveySite) return "survey_site";
+    if (selected.customId === RAID_ENCOUNTER_IDS.rescuePatrol) return "rescue_patrol";
     return "stay_course";
 }
 
@@ -6576,7 +6604,7 @@ function buildLeaderboardPayload(): string {
     return JSON.stringify({ embed: embed.toJSON() });
 }
 
-function buildPmcProfilePayload(user: User): string {
+function buildPmcProfilePayload(user: User, view: PmcProfileView = "overview"): string {
     const state = ensureUser(user.id);
     const gameStats = getGameStatsSummary(user.id);
     const progress = getPmcProgress(state.pmcXP);
@@ -6591,22 +6619,22 @@ function buildPmcProfilePayload(user: User): string {
     const sirGruBonuses = sirGru ? getSirGruRaidBonuses(sirGru) : null;
     const sirGruAbilities = getSirGruUnlockedAbilities(sirGru || undefined);
     const nextSirGruAbility = sirGruProgress
-        ? getSirGruUnlockedAbilities({ ...sirGru!, level: 100, xp: Number.MAX_SAFE_INTEGER }).find(ability => ability.level > sirGruProgress.level)
+        ? SIR_GRU_ABILITIES.find(ability => ability.level > sirGruProgress.level)
         : null;
     const tier = getPmcTierForLevel(progress.level);
     const tierVisual = getPmcTierVisual(progress.level);
     const raids = Math.max(0, state.pmcRaids);
     const wins = Math.max(0, state.pmcRaidWins);
     const bossKills = Math.max(0, state.pmcBossKills || 0);
-    const bossHeartNames = getUnlockedBossHeartNames(user.id);
+    const bossHeartNames = view === "collection" ? getUnlockedBossHeartNames(user.id) : [];
     const bossHeartsUnlocked = bossHeartNames.length;
-    const mapMastery = Object.values(RaidDomain.RAID_MAPS)
+    const mapMastery = (view === "mastery" ? Object.values(RaidDomain.RAID_MAPS) : [])
         .map(map => ({ map, entry: getMapReputationEntry(user.id, map.key) }))
         .map(item => ({ ...item, progress: RaidDomain.getMapReputationProgress(item.entry.points) }))
         .sort((a, b) => b.entry.points - a.entry.points);
     const totalMapReputation = mapMastery.reduce((sum, item) => sum + item.entry.points, 0);
     const masteredMapCount = mapMastery.filter(item => !item.progress.nextTier).length;
-    const collectibleEntries = COLLECTIBLE_ITEM_IDS
+    const collectibleEntries = (view === "collection" ? [...COLLECTIBLE_ITEM_IDS] : [])
         .map(id => ({ id, def: ITEM_DEFS[id], qty: getInventoryCount(user.id, id) }))
         .filter(entry => entry.def && entry.qty > 0)
         .sort((a, b) => b.qty - a.qty || a.def.name.localeCompare(b.def.name));
@@ -6616,7 +6644,7 @@ function buildPmcProfilePayload(user: User): string {
     const collectibleLine = collectibleEntries.length
         ? collectibleEntries.slice(0, 6).map(entry => `${entry.def.name} x${entry.qty}`).join("\n")
         : "No collectibles found yet. Ultra-rare collectibles can only be found in raids.";
-    const bossProgressLines = RaidDomain.RAID_BOSS_ROSTER.slice(0, 6).map(boss => {
+    const bossProgressLines = (view === "collection" ? [...RaidDomain.RAID_BOSS_ROSTER] : []).sort((first, second) => (state.bossProgress?.[second.name]?.kills || 0) - (state.bossProgress?.[first.name]?.kills || 0)).slice(0, 6).map(boss => {
         const entry = getBossProgressEntry(user.id, boss.name);
         return `${boss.name}: ${entry.kills} kills • streak ${entry.currentStreak}/${entry.bestStreak} • intel ${entry.intelLevel}/5${entry.alternateFormUnlocked ? " • form unlocked" : ""}`;
     });
@@ -6636,8 +6664,8 @@ function buildPmcProfilePayload(user: User): string {
 
     const embed = new EmbedBuilder()
         .setColor(tierVisual.color)
-        .setTitle(progress.capped ? `🪖 PMC Progression • Prestige ${prestigeTier.numeral} • 👑` : `🪖 PMC Progression • Prestige ${prestigeTier.numeral}`)
-        .setDescription("Persistent raid command profile with overlevels, permanent prestige bonuses, territory mastery, and boss trophies.")
+        .setTitle(`🪖 ${state.pmcCallsign} • ${PMC_PROFILE_VIEWS[view]}`)
+        .setDescription(`Level ${progress.level.toLocaleString()} • Prestige ${prestigeTier.numeral} • ${tier?.label || "Recruit"}`)
         .setAuthor({ name: `${user.username} · Army Profile`, iconURL: tierVisual.iconUrl })
         .setThumbnail(tierVisual.iconUrl)
         .addFields(
@@ -6695,7 +6723,7 @@ function buildPmcProfilePayload(user: User): string {
             {
                 name: "Follower: Sir Gru",
                 value: sirGru && sirGruProgress && sirGruStats && sirGruBonuses ? [
-                    `Status: Active • Level ${sirGruProgress.level}/100${sirGruProgress.capped ? " • Max perk active" : ""}`,
+                    `Status: Active • ${FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru)].label} • Level ${sirGruProgress.level}/100${sirGruProgress.capped ? " • Max perk active" : ""}`,
                     `Progress: ${sirGruProgress.capped ? "MAX" : `${sirGruProgress.intoLevel}/${Math.max(1, sirGruProgress.nextThreshold - sirGruProgress.currentThreshold)} XP • ${sirGruProgress.needForNext} to next level`}`,
                     `Stats: Scouting ${sirGruStats.scouting} • Firepower ${sirGruStats.firepower} • Guard ${sirGruStats.guard} • Loyalty ${sirGruStats.loyalty}`,
                     `Abilities: ${sirGruAbilities.map(ability => ability.name).join(", ") || "None"}`,
@@ -6710,13 +6738,13 @@ function buildPmcProfilePayload(user: User): string {
                 value: [
                     `Boss Kills: ${bossKills}`,
                     `First-Kill Hearts: ${bossHeartsUnlocked}`,
-                    `Unlocked Hearts: ${bossHeartNames.length ? bossHeartNames.join(", ") : "None yet. Defeat a boss for your first heart trophy."}`
+                    `Unlocked Hearts: ${bossHeartNames.length ? bossHeartNames.join(", ").slice(0, 850) : "None yet. Defeat a boss for your first heart trophy."}`
                 ].join("\n"),
                 inline: false
             },
             {
                 name: "Boss Progression Matrix",
-                value: bossProgressLines.join("\n"),
+                value: bossProgressLines.join("\n") || "No encounters recorded.",
                 inline: false
             },
             {
@@ -6736,6 +6764,44 @@ function buildPmcProfilePayload(user: User): string {
             }
         );
 
+    const sections: Record<PmcProfileView, string[]> = {
+        overview: ["Profile Header", "Progress Track", "Raid Standing", "Combat Buff Matrix"],
+        follower: ["Follower: Sir Gru"],
+        prestige: [`${prestigeTier.badge} Prestige Protocol`],
+        mastery: ["Territory Mastery", "Lifetime Raid Economy"],
+        collection: ["Boss Trophy Case", "Boss Progression Matrix", "Collector Vault"]
+    };
+    embed.setFields((embed.data.fields || []).filter(field => sections[view].includes(field.name)));
+    if (view === "overview") {
+        const weapon = getBestOwnedGear(user.id, WEAPON_IDS, "raidAttack");
+        const armor = getBestOwnedGear(user.id, ARMOR_IDS, "raidDefense");
+        embed.addFields({ name: "Deployment Readiness", value: [
+            `Weapon: ${weapon?.name || "None"}${weapon ? ` • ${state.gearDurability[weapon.id] ?? 100}% durability` : ""}`,
+            `Armor: ${armor?.name || "None"}${armor ? ` • ${state.gearDurability[armor.id] ?? 100}% durability` : ""}`,
+            `Med patches: ${state.inventory.med_patch || 0} • Repair kits: ${state.inventory.repair_kit || 0}`,
+            `Sir Gru: ${sirGruProgress ? `Lv ${sirGruProgress.level} • ${FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru || undefined)].label}` : "Unlock at Prestige I"}`,
+            activeRaidEncounters.has(user.id) ? "Raid in progress" : "Ready to deploy"
+        ].join("\n"), inline: false });
+    }
+    if (view === "follower") {
+        embed.addFields({ name: "Ability Roadmap", value: SIR_GRU_ABILITIES.map(ability => `${sirGruProgress && sirGruProgress.level >= ability.level ? "Unlocked" : `Level ${ability.level}`} • **${ability.name}**\n${ability.desc}`).join("\n\n"), inline: false });
+        if (sirGru && nextSirGruAbility) embed.addFields({ name: "Next Unlock", value: `${nextSirGruAbility.name} • ${(getSirGruLevelXp(nextSirGruAbility.level) - sirGru.xp).toLocaleString()} follower XP remaining`, inline: false });
+        if (sirGru) embed.addFields({ name: "Support Assignment", value: FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru)].description, inline: false });
+    }
+    if (view === "prestige") {
+        const preview = getPmcPrestigePreview(state.pmcXP, state.pmcPrestige);
+        embed.addFields({ name: "Next Rank Preview", value: preview.capped ? "Prestige X complete. All permanent ranks unlocked." : [
+            `XP to eligibility: ${preview.xpRemaining.toLocaleString()}`,
+            `Permanent success: +${(preview.currentBonuses.successBonus * 100).toFixed(1)}% -> +${(preview.nextBonuses.successBonus * 100).toFixed(1)}%`,
+            `Permanent raid XP: +${(preview.currentBonuses.xpBonus * 100).toFixed(1)}% -> +${(preview.nextBonuses.xpBonus * 100).toFixed(1)}%`,
+            `Total success immediately after reset: +${(preview.currentBuffs.successBonus * 100).toFixed(1)}% -> +${(preview.resetBuffs.successBonus * 100).toFixed(1)}%`,
+            "Level-based bonuses rebuild as you level again. Follower XP, role, gear and currency are preserved."
+        ].join("\n"), inline: false });
+    }
+    const navigation = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
+        .setCustomId(`${PMC_PROFILE_IDS.view}:${user.id}`)
+        .setPlaceholder("PMC profile")
+        .addOptions(Object.entries(PMC_PROFILE_VIEWS).map(([value, label]) => ({ value, label, default: value === view }))));
     const prestigeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
             .setCustomId(PMC_PRESTIGE_IDS.identity)
@@ -6743,12 +6809,22 @@ function buildPmcProfilePayload(user: User): string {
             .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
             .setCustomId(PMC_PRESTIGE_IDS.request)
-            .setLabel(state.pmcPrestige >= PMC_PRESTIGE_CAP ? "Prestige X Achieved" : `Prestige to ${nextPrestigeTier.numeral}`)
+            .setLabel(state.pmcPrestige >= PMC_PRESTIGE_CAP ? "Prestige X Achieved" : `Review Prestige ${nextPrestigeTier.numeral}`)
             .setStyle(ButtonStyle.Primary)
-            .setDisabled(!prestigeEligible)
+            .setDisabled(!prestigeEligible || activeRaidEncounters.has(user.id))
     );
-
-    return JSON.stringify({ embed: embed.toJSON(), components: [prestigeRow.toJSON()] });
+    const shortcuts = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(RAID_RESULT_ACTION_IDS.inventory).setLabel("Inventory").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(RAID_RESULT_ACTION_IDS.history).setLabel("Raid History").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(RAID_RESULT_ACTION_IDS.bosses).setLabel("Boss Intel").setStyle(ButtonStyle.Secondary)
+    );
+    const components: unknown[] = [navigation.toJSON(), (view === "prestige" || view === "overview" ? prestigeRow : shortcuts).toJSON()];
+    if (view === "follower" && sirGru) components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
+        .setCustomId(`${PMC_PROFILE_IDS.followerRole}:${user.id}`)
+        .setPlaceholder("Sir Gru support role")
+        .setDisabled(activeRaidEncounters.has(user.id))
+        .addOptions(Object.entries(FOLLOWER_SUPPORT_ROLES).map(([value, role]) => ({ value, label: role.label, description: role.description, default: value === getFollowerSupportRole(sirGru) })))).toJSON());
+    return JSON.stringify({ embed: embed.toJSON(), components });
 }
 
 function chunkDetailLines(lines: string[], maxLines = 8): string[] {
@@ -12144,7 +12220,34 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
+    if (interaction.isStringSelectMenu() && (interaction.customId.startsWith(`${PMC_PROFILE_IDS.view}:`) || interaction.customId.startsWith(`${PMC_PROFILE_IDS.followerRole}:`))) {
+        const ownerId = interaction.customId.split(":")[1];
+        if (ownerId !== interaction.user.id) {
+            await interaction.reply({ content: "This is another PMC's profile. Open /pmc for your own controls.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        let view: PmcProfileView = "overview";
+        const value = interaction.values[0];
+        if (interaction.customId.startsWith(`${PMC_PROFILE_IDS.followerRole}:`)) {
+            const follower = ensureUser(ownerId).followers?.sir_gru;
+            if (!follower || activeRaidEncounters.has(ownerId) || !Object.prototype.hasOwnProperty.call(FOLLOWER_SUPPORT_ROLES, value)) {
+                await interaction.reply({ content: "Support roles require an unlocked follower and no active raid.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+                return;
+            }
+            follower.supportRole = value as FollowerSupportRole;
+            savePoints();
+            view = "follower";
+        } else if (Object.prototype.hasOwnProperty.call(PMC_PROFILE_VIEWS, value)) view = value as PmcProfileView;
+        const payload = JSON.parse(buildPmcProfilePayload(interaction.user, view));
+        await interaction.update({ embeds: [embedFromPayload("pmc", payload.embed, interaction.user)], components: payload.components }).catch(() => undefined);
+        return;
+    }
+
     if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.request) {
+        if (activeRaidEncounters.has(interaction.user.id)) {
+            await interaction.reply({ content: "Finish your active raid before prestiging.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
         const state = ensureUser(interaction.user.id);
         const level = getPmcLevel(state.pmcXP);
         if (state.pmcPrestige >= PMC_PRESTIGE_CAP || level < PMC_PRESTIGE_LEVEL_REQUIREMENT) {
@@ -12158,11 +12261,11 @@ client.on("interactionCreate", async interaction => {
             .setDescription("This is a permanent progression choice. Review the reset boundary before confirming.")
             .addFields(
                 { name: "Will Reset", value: `PMC Level ${level.toLocaleString()} → 0\nRaid XP ${state.pmcXP.toLocaleString()} → 0`, inline: true },
-                { name: "Will Remain", value: "Inventory and currency\nMap reputation and raid records\nBoss hearts, kills, and achievements", inline: true },
+                { name: "Will Remain", value: "Inventory and currency\nMap reputation and raid records\nBoss hearts, kills, and achievements\nFollower XP, abilities and support role", inline: true },
                 { name: "Permanent Rank", value: `Prestige ${nextTier.numeral} • ${nextTier.label}\nHigher raid XP, success, token, and defense bonuses`, inline: false }
             );
         const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.confirm).setLabel(`Confirm Prestige ${nextTier.numeral}`).setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`${PMC_PRESTIGE_IDS.confirm}:${state.pmcPrestige}`).setLabel(`Confirm Prestige ${nextTier.numeral}`).setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(PMC_PRESTIGE_IDS.cancel).setLabel("Cancel").setStyle(ButtonStyle.Secondary)
         );
         await interaction.reply({ embeds: [confirmEmbed], components: [confirmRow], flags: MessageFlags.Ephemeral }).catch(() => undefined);
@@ -12183,8 +12286,13 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
-    if (interaction.isButton() && interaction.customId === PMC_PRESTIGE_IDS.confirm) {
-        const result = performPmcPrestige(interaction.user.id);
+    if (interaction.isButton() && (interaction.customId === PMC_PRESTIGE_IDS.confirm || interaction.customId.startsWith(`${PMC_PRESTIGE_IDS.confirm}:`))) {
+        const rankText = interaction.customId.split(":")[1];
+        if (activeRaidEncounters.has(interaction.user.id) || !rankText || !/^\d+$/.test(rankText)) {
+            await interaction.update({ content: activeRaidEncounters.has(interaction.user.id) ? "Finish your active raid before prestiging." : "This confirmation has expired. Open /pmc for a fresh preview.", embeds: [], components: [] }).catch(() => undefined);
+            return;
+        }
+        const result = performPmcPrestige(interaction.user.id, Number(rankText));
         if (result.error) {
             await interaction.update({ content: result.error, embeds: [], components: [] }).catch(() => undefined);
             return;

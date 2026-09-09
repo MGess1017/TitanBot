@@ -84,9 +84,22 @@ export type FollowerState = {
     raids: number;
     bossAssists: number;
     maxPerkUnlocked: boolean;
+    supportRole?: FollowerSupportRole;
 };
 
 export type SirGruAbility = { level: number; name: string; desc: string };
+
+export const FOLLOWER_SUPPORT_ROLES = {
+    balanced: { label: "Balanced", description: "Standard support across all raid bonuses." },
+    scout: { label: "Scout", description: "25% stronger follower extraction bonus; 25% less follower token bonus." },
+    guardian: { label: "Guardian", description: "25% stronger follower mitigation; 25% less follower boss bonus." },
+    quartermaster: { label: "Quartermaster", description: "25% stronger follower token bonus; 25% less follower extraction bonus." }
+} as const;
+export type FollowerSupportRole = keyof typeof FOLLOWER_SUPPORT_ROLES;
+
+export function getFollowerSupportRole(follower: FollowerState | undefined): FollowerSupportRole {
+    return follower?.supportRole && Object.prototype.hasOwnProperty.call(FOLLOWER_SUPPORT_ROLES, follower.supportRole) ? follower.supportRole : "balanced";
+}
 
 export type SirGruRaidAssist = {
     unlockedAbilities: SirGruAbility[];
@@ -162,12 +175,7 @@ export function getSirGruLevelXp(level: number): number {
 
 export function getSirGruLevelFromXp(xp: number): number {
     const safeXp = Math.max(0, Math.floor(xp));
-    let level = 1;
-    for (let next = 2; next <= SIR_GRU_MAX_LEVEL; next++) {
-        if (safeXp < getSirGruLevelXp(next)) break;
-        level = next;
-    }
-    return level;
+    return Math.min(SIR_GRU_MAX_LEVEL, 1 + Math.floor(Math.sqrt(safeXp / 40)));
 }
 
 export function getSirGruProgress(follower: FollowerState): { level: number; xp: number; currentThreshold: number; nextThreshold: number; intoLevel: number; needForNext: number; capped: boolean } {
@@ -202,12 +210,13 @@ export function getSirGruRaidBonuses(follower: FollowerState | undefined): { suc
     const level = getSirGruProgress(follower).level;
     const scale = level / SIR_GRU_MAX_LEVEL;
     const maxPerkActive = level >= SIR_GRU_MAX_LEVEL;
+    const role = getFollowerSupportRole(follower);
     return {
-        successBonus: Math.min(0.018, 0.012 * scale + (maxPerkActive ? 0.006 : 0)),
-        tokenBonus: Math.min(0.035, 0.018 * scale + (maxPerkActive ? 0.017 : 0)),
-        defenseBonus: Math.min(0.028, 0.014 * scale + (maxPerkActive ? 0.014 : 0)),
+        successBonus: Math.min(0.018, 0.012 * scale + (maxPerkActive ? 0.006 : 0)) * (role === "scout" ? 1.25 : role === "quartermaster" ? 0.75 : 1),
+        tokenBonus: Math.min(0.035, 0.018 * scale + (maxPerkActive ? 0.017 : 0)) * (role === "quartermaster" ? 1.25 : role === "scout" ? 0.75 : 1),
+        defenseBonus: Math.min(0.028, 0.014 * scale + (maxPerkActive ? 0.014 : 0)) * (role === "guardian" ? 1.25 : 1),
         xpBonus: Math.min(0.055, 0.02 * scale + (maxPerkActive ? 0.035 : 0)),
-        bossKillBonus: Math.min(0.03, 0.014 * scale + (maxPerkActive ? 0.016 : 0)),
+        bossKillBonus: Math.min(0.03, 0.014 * scale + (maxPerkActive ? 0.016 : 0)) * (role === "guardian" ? 0.75 : 1),
         maxPerkActive
     };
 }
@@ -225,6 +234,7 @@ export function ensureSirGruFollower(user: UserState, now = Date.now()): Followe
         existing.raids = Math.max(0, Math.floor(existing.raids || 0));
         existing.bossAssists = Math.max(0, Math.floor(existing.bossAssists || 0));
         existing.maxPerkUnlocked = existing.maxPerkUnlocked || existing.level >= SIR_GRU_MAX_LEVEL;
+        existing.supportRole = getFollowerSupportRole(existing);
         return existing;
     }
     user.followers[SIR_GRU_FOLLOWER_ID] = {
@@ -909,10 +919,14 @@ export function getPmcTierForLevel(level: number): PmcTierMilestone | null {
 
 export function getPmcLevel(pmcXP: number): number {
     const value = Math.max(0, Math.floor(pmcXP));
-    for (let i = PMC_LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
-        if (value >= PMC_LEVEL_THRESHOLDS[i]) return i + 1;
+    let lower = 0;
+    let upper = PMC_LEVEL_THRESHOLDS.length;
+    while (lower < upper) {
+        const middle = Math.floor((lower + upper) / 2);
+        if (value >= PMC_LEVEL_THRESHOLDS[middle]) lower = middle + 1;
+        else upper = middle;
     }
-    return 0;
+    return lower;
 }
 
 export function getPmcProgress(pmcXP: number): {
@@ -979,9 +993,27 @@ export function getPmcBuffsForXP(pmcXP: number, prestige = 0) {
     return getPmcBuffs(getPmcLevel(pmcXP), prestige);
 }
 
-export function performPmcPrestige(userId: string): { error?: string; prestige?: number; tier?: PmcPrestigeTier } {
+export function getPmcPrestigePreview(xp: number, prestige: number) {
+    const level = getPmcLevel(xp);
+    const capped = prestige >= PMC_PRESTIGE_CAP;
+    const nextPrestige = Math.min(PMC_PRESTIGE_CAP, prestige + 1);
+    return {
+        level,
+        capped,
+        eligible: !capped && level >= PMC_PRESTIGE_LEVEL_REQUIREMENT,
+        xpRemaining: capped ? 0 : Math.max(0, PMC_LEVEL_THRESHOLDS[PMC_PRESTIGE_LEVEL_REQUIREMENT - 1] - xp),
+        nextTier: getPmcPrestigeTier(nextPrestige),
+        currentBonuses: getPmcPrestigeBonuses(prestige),
+        nextBonuses: getPmcPrestigeBonuses(nextPrestige),
+        currentBuffs: getPmcBuffs(level, prestige),
+        resetBuffs: getPmcBuffs(0, nextPrestige)
+    };
+}
+
+export function performPmcPrestige(userId: string, expectedPrestige?: number): { error?: string; prestige?: number; tier?: PmcPrestigeTier } {
     const user = ensureUser(userId);
     const currentPrestige = Math.max(0, Math.floor(user.pmcPrestige || 0));
+    if (expectedPrestige !== undefined && expectedPrestige !== currentPrestige) return { error: "This prestige confirmation is out of date. Open your PMC profile for a fresh preview." };
     if (currentPrestige >= PMC_PRESTIGE_CAP) return { error: "Maximum PMC Prestige X has already been achieved." };
     if (getPmcLevel(user.pmcXP) < PMC_PRESTIGE_LEVEL_REQUIREMENT) {
         return { error: `PMC Level ${PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} is required to prestige.` };

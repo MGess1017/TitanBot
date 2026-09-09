@@ -3,7 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PMC_LEVEL_THRESHOLDS = exports.PMC_PRESTIGE_TIERS = exports.PMC_TIER_MILESTONES = exports.PMC_PRESTIGE_CAP = exports.PMC_PRESTIGE_LEVEL_REQUIREMENT = exports.PMC_LEVEL_CAP = exports.XP_LEVEL_THRESHOLDS = exports.points = exports.SIR_GRU_ABILITIES = exports.SIR_GRU_MAX_LEVEL = exports.SIR_GRU_FOLLOWER_ID = exports.GAME_STAT_KEYS = void 0;
+exports.PMC_LEVEL_THRESHOLDS = exports.PMC_PRESTIGE_TIERS = exports.PMC_TIER_MILESTONES = exports.PMC_PRESTIGE_CAP = exports.PMC_PRESTIGE_LEVEL_REQUIREMENT = exports.PMC_LEVEL_CAP = exports.XP_LEVEL_THRESHOLDS = exports.points = exports.SIR_GRU_ABILITIES = exports.SIR_GRU_MAX_LEVEL = exports.SIR_GRU_FOLLOWER_ID = exports.GAME_STAT_KEYS = exports.FOLLOWER_SUPPORT_ROLES = void 0;
+exports.getFollowerSupportRole = getFollowerSupportRole;
 exports.getSirGruLevelXp = getSirGruLevelXp;
 exports.getSirGruLevelFromXp = getSirGruLevelFromXp;
 exports.getSirGruProgress = getSirGruProgress;
@@ -40,6 +41,7 @@ exports.getPmcProgress = getPmcProgress;
 exports.pmcBar = pmcBar;
 exports.getPmcBuffs = getPmcBuffs;
 exports.getPmcBuffsForXP = getPmcBuffsForXP;
+exports.getPmcPrestigePreview = getPmcPrestigePreview;
 exports.performPmcPrestige = performPmcPrestige;
 exports.getRandomInt = getRandomInt;
 exports.getInventoryCount = getInventoryCount;
@@ -57,6 +59,15 @@ exports.getSirGruUnlockedAbilities = getSirGruUnlockedAbilities;
 exports.rollSirGruRaidAssist = rollSirGruRaidAssist;
 const fs_extra_1 = __importDefault(require("fs-extra"));
 const path_1 = __importDefault(require("path"));
+exports.FOLLOWER_SUPPORT_ROLES = {
+    balanced: { label: "Balanced", description: "Standard support across all raid bonuses." },
+    scout: { label: "Scout", description: "25% stronger follower extraction bonus; 25% less follower token bonus." },
+    guardian: { label: "Guardian", description: "25% stronger follower mitigation; 25% less follower boss bonus." },
+    quartermaster: { label: "Quartermaster", description: "25% stronger follower token bonus; 25% less follower extraction bonus." }
+};
+function getFollowerSupportRole(follower) {
+    return follower?.supportRole && Object.prototype.hasOwnProperty.call(exports.FOLLOWER_SUPPORT_ROLES, follower.supportRole) ? follower.supportRole : "balanced";
+}
 exports.GAME_STAT_KEYS = [
     "raid",
     "dice",
@@ -85,13 +96,7 @@ function getSirGruLevelXp(level) {
 }
 function getSirGruLevelFromXp(xp) {
     const safeXp = Math.max(0, Math.floor(xp));
-    let level = 1;
-    for (let next = 2; next <= exports.SIR_GRU_MAX_LEVEL; next++) {
-        if (safeXp < getSirGruLevelXp(next))
-            break;
-        level = next;
-    }
-    return level;
+    return Math.min(exports.SIR_GRU_MAX_LEVEL, 1 + Math.floor(Math.sqrt(safeXp / 40)));
 }
 function getSirGruProgress(follower) {
     const xp = Math.max(0, Math.floor(follower.xp || 0));
@@ -124,12 +129,13 @@ function getSirGruRaidBonuses(follower) {
     const level = getSirGruProgress(follower).level;
     const scale = level / exports.SIR_GRU_MAX_LEVEL;
     const maxPerkActive = level >= exports.SIR_GRU_MAX_LEVEL;
+    const role = getFollowerSupportRole(follower);
     return {
-        successBonus: Math.min(0.018, 0.012 * scale + (maxPerkActive ? 0.006 : 0)),
-        tokenBonus: Math.min(0.035, 0.018 * scale + (maxPerkActive ? 0.017 : 0)),
-        defenseBonus: Math.min(0.028, 0.014 * scale + (maxPerkActive ? 0.014 : 0)),
+        successBonus: Math.min(0.018, 0.012 * scale + (maxPerkActive ? 0.006 : 0)) * (role === "scout" ? 1.25 : role === "quartermaster" ? 0.75 : 1),
+        tokenBonus: Math.min(0.035, 0.018 * scale + (maxPerkActive ? 0.017 : 0)) * (role === "quartermaster" ? 1.25 : role === "scout" ? 0.75 : 1),
+        defenseBonus: Math.min(0.028, 0.014 * scale + (maxPerkActive ? 0.014 : 0)) * (role === "guardian" ? 1.25 : 1),
         xpBonus: Math.min(0.055, 0.02 * scale + (maxPerkActive ? 0.035 : 0)),
-        bossKillBonus: Math.min(0.03, 0.014 * scale + (maxPerkActive ? 0.016 : 0)),
+        bossKillBonus: Math.min(0.03, 0.014 * scale + (maxPerkActive ? 0.016 : 0)) * (role === "guardian" ? 0.75 : 1),
         maxPerkActive
     };
 }
@@ -148,6 +154,7 @@ function ensureSirGruFollower(user, now = Date.now()) {
         existing.raids = Math.max(0, Math.floor(existing.raids || 0));
         existing.bossAssists = Math.max(0, Math.floor(existing.bossAssists || 0));
         existing.maxPerkUnlocked = existing.maxPerkUnlocked || existing.level >= exports.SIR_GRU_MAX_LEVEL;
+        existing.supportRole = getFollowerSupportRole(existing);
         return existing;
     }
     user.followers[exports.SIR_GRU_FOLLOWER_ID] = {
@@ -793,11 +800,16 @@ function getPmcTierForLevel(level) {
 }
 function getPmcLevel(pmcXP) {
     const value = Math.max(0, Math.floor(pmcXP));
-    for (let i = exports.PMC_LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
-        if (value >= exports.PMC_LEVEL_THRESHOLDS[i])
-            return i + 1;
+    let lower = 0;
+    let upper = exports.PMC_LEVEL_THRESHOLDS.length;
+    while (lower < upper) {
+        const middle = Math.floor((lower + upper) / 2);
+        if (value >= exports.PMC_LEVEL_THRESHOLDS[middle])
+            lower = middle + 1;
+        else
+            upper = middle;
     }
-    return 0;
+    return lower;
 }
 function getPmcProgress(pmcXP) {
     const xp = Math.max(0, Math.floor(pmcXP));
@@ -844,9 +856,27 @@ function getPmcBuffs(level, prestige = 0) {
 function getPmcBuffsForXP(pmcXP, prestige = 0) {
     return getPmcBuffs(getPmcLevel(pmcXP), prestige);
 }
-function performPmcPrestige(userId) {
+function getPmcPrestigePreview(xp, prestige) {
+    const level = getPmcLevel(xp);
+    const capped = prestige >= exports.PMC_PRESTIGE_CAP;
+    const nextPrestige = Math.min(exports.PMC_PRESTIGE_CAP, prestige + 1);
+    return {
+        level,
+        capped,
+        eligible: !capped && level >= exports.PMC_PRESTIGE_LEVEL_REQUIREMENT,
+        xpRemaining: capped ? 0 : Math.max(0, exports.PMC_LEVEL_THRESHOLDS[exports.PMC_PRESTIGE_LEVEL_REQUIREMENT - 1] - xp),
+        nextTier: getPmcPrestigeTier(nextPrestige),
+        currentBonuses: getPmcPrestigeBonuses(prestige),
+        nextBonuses: getPmcPrestigeBonuses(nextPrestige),
+        currentBuffs: getPmcBuffs(level, prestige),
+        resetBuffs: getPmcBuffs(0, nextPrestige)
+    };
+}
+function performPmcPrestige(userId, expectedPrestige) {
     const user = ensureUser(userId);
     const currentPrestige = Math.max(0, Math.floor(user.pmcPrestige || 0));
+    if (expectedPrestige !== undefined && expectedPrestige !== currentPrestige)
+        return { error: "This prestige confirmation is out of date. Open your PMC profile for a fresh preview." };
     if (currentPrestige >= exports.PMC_PRESTIGE_CAP)
         return { error: "Maximum PMC Prestige X has already been achieved." };
     if (getPmcLevel(user.pmcXP) < exports.PMC_PRESTIGE_LEVEL_REQUIREMENT) {
