@@ -1,12 +1,14 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } from "discord.js";
 import { getVendorSellPrice, ITEM_DEFS, type ItemDef } from "./catalog";
-import type { RareExtractionRoute } from "../raid/domain";
+import { BOSS_TRAITS, RAID_APPROACHES, RAID_BOSS_ROSTER, getBossCombatProfile, type RareExtractionRoute } from "../raid/domain";
 
 export const RAID_RESULT_ACTION_IDS = {
     inventory: "raid_result_inventory",
     history: "raid_result_history",
     bosses: "raid_result_bosses",
-    mastery: "raid_result_mastery"
+    mastery: "raid_result_mastery",
+    supplies: "raid_result_supplies",
+    bossIntel: "raid_boss_intel"
 } as const;
 
 export const RAID_ENCOUNTER_IDS = {
@@ -18,7 +20,8 @@ export const RAID_ENCOUNTER_IDS = {
     attack: "raid_boss_attack",
     defend: "raid_boss_defend",
     heal: "raid_boss_heal",
-    scan: "raid_boss_scan"
+    scan: "raid_boss_scan",
+    extract: "raid_boss_extract"
 } as const;
 
 export const GEAR_UI_IDS = {
@@ -498,29 +501,34 @@ export function buildRaidResultPayload(input: {
         sirGruAbilities?: string[];
         sirGruTriggeredAbilities?: string[];
     };
-    mapCfg: { label: string; bossName: string; lootTier: string };
+    mapCfg: { key?: string; label: string; bossName: string; lootTier: string };
     fallbackTension: string;
     armyIconUrl: string;
 }): string {
     const { result, mapCfg, fallbackTension, armyIconUrl } = input;
     const [tensionLabel, conditionLabel] = (result.tension || fallbackTension).split(" | ");
-    const signedNet = (result.net || 0) >= 0 ? `+${result.net}` : `${result.net}`;
-    const lootEntries = (result.loot || []).map(entry => ({
+    const net = result.net || 0;
+    const signedNet = `${net >= 0 ? "+" : ""}${net.toLocaleString()}`;
+    const lootStacks = new Map<string, number>();
+    for (const entry of result.loot || []) {
+        if (entry.qty > 0) lootStacks.set(entry.id, (lootStacks.get(entry.id) || 0) + entry.qty);
+    }
+    const rarityOrder = ["common", "uncommon", "rare", "epic", "legendary", "mythic"];
+    const lootEntries = Array.from(lootStacks, ([id, qty]) => ({ id, qty })).map(entry => ({
         ...entry,
         def: ITEM_DEFS[entry.id]
-    }));
-    const lootRows = lootEntries.length
-        ? lootEntries.map(entry => `• [${rarityBadge(entry.def?.rarity)}] ${entry.qty}x ${entry.def?.name || entry.id}`)
-        : ["• No loot secured"];
+    })).sort((first, second) => rarityOrder.indexOf(second.def?.rarity || "common") - rarityOrder.indexOf(first.def?.rarity || "common") || getVendorSellPrice(second.id) * second.qty - getVendorSellPrice(first.id) * first.qty);
+    const lootRows: string[] = [];
+    let lootLength = 0;
+    for (const entry of lootEntries) {
+        const line = `[${rarityBadge(entry.def?.rarity)}] ${entry.qty}x ${entry.def?.name || entry.id}`;
+        if (lootLength + line.length + 1 > 900) break;
+        lootRows.push(line);
+        lootLength += line.length + 1;
+    }
+    if (lootRows.length < lootEntries.length) lootRows.push(`+${lootEntries.length - lootRows.length} more stacks in inventory`);
     const enhancedDrops = lootEntries.filter(entry => entry.id.startsWith("enhanced_") && entry.def);
     const mythicDrops = lootEntries.filter(entry => String(entry.def?.rarity || "") === "mythic");
-
-    const highValueLoot = lootEntries
-        .filter(entry => entry.def)
-        .sort((a, b) => (b.def?.price || 0) - (a.def?.price || 0))
-        .slice(0, 4)
-        .map(entry => `• ${entry.def?.name || entry.id} x${entry.qty}`)
-        .join("\n") || "• No high-value drops";
 
     const bossResolution = !result.bossSpawned
         ? "Boss: No boss detected"
@@ -533,8 +541,6 @@ export function buildRaidResultPayload(input: {
         : result.bossDefeated
             ? "Boss Heart: Not awarded"
             : "Boss Heart: Not claimed";
-
-    const prominentLoot = lootEntries.slice(0, 3).map(entry => `${entry.qty}x ${entry.def?.name || entry.id}`).join(" • ") || "No loot secured";
 
     const specialMoments = [
         result.bossHeartUnlockedName ? `Boss Heart: ${result.bossHeartUnlockedName}` : null,
@@ -576,7 +582,7 @@ export function buildRaidResultPayload(input: {
                     `Raid XP: +${result.rxpGain || 0}`,
                     result.sirGruXpGained ? `Sir Gru XP: +${result.sirGruXpGained}${result.sirGruLevel ? ` • Lv ${result.sirGruLevel}/100` : ""}` : null,
                     `Boss XP: +${result.bossBonusXp || 0}`,
-                    `Loot: ${lootEntries.length} item${lootEntries.length === 1 ? "" : "s"}`,
+                    `Loot: ${lootEntries.reduce((total, entry) => total + entry.qty, 0)} items • ${lootEntries.length} stacks`,
                     `Map REP: +${result.mapReputationGain || 0}`
                 ].filter(Boolean).join("\n"),
                 inline: true
@@ -587,6 +593,8 @@ export function buildRaidResultPayload(input: {
                     result.bossSpawned ? `${result.bossName || mapCfg.bossName}` : "Boss: No boss detected",
                     bossResolution,
                     heartLine,
+                    result.bossSpawned && result.bossHpMax ? `Boss HP: ${result.bossHpRemaining ?? result.bossHpMax}/${result.bossHpMax}` : null,
+                    result.pmcHpMax ? `PMC HP: ${result.pmcHpRemaining ?? result.pmcHpMax}/${result.pmcHpMax}` : null,
                     result.bossSpawned ? `Traits: ${result.bossTraitLabels?.join(" • ") || "Unknown"}` : null
                 ].filter(Boolean).join("\n"),
                 inline: true
@@ -594,7 +602,7 @@ export function buildRaidResultPayload(input: {
             ...(result.bossSpawned ? [{
                 name: "Combat Sequence",
                 value: [
-                    `Phases Cleared: ${result.bossPhasesReached || 0}/${result.bossPhaseNames?.length || 0}`,
+                    `Phases Reached: ${result.bossPhasesReached || 0}/${result.bossPhaseNames?.length || 0}`,
                     `Active/Final Phase: ${result.bossCurrentPhase || "Contact"}`,
                     `Sequence: ${result.bossPhaseNames?.join(" → ") || "Contact"}`,
                     `Counter Intel: ${result.bossCounteredTraits?.length ? result.bossCounteredTraits.join(", ") : "No trait counter matched"}`,
@@ -615,12 +623,17 @@ export function buildRaidResultPayload(input: {
             }] : []),
             {
                 name: "Recovered Loot",
-                value: prominentLoot,
+                value: lootRows.join("\n") || "No loot secured",
                 inline: false
             },
+            ...(result.mapReputationProgressPct !== undefined ? [{
+                name: "Territory Progress",
+                value: `${result.mapReputationTier || "Unproven"} • ${result.mapReputationPoints || 0} REP\n${healthBar(result.mapReputationProgressPct, 100, 10)}`,
+                inline: false
+            }] : []),
             ...(specialMoments.length ? [{
                 name: "Premium Event Flags",
-                value: specialMoments.slice(0, 3).join("\n"),
+                value: specialMoments.slice(0, 3).join("\n").slice(0, 1024),
                 inline: false
             }] : [])
         );
@@ -639,12 +652,47 @@ export function buildRaidResultPayload(input: {
             .setLabel("Boss Roster")
             .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
-            .setCustomId(RAID_RESULT_ACTION_IDS.mastery)
+            .setCustomId(mapCfg.key ? `${RAID_RESULT_ACTION_IDS.mastery}:${mapCfg.key}` : RAID_RESULT_ACTION_IDS.mastery)
             .setLabel("Map Mastery")
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(RAID_RESULT_ACTION_IDS.supplies)
+            .setLabel("Supplies")
             .setStyle(ButtonStyle.Secondary)
     );
 
     return JSON.stringify({ embed: embed.toJSON(), components: [actionRow.toJSON()] });
+}
+
+export function buildBossIntelPayload(input: {
+    bossName: string;
+    progress?: { encounters: number; kills: number; currentStreak: number; bestStreak: number; intelLevel: number; heartUpgradeLevel: number; alternateFormUnlocked: boolean };
+}): string {
+    const boss = RAID_BOSS_ROSTER.find(entry => entry.name === input.bossName);
+    if (!boss) throw new Error("Unknown raid boss.");
+    const profile = getBossCombatProfile(boss.name);
+    const progress = input.progress;
+    const embed = new EmbedBuilder()
+        .setColor(0xd97706)
+        .setTitle(boss.name)
+        .setDescription(`${boss.title} • ${boss.homeMapLabel}\n${ferocityLabel(boss.ferocity)} • ${boss.ferocity.toFixed(2)}x ferocity`)
+        .addFields(
+            { name: "Traits and Counters", value: profile.traits.map(key => {
+                const trait = BOSS_TRAITS[key];
+                return `**${trait.label}**\n${trait.description}${trait.counterApproach ? `\nCounter: ${RAID_APPROACHES[trait.counterApproach].label}` : ""}`;
+            }).join("\n\n"), inline: false },
+            { name: "Combat Phases", value: [...profile.phases].sort((first, second) => second.thresholdPct - first.thresholdPct).map(phase => `**${phase.name} • ${phase.thresholdPct}% HP**\n${phase.mechanic}`).join("\n\n"), inline: false },
+            { name: "Possible Gear Drops", value: [...new Set([...boss.weaponDrops, ...boss.armorDrops])].map(id => ITEM_DEFS[id]?.name || id).join("\n").slice(0, 1024) || "No gear listed", inline: true },
+            { name: "Base Reward Ranges", value: `${boss.bonusXpRange.join(" - ")} raid XP\n${boss.tokenRewardRange.join(" - ")} FN Token$\nRare drop roll: ${Math.round(boss.rareDropChance * 100)}%`, inline: true },
+            { name: "Your Boss Record", value: progress ? [
+                `${progress.kills} kills / ${progress.encounters} encounters`,
+                `Streak: ${progress.currentStreak} current • ${progress.bestStreak} best`,
+                `Intel: ${progress.intelLevel}/5 • Heart upgrade: ${progress.heartUpgradeLevel}/3`,
+                progress.heartUpgradeLevel < 3 ? `Next heart upgrade: ${Math.max(0, (progress.heartUpgradeLevel + 1) * 3 - progress.kills)} kills remaining` : "Heart fully upgraded",
+                progress.alternateFormUnlocked ? "Alternate form unlocked" : `Alternate form: ${Math.max(0, 5 - progress.kills)} kills remaining`
+            ].join("\n") : "No encounters recorded.", inline: false }
+        );
+    return JSON.stringify({ embed: embed.toJSON() });
 }
 
 export function buildRareRouteDecisionPayload(input: {
@@ -702,6 +750,12 @@ export function buildBossBattlePayload(input: {
     armorBreak?: number;
     specialAttack?: string;
     scanRevealed?: boolean;
+    medPatchCount?: number;
+    decisionDeadline?: number;
+    phaseMechanic?: string;
+    counteredTraits?: string[];
+    battleLog?: string[];
+    finished?: boolean;
 }): string {
     const totalTurns = Math.max(1, Math.floor(input.totalTurns));
     const turn = Math.max(0, Math.min(totalTurns, Math.floor(input.turn)));
@@ -714,7 +768,8 @@ export function buildBossBattlePayload(input: {
         : Math.max(0, Math.min(input.pmcHpMax, Math.floor(input.pmcHpCurrent)));
     const phaseNames = input.bossPhaseNames?.length ? input.bossPhaseNames : ["Contact"];
     const phaseIndex = Math.min(phaseNames.length - 1, Math.floor(progress * phaseNames.length));
-    const phase = turn >= totalTurns ? input.bossCurrentPhase || phaseNames[phaseIndex] : phaseNames[phaseIndex];
+    const phase = input.bossCurrentPhase || phaseNames[phaseIndex];
+    const finished = input.finished === true || turn >= totalTurns || bossHp <= 0 || pmcHp <= 0;
     const animationFrame = Math.max(0, Math.floor(input.animationFrame || 0)) % 4;
     const animationLabel = ["ENTRANCE", "CHARGE", "IMPACT", "AFTERMATH"][animationFrame];
     const animationGlyph = ["◆", "◇", "✦", "◆"][animationFrame];
@@ -726,7 +781,13 @@ export function buildBossBattlePayload(input: {
             : input.action === "scan"
                 ? `Intel acquired: ${phase} phase and ${input.bossTraitLabels?.join(" / ") || "unknown traits"}.`
                 : "The PMC commits a direct strike.";
-    const status = turn === 0
+    const status = finished
+        ? bossHp <= 0 || input.bossDefeated
+            ? `${input.bossName} was neutralized. The PMC holds the field.`
+            : pmcHp <= 0
+                ? "PMC incapacitated. Combat ended."
+                : `The PMC disengaged. ${input.bossName} remains active.`
+        : turn === 0
             ? `${animationGlyph} ${input.bossName} entered the combat zone.`
         : turn < totalTurns
             ? `Turn ${turn}: ${actionLabel}. ${actionEffect} ${input.bossName} counters from ${phase}.`
@@ -735,19 +796,20 @@ export function buildBossBattlePayload(input: {
                 : `The PMC disengaged. ${input.bossName} remains active.`;
 
     const embed = new EmbedBuilder()
-        .setColor(turn >= totalTurns ? (input.bossDefeated ? 0x16a34a : 0xdc2626) : 0xef4444)
-        .setTitle(`Boss Battle • Turn ${turn}/${totalTurns}`)
+        .setColor(finished ? (bossHp <= 0 || input.bossDefeated ? 0x16a34a : 0xdc2626) : 0xef4444)
+        .setTitle(`Boss Battle • ${finished ? "Complete" : `Turn ${turn + 1}/${totalTurns}`}`)
         .setDescription(`**${input.bossName}${input.bossTitle ? ` • ${input.bossTitle}` : ""}** challenges the PMC.`)
         .addFields(
             {
                 name: `${input.bossName} • ${ferocityLabel(input.bossFerocity)}`,
                 value: [
                     `HP ${healthBar(bossHp, input.bossHpMax, 16)}`,
-                    `Phase: ${phase}`,
+                    `Phase: ${phase}${input.phaseMechanic ? `\n${input.phaseMechanic}` : ""}`,
                     `Traits: ${input.bossTraitLabels?.join(" • ") || "Unknown"}`,
+                    input.counteredTraits?.length ? `Countered: ${input.counteredTraits.join(" • ")}` : null,
                     `Threat: ${(input.bossFerocity || 1).toFixed(2)}x • Rage ${Math.round(input.rage || 0)}%`,
                     `Armor Break: ${Math.round(input.armorBreak || 0)}%${input.specialAttack ? ` • ⚠ ${input.specialAttack}` : ""}`
-                ].join("\n"),
+                ].filter(Boolean).join("\n"),
                 inline: true
             },
             {
@@ -756,20 +818,23 @@ export function buildBossBattlePayload(input: {
                     `HP ${healthBar(pmcHp, input.pmcHpMax, 16)}`,
                     `Weapon: ${input.weaponName || "Auto-best weapon"}`,
                     `Armor: ${input.armorName || "Auto-best armor"}`,
+                    input.medPatchCount !== undefined ? `Med Patches: ${input.medPatchCount} • Restore up to 70 HP` : null,
                     `Boss Takedown Chance: ${input.bossKillChance || 0}%${input.scanRevealed ? " • Intel revealed" : ""}`
-                ].join("\n"),
+                ].filter(Boolean).join("\n"),
                 inline: true
             },
-            { name: `${animationLabel} • Battle Feed`, value: status, inline: false }
+            { name: `${animationLabel} • Battle Feed`, value: (input.battleLog?.length ? input.battleLog.slice(-3).join("\n") : status).slice(0, 1024), inline: false },
+            ...(!finished && input.decisionDeadline ? [{ name: "Next Action", value: `<t:${Math.floor(input.decisionDeadline / 1000)}:R> • Default: Attack`, inline: false }] : [])
         )
         .setFooter({ text: `Combat simulation • ${phaseNames.join(" -> ")}` });
     if (input.bossImageUrl) embed.setThumbnail(input.bossImageUrl);
-    const components = turn < totalTurns && input.interactive !== false
+    const components = !finished && input.interactive !== false
         ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.attack).setLabel("Attack").setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.defend).setLabel("Defend").setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.heal).setLabel("Heal").setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.scan).setLabel("Scan").setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.heal).setLabel(input.medPatchCount === undefined ? "Heal" : `Heal (${Math.max(0, input.medPatchCount)})`).setStyle(ButtonStyle.Success).setDisabled(input.medPatchCount === 0 || pmcHp >= input.pmcHpMax),
+            new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.scan).setLabel("Scan").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.extract).setLabel("Extract Now").setStyle(ButtonStyle.Secondary)
         ).toJSON()]
         : [];
     return JSON.stringify({ embed: embed.toJSON(), components });

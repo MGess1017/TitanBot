@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
     addTokens,
+    addInventoryItem,
     depositToBank,
     ensureUser,
     getBankTokens,
@@ -31,7 +32,9 @@ import {
     recordMapReputation,
     recordBossProgress,
     transferWalletTokens,
-    withdrawFromBank
+    withdrawFromBank,
+    withDeferredPointsSave,
+    getPointsSaveDiagnostics
 } from "../utils";
 import { getRaidRewards } from "../game/raid";
 import { COLLECTIBLE_ITEM_IDS, getVendorSellPrice, ITEM_DEFS, SHOP_ITEMS, ULTRA_RARE_COLLECTIBLE_IDS } from "../game/catalog";
@@ -175,6 +178,20 @@ function runEconomyAndRaidTests(): void {
         points[userB].pmcXP = PMC_LEVEL_THRESHOLDS[PMC_PRESTIGE_LEVEL_REQUIREMENT - 1];
         assert.ok(performPmcPrestige(userB).error);
 
+        const saveDiagBefore = getPointsSaveDiagnostics();
+        const batched = withDeferredPointsSave(() => {
+            addTokens(userA, 5);
+            addInventoryItem(userA, "scrap", 1);
+            return withDeferredPointsSave(() => {
+                addTokens(userA, 5);
+                return "ok";
+            });
+        });
+        assert.equal(batched, "ok");
+        assert.ok(getPointsSaveDiagnostics().deferredSaves >= saveDiagBefore.deferredSaves + 3);
+        assert.equal(getPointsSaveDiagnostics().batchDepth, 0);
+        assert.equal(getPointsSaveDiagnostics().batchDirty, false);
+
         const loot = getRaidRewards("found rare loot");
         const extract = getRaidRewards("extracted alive");
         const fail = getRaidRewards("ran out of ammo");
@@ -304,7 +321,7 @@ function runEconomyAndRaidTests(): void {
         assert.deepEqual(branchPayload.components[0].components.map((component: { custom_id: string }) => component.custom_id), [RAID_ENCOUNTER_IDS.securePerimeter, RAID_ENCOUNTER_IDS.pushObjective, RAID_ENCOUNTER_IDS.stayCourse]);
         const battleOpening = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 0, totalTurns: 3 }));
         const battleFinal = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 3, totalTurns: 3 }));
-        assert.equal(battleOpening.components[0].components.length, 4);
+        assert.equal(battleOpening.components[0].components.length, 5);
         assert.ok(battleOpening.embed.fields[2].name.includes("ENTRANCE"));
         assert.ok(battleOpening.embed.fields[0].value.includes("800/800"));
         assert.ok(battleOpening.embed.fields[0].value.includes("Rage 0%"));
@@ -419,6 +436,10 @@ function runEconomyAndRaidTests(): void {
         assert.ok(premiumRaidPayload.components[0].components.some((component: { custom_id: string }) => component.custom_id === RAID_RESULT_ACTION_IDS.mastery));
         const botSource = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
         assert.match(botSource, /const totalTurns = Math\.max\(6, Math\.min\(8, phaseCount \+ 4\)\)/);
+        assert.match(botSource, /withDeferredPointsSave\(\(\) => performRaidUnbatched\(/);
+        const rotationA = getBossRotationTable(RAID_MAPS.sunken_village);
+        const rotationB = getBossRotationTable(RAID_MAPS.sunken_village);
+        assert.equal(rotationA, rotationB);
 
         for (const mapCfg of Object.values(RAID_MAPS)) {
             for (const itemId of [...mapCfg.successWeapons, ...mapCfg.failureWeapons, ...mapCfg.successArmor, ...mapCfg.failureArmor, mapCfg.bossKit.weaponId, mapCfg.bossKit.armorId]) {

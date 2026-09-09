@@ -57,6 +57,7 @@ const payloads_1 = require("./game/payloads");
 const raid_1 = require("./game/raid");
 const RaidDomain = __importStar(require("./raid/domain"));
 const RaidRuntime = __importStar(require("./raid/runtime"));
+const combat_1 = require("./raid/combat");
 const ticketTranscript_1 = require("./services/ticketTranscript");
 const ticketCommands_1 = require("./commands/ticketCommands");
 const moderationCommands_1 = require("./commands/moderationCommands");
@@ -89,6 +90,7 @@ const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
 const STRICT_ENV_REQUIRED = readEnvFlag("STRICT_ENV_REQUIRED", false);
 const ENABLE_STARTUP_AUTOPANELS = readEnvFlag("ENABLE_STARTUP_AUTOPANELS", true);
 const ENABLE_STARTUP_DEPLOYMENT_SUMMARY = readEnvFlag("ENABLE_STARTUP_DEPLOYMENT_SUMMARY", true);
+const MESSAGE_XP_GAIN = 2;
 const XP_COOLDOWN_MS = 0;
 const RAID_COOLDOWN_MS = 5 * 1000;
 const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
@@ -103,6 +105,8 @@ const MOD_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/moderation.
 const TRADE_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/trades.json");
 const GIVEAWAY_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/giveaways.json");
 const XP_ROLE_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/xp-roles.json");
+const XP_ROLE_DEAD_LETTER_FILE = path_1.default.resolve(__dirname, "../src/data/xp-role-dead-letter.json");
+const XP_ROLE_METRICS_FILE = path_1.default.resolve(__dirname, "../src/data/xp-role-metrics.json");
 const POINTS_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/points.json");
 const POINTS_BACKUP_FILE = `${POINTS_DATA_FILE}.bak`;
 const EVENT_LOG_FILE = path_1.default.resolve(__dirname, "../src/data/events.jsonl");
@@ -2820,6 +2824,41 @@ const CASINO_GAME_ORDER = [
     "keno"
 ];
 const XP_ROLE_SYNC_RUNNING_GUILDS = new Set();
+const XP_ROLE_SYNC_RUNNING_MEMBERS = new Set();
+const XP_ROLE_SYNC_QUEUE = [];
+let XP_ROLE_SYNC_QUEUE_RUNNING = false;
+let XP_ROLE_SYNC_PAUSED = process.env.XP_ROLE_SYNC_MAINTENANCE === "1";
+const XP_ROLE_NOTIFICATION_MODE = process.env.XP_ROLE_NOTIFICATION_MODE === "channel" ? "channel" : "dm";
+function defaultXpRoleSyncMetrics() {
+    return { lastSyncAt: 0, lastSuccessAt: 0, lastDeadLetterReplayAt: 0, processed: 0, added: 0, removed: 0, failed: 0, retries: 0, highestXp: 0 };
+}
+function parseXpRoleSyncMetrics(raw) {
+    if (!raw || typeof raw !== "object")
+        return null;
+    const value = raw;
+    const seed = defaultXpRoleSyncMetrics();
+    return {
+        lastSyncAt: typeof value.lastSyncAt === "number" ? value.lastSyncAt : seed.lastSyncAt,
+        lastSuccessAt: typeof value.lastSuccessAt === "number" ? value.lastSuccessAt : seed.lastSuccessAt,
+        lastDeadLetterReplayAt: typeof value.lastDeadLetterReplayAt === "number" ? value.lastDeadLetterReplayAt : seed.lastDeadLetterReplayAt,
+        processed: typeof value.processed === "number" ? value.processed : seed.processed,
+        added: typeof value.added === "number" ? value.added : seed.added,
+        removed: typeof value.removed === "number" ? value.removed : seed.removed,
+        failed: typeof value.failed === "number" ? value.failed : seed.failed,
+        retries: typeof value.retries === "number" ? value.retries : seed.retries,
+        highestXp: typeof value.highestXp === "number" ? value.highestXp : seed.highestXp
+    };
+}
+const XP_ROLE_SYNC_METRICS = readJsonWithBackup(XP_ROLE_METRICS_FILE, parseXpRoleSyncMetrics, defaultXpRoleSyncMetrics());
+function saveXpRoleSyncMetrics() {
+    if (process.env.VERIFY_RUNTIME_NO_PERSIST === "1")
+        return;
+    writeJsonAtomic(XP_ROLE_METRICS_FILE, XP_ROLE_SYNC_METRICS);
+}
+function updateXpRoleSyncMetrics(update) {
+    update(XP_ROLE_SYNC_METRICS);
+    saveXpRoleSyncMetrics();
+}
 const XP_ROLE_TIERS = [
     { xp: 1000, roleId: "1526854382199771166", name: "Tier 1" },
     { xp: 2500, roleId: "1526854454455046194", name: "Tier 2" },
@@ -2853,6 +2892,41 @@ const XP_ROLE_TIERS = [
     { xp: 810000, roleId: "1528237555428884591", name: "Elite III" },
     { xp: 840000, roleId: "1528237556406161521", name: "Titan Commander" }
 ];
+function readXpRoleDeadLetters() {
+    if (!fs_extra_1.default.existsSync(XP_ROLE_DEAD_LETTER_FILE))
+        return [];
+    try {
+        const raw = fs_extra_1.default.readJsonSync(XP_ROLE_DEAD_LETTER_FILE);
+        return Array.isArray(raw) ? raw.filter(entry => entry && typeof entry.guildId === "string" && typeof entry.userId === "string") : [];
+    }
+    catch {
+        return [];
+    }
+}
+function saveXpRoleDeadLetters(entries) {
+    fs_extra_1.default.ensureDirSync(path_1.default.dirname(XP_ROLE_DEAD_LETTER_FILE));
+    fs_extra_1.default.writeJsonSync(XP_ROLE_DEAD_LETTER_FILE, entries.slice(-500), { spaces: 2 });
+}
+function addXpRoleDeadLetter(job, lastError) {
+    const entries = readXpRoleDeadLetters();
+    const existing = entries.find(entry => entry.guildId === job.guild.id && entry.userId === job.userId);
+    if (existing) {
+        existing.xp = Math.max(existing.xp, job.xp);
+        existing.attempts += 1;
+        existing.lastError = lastError.slice(0, 240);
+        existing.updatedAt = Date.now();
+    }
+    else {
+        entries.push({ guildId: job.guild.id, userId: job.userId, xp: job.xp, attempts: 1, lastError: lastError.slice(0, 240), updatedAt: Date.now() });
+    }
+    saveXpRoleDeadLetters(entries);
+}
+function clearXpRoleDeadLetter(guildId, userId) {
+    const entries = readXpRoleDeadLetters();
+    const remaining = entries.filter(entry => !(entry.guildId === guildId && entry.userId === userId));
+    if (remaining.length !== entries.length)
+        saveXpRoleDeadLetters(remaining);
+}
 function readXpRoleEntries() {
     if (!fs_extra_1.default.existsSync(XP_ROLE_DATA_FILE)) {
         return [];
@@ -2870,6 +2944,13 @@ function readXpRoleEntries() {
 function saveXpRoleEntries(entries) {
     fs_extra_1.default.ensureDirSync(path_1.default.dirname(XP_ROLE_DATA_FILE));
     fs_extra_1.default.writeJsonSync(XP_ROLE_DATA_FILE, { entries }, { spaces: 2 });
+}
+function upsertXpRoleEntry(entry) {
+    const entries = getEffectiveXpRoleEntries().filter(item => item.xp !== entry.xp);
+    entries.push(entry);
+    entries.sort((a, b) => a.xp - b.xp);
+    saveXpRoleEntries(entries);
+    return entries;
 }
 function getPersistedXpRoleMap() {
     const map = new Map();
@@ -2889,6 +2970,45 @@ function getEffectiveXpRoleEntries() {
         .map(entry => ({ xp: entry.xp, roleId: entry.roleId, name: entry.name }))
         .sort((a, b) => a.xp - b.xp);
 }
+function getXpRoleProgress(xp) {
+    const roleEntries = getEffectiveXpRoleEntries();
+    const currentRole = roleEntries.filter(entry => xp >= entry.xp).pop();
+    const nextRole = roleEntries.find(entry => entry.xp > xp);
+    const floor = currentRole?.xp || 0;
+    const ceiling = nextRole?.xp || floor;
+    const ratio = nextRole ? Math.max(0, Math.min(1, (xp - floor) / Math.max(1, ceiling - floor))) : 1;
+    const filled = Math.round(ratio * 10);
+    const progressBar = `[${"#".repeat(filled)}${"-".repeat(10 - filled)}] ${(0, utils_1.formatProgressPercent)(ratio)}`;
+    const progressText = currentRole && nextRole
+        ? `${Math.max(0, xp - currentRole.xp).toLocaleString()}/${(nextRole.xp - currentRole.xp).toLocaleString()} XP`
+        : nextRole
+            ? `${xp.toLocaleString()}/${nextRole.xp.toLocaleString()} XP`
+            : "Highest configured role reached";
+    return { currentRole, nextRole, progressText, progressBar, recentUnlocksText: "" };
+}
+function formatXpRoleUnlocks(userId, limit = 5) {
+    const user = (0, utils_1.ensureUser)(userId);
+    const recent = user.xpRoleUnlocks.slice(-limit).reverse();
+    return recent.length
+        ? recent.map(unlock => `${unlock.roleName} • <t:${Math.floor(unlock.unlockedAt / 1000)}:R>`).join("\n")
+        : "No XP role unlocks yet";
+}
+function describeXpRoleDiff(member, xp, roleEntries, botHighestPosition) {
+    const existingEntries = roleEntries
+        .map(entry => ({ entry, role: member.guild.roles.cache.get(entry.roleId) || null }))
+        .filter((pair) => Boolean(pair.role));
+    const unlockedPair = existingEntries.filter(pair => xp >= pair.entry.xp).pop();
+    const current = existingEntries.filter(pair => member.roles.cache.has(pair.entry.roleId));
+    const currentNames = current.map(pair => pair.entry.name).join(", ") || "none";
+    const removable = current.filter(pair => pair.entry.roleId !== unlockedPair?.entry.roleId && pair.role.position < botHighestPosition);
+    const missingExpected = Boolean(unlockedPair && !member.roles.cache.has(unlockedPair.entry.roleId));
+    const hierarchyBlocked = Boolean(unlockedPair && unlockedPair.role.position >= botHighestPosition);
+    const hasChange = missingExpected || removable.length > 0 || hierarchyBlocked;
+    return {
+        hasChange,
+        line: `<@${member.id}> ${xp.toLocaleString()} XP | has: ${currentNames} | expected: ${unlockedPair?.entry.name || "none"} | add: ${missingExpected ? unlockedPair?.entry.name : "none"} | remove: ${removable.map(pair => pair.entry.name).join(", ") || "none"}${hierarchyBlocked ? " | blocked: hierarchy" : ""}`
+    };
+}
 async function getEffectiveXpRoleEntriesForGuild(guild) {
     const persisted = readXpRoleEntries()
         .filter(entry => Number.isFinite(entry.xp) && entry.xp > 0 && Boolean(entry.roleId) && Boolean(entry.name));
@@ -2898,6 +3018,42 @@ async function getEffectiveXpRoleEntriesForGuild(guild) {
     return XP_ROLE_TIERS
         .map(entry => ({ xp: entry.xp, roleId: entry.roleId, name: entry.name }))
         .sort((a, b) => a.xp - b.xp);
+}
+const XP_ROLE_COLORS = [0x64748b, 0x38bdf8, 0x22c55e, 0xeab308, 0xf97316, 0xef4444, 0xa855f7, 0x14b8a6];
+async function ensureXpTierRoles(guild) {
+    const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+    if (!me || !me.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles))
+        return getEffectiveXpRoleEntriesForGuild(guild);
+    await guild.roles.fetch().catch(() => undefined);
+    const entries = await getEffectiveXpRoleEntriesForGuild(guild);
+    let changed = false;
+    for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index];
+        let role = guild.roles.cache.get(entry.roleId) || guild.roles.cache.find(candidate => candidate.name === entry.name) || null;
+        if (!role) {
+            role = await guild.roles.create({
+                name: entry.name,
+                color: XP_ROLE_COLORS[Math.min(index, XP_ROLE_COLORS.length - 1)],
+                reason: `Create missing XP tier role for ${entry.xp} XP`
+            }).catch(() => null);
+            if (!role) {
+                appendAuditEvent("xp_role_create_failed", { guildId: guild.id, xp: entry.xp, name: entry.name });
+                continue;
+            }
+            appendAuditEvent("xp_role_created", { guildId: guild.id, xp: entry.xp, roleId: role.id, name: entry.name });
+        }
+        if (role.position >= (me.roles.highest?.position || 0)) {
+            appendAuditEvent("xp_role_create_blocked", { guildId: guild.id, xp: entry.xp, roleId: role.id, reason: "role hierarchy" });
+            continue;
+        }
+        if (entry.roleId !== role.id) {
+            entries[index] = { ...entry, roleId: role.id };
+            changed = true;
+        }
+    }
+    if (changed)
+        saveXpRoleEntries(entries);
+    return entries;
 }
 async function syncMemberXpRoles(member, xp, roleEntriesOverride) {
     const roleEntries = roleEntriesOverride ?? await getEffectiveXpRoleEntriesForGuild(member.guild);
@@ -2931,11 +3087,48 @@ async function syncMemberXpRoles(member, xp, roleEntriesOverride) {
         return;
     }
     if (unlockedRoleId && !refreshedMember.roles.cache.has(unlockedRoleId)) {
-        await refreshedMember.roles.add(unlockedRoleId).catch(() => undefined);
+        const added = await refreshedMember.roles.add(unlockedRoleId).then(() => true).catch(() => false);
+        updateXpRoleSyncMetrics(metrics => {
+            metrics.added += added ? 1 : 0;
+            metrics.failed += added ? 0 : 1;
+        });
+        appendAuditEvent(added ? "xp_role_added" : "xp_role_add_failed", {
+            guildId: refreshedMember.guild.id,
+            memberId: refreshedMember.id,
+            roleId: unlockedRoleId,
+            xp
+        });
     }
     const removeRoleIds = manageableTierRoleIds.filter(roleId => roleId !== unlockedRoleId && refreshedMember.roles.cache.has(roleId));
     if (removeRoleIds.length) {
-        await refreshedMember.roles.remove(removeRoleIds).catch(() => undefined);
+        const removed = await refreshedMember.roles.remove(removeRoleIds).then(() => true).catch(() => false);
+        updateXpRoleSyncMetrics(metrics => {
+            metrics.removed += removed ? removeRoleIds.length : 0;
+            metrics.failed += removed ? 0 : 1;
+        });
+        appendAuditEvent(removed ? "xp_roles_removed" : "xp_roles_remove_failed", {
+            guildId: refreshedMember.guild.id,
+            memberId: refreshedMember.id,
+            roleIds: removeRoleIds,
+            xp
+        });
+    }
+    if (unlockedRoleId || removeRoleIds.length) {
+        const verified = await refreshedMember.guild.members.fetch(refreshedMember.id).catch(() => null);
+        const stillMissingExpected = Boolean(unlockedRoleId && !verified?.roles.cache.has(unlockedRoleId));
+        const stillHasRemoved = removeRoleIds.filter(roleId => verified?.roles.cache.has(roleId));
+        if (stillMissingExpected || stillHasRemoved.length) {
+            updateXpRoleSyncMetrics(metrics => { metrics.failed += 1; });
+            appendAuditEvent("xp_role_post_mutation_verify_failed", {
+                guildId: refreshedMember.guild.id,
+                memberId: refreshedMember.id,
+                expectedRoleId: unlockedRoleId || null,
+                missingExpected: stillMissingExpected,
+                stillPresentRoleIds: stillHasRemoved,
+                xp
+            });
+            throw new Error("XP role post-mutation verification failed");
+        }
     }
 }
 async function runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId) {
@@ -2957,7 +3150,15 @@ async function runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId) {
             .sort()
             .join(",");
         const user = (0, utils_1.ensureUser)(member.id);
-        await syncMemberXpRoles(member, user.xp, roleEntries);
+        try {
+            await syncMemberXpRoles(member, user.xp, roleEntries);
+        }
+        catch (error) {
+            addXpRoleDeadLetter({ guild, userId: member.id, xp: user.xp }, error instanceof Error ? error.message : String(error));
+            skipped += 1;
+            processed += 1;
+            continue;
+        }
         const refreshed = member.guild.members.cache.get(member.id) ?? member;
         const after = roleEntries
             .filter(entry => refreshed.roles.cache.has(entry.roleId))
@@ -2986,18 +3187,126 @@ async function runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId) {
         synced,
         skipped
     });
+    updateXpRoleSyncMetrics(metrics => {
+        metrics.lastSyncAt = Date.now();
+        metrics.lastSuccessAt = Date.now();
+        metrics.processed += processed;
+        metrics.highestXp = Math.max(metrics.highestXp, ...ticketlessXpValues(guild));
+    });
     return { processed, synced, skipped };
 }
-async function syncXpRolesForUserInGuild(guild, userId, xp) {
-    const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
-    if (!member)
+function ticketlessXpValues(guild) {
+    return Array.from(guild.members.cache.values()).map(member => (0, utils_1.ensureUser)(member.id).xp);
+}
+async function notifyXpThresholdUnlock(guild, userId, previousXp, nextXp) {
+    const entry = getEffectiveXpRoleEntries().filter(item => previousXp < item.xp && nextXp >= item.xp).pop();
+    if (!entry)
         return;
-    await syncMemberXpRoles(member, xp);
-    // Retry once with a forced fetch to avoid cache/race misses at threshold crossings.
-    const refreshed = await guild.members.fetch(userId).catch(() => null);
-    if (refreshed) {
-        await syncMemberXpRoles(refreshed, xp);
+    const userState = (0, utils_1.ensureUser)(userId);
+    if (userState.xpRoleUnlocks.some(unlock => unlock.roleId === entry.roleId))
+        return;
+    userState.xpRoleUnlocks.push({ xp: entry.xp, roleName: entry.name, roleId: entry.roleId, unlockedAt: Date.now() });
+    (0, utils_1.savePoints)();
+    const next = getEffectiveXpRoleEntries().find(item => item.xp > entry.xp);
+    const message = `XP role unlocked: **${entry.name}** (${entry.xp.toLocaleString()} XP).${next ? ` Next tier: ${next.name} at ${next.xp.toLocaleString()} XP.` : " You reached the highest configured tier."}`;
+    const user = await client.users.fetch(userId).catch(() => null);
+    if (XP_ROLE_NOTIFICATION_MODE === "dm" && user)
+        await user.send(message).catch(() => undefined);
+    const channel = guild.channels.cache.get(ACTIVITY_CHANNEL_ID);
+    if (XP_ROLE_NOTIFICATION_MODE === "channel" && channel && channel.isTextBased() && "send" in channel)
+        await channel.send({ content: `<@${userId}> ${message}`, allowedMentions: { users: [userId] } }).catch(() => undefined);
+    appendAuditEvent("xp_role_threshold_unlocked", { guildId: guild.id, userId, roleId: entry.roleId, roleName: entry.name, xp: nextXp, nextThreshold: next?.xp || null });
+}
+async function syncXpRolesForUserInGuild(guild, userId, xp) {
+    const syncKey = `${guild.id}:${userId}`;
+    if (XP_ROLE_SYNC_RUNNING_MEMBERS.has(syncKey))
+        return false;
+    XP_ROLE_SYNC_RUNNING_MEMBERS.add(syncKey);
+    try {
+        const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
+        if (!member)
+            return false;
+        await syncMemberXpRoles(member, xp);
+        // Retry once with a forced fetch to avoid cache/race misses at threshold crossings.
+        const refreshed = await guild.members.fetch(userId).catch(() => null);
+        if (refreshed) {
+            await syncMemberXpRoles(refreshed, xp);
+        }
+        appendAuditEvent("xp_role_auto_sync", { guildId: guild.id, memberId: userId, xp });
+        updateXpRoleSyncMetrics(metrics => {
+            metrics.lastSyncAt = Date.now();
+            metrics.lastSuccessAt = Date.now();
+            metrics.processed += 1;
+            metrics.highestXp = Math.max(metrics.highestXp, xp);
+        });
+        clearXpRoleDeadLetter(guild.id, userId);
+        return true;
     }
+    catch (error) {
+        appendAuditEvent("xp_role_auto_sync_failed", {
+            guildId: guild.id,
+            memberId: userId,
+            xp,
+            reason: error instanceof Error ? error.message : String(error)
+        });
+        return false;
+    }
+    finally {
+        XP_ROLE_SYNC_RUNNING_MEMBERS.delete(syncKey);
+    }
+}
+async function retryXpRoleDeadLetters() {
+    if (XP_ROLE_SYNC_PAUSED)
+        return;
+    updateXpRoleSyncMetrics(metrics => { metrics.lastDeadLetterReplayAt = Date.now(); });
+    for (const entry of readXpRoleDeadLetters().slice(0, 25)) {
+        const guild = client.guilds.cache.get(entry.guildId);
+        if (guild)
+            enqueueXpRoleSync(guild, entry.userId, entry.xp);
+    }
+}
+async function drainXpRoleSyncQueue() {
+    if (XP_ROLE_SYNC_QUEUE_RUNNING || XP_ROLE_SYNC_PAUSED)
+        return;
+    XP_ROLE_SYNC_QUEUE_RUNNING = true;
+    try {
+        while (XP_ROLE_SYNC_QUEUE.length) {
+            const job = XP_ROLE_SYNC_QUEUE.shift();
+            if (!job)
+                continue;
+            let completed = false;
+            for (let attempt = 1; attempt <= 3 && !completed; attempt++) {
+                completed = await syncXpRolesForUserInGuild(job.guild, job.userId, job.xp);
+                if (!completed) {
+                    updateXpRoleSyncMetrics(metrics => { metrics.retries += 1; });
+                    await new Promise(resolve => setTimeout(resolve, attempt * 500));
+                }
+            }
+            if (!completed) {
+                addXpRoleDeadLetter(job, "sync attempts exhausted");
+                appendAuditEvent("xp_role_auto_sync_dead_letter", { guildId: job.guild.id, memberId: job.userId, xp: job.xp });
+            }
+        }
+    }
+    finally {
+        XP_ROLE_SYNC_QUEUE_RUNNING = false;
+    }
+}
+function enqueueXpRoleSync(guild, userId, xp) {
+    if (XP_ROLE_SYNC_PAUSED)
+        return;
+    const existing = XP_ROLE_SYNC_QUEUE.find(job => job.guild.id === guild.id && job.userId === userId);
+    if (existing) {
+        existing.xp = Math.max(existing.xp, xp);
+    }
+    else {
+        if (XP_ROLE_SYNC_QUEUE.length >= 1000) {
+            XP_ROLE_SYNC_QUEUE.shift();
+            appendAuditEvent("xp_role_sync_queue_overflow", { guildId: guild.id, memberId: userId, xp });
+        }
+        XP_ROLE_SYNC_QUEUE.push({ guild, userId, xp });
+    }
+    void drainXpRoleSyncQueue();
 }
 function getPrimaryGuild() {
     return DISCORD_GUILD_ID
@@ -3044,10 +3353,16 @@ function buildHealthEmbed() {
         name: "Ops",
         value: [
             `Active XP sync jobs: ${XP_ROLE_SYNC_RUNNING_GUILDS.size}`,
+            `Sync queue: ${XP_ROLE_SYNC_QUEUE.length} | Retries: ${XP_ROLE_SYNC_METRICS.retries}`,
+            `Dead letters: ${readXpRoleDeadLetters().length} | Processed: ${XP_ROLE_SYNC_METRICS.processed}`,
+            `Last sync: ${XP_ROLE_SYNC_METRICS.lastSyncAt ? new Date(XP_ROLE_SYNC_METRICS.lastSyncAt).toISOString() : "never"}`,
+            `Last success: ${XP_ROLE_SYNC_METRICS.lastSuccessAt ? new Date(XP_ROLE_SYNC_METRICS.lastSuccessAt).toISOString() : "never"}`,
+            `Role mutations: +${XP_ROLE_SYNC_METRICS.added} / -${XP_ROLE_SYNC_METRICS.removed} | Failures: ${XP_ROLE_SYNC_METRICS.failed}`,
             `tickets.json: ${statLabel(TICKET_DATA_FILE)}`,
             `trades.json: ${statLabel(TRADE_DATA_FILE)}`,
             `moderation.json: ${statLabel(MOD_DATA_FILE)}`,
             `balance-telemetry.json: ${statLabel(BALANCE_TELEMETRY_FILE)}`,
+            `xp-role-metrics.json: ${statLabel(XP_ROLE_METRICS_FILE)}`,
             `runtime-metrics.json: ${statLabel(METRICS_DATA_FILE)}`
         ].join("\n"),
         inline: false
@@ -3071,29 +3386,47 @@ async function collectRoleSanityReport(guild) {
     const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
     const botHighest = me?.roles.highest?.position ?? 0;
     const canManageRoles = Boolean(me?.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles));
-    const existingTierRoles = XP_ROLE_TIERS
+    const configurationErrors = [];
+    const seenThresholds = new Set();
+    const roleEntries = await getEffectiveXpRoleEntriesForGuild(guild);
+    for (const tier of roleEntries) {
+        if (seenThresholds.has(tier.xp))
+            configurationErrors.push(`Duplicate XP threshold: ${tier.xp}`);
+        seenThresholds.add(tier.xp);
+        if (!/^\d{15,22}$/.test(tier.roleId))
+            configurationErrors.push(`Invalid role ID for ${tier.name}: ${tier.roleId}`);
+    }
+    const existingTierRoles = roleEntries
         .map(tier => ({ tier, role: guild.roles.cache.get(tier.roleId) || null }))
         .filter(item => Boolean(item.role));
-    const missing = XP_ROLE_TIERS.filter(tier => !guild.roles.cache.has(tier.roleId));
+    const missing = roleEntries.filter(tier => !guild.roles.cache.has(tier.roleId));
     const hierarchyBlocked = existingTierRoles
         .filter(item => (item.role?.position || 0) >= botHighest)
         .map(item => ({ tier: item.tier, rolePosition: item.role?.position || 0 }));
     let multiTierMembers = 0;
+    const dryRunDiffs = [];
     for (const [, member] of guild.members.cache) {
         if (member.user.bot)
             continue;
-        const count = XP_ROLE_TIERS.filter(tier => member.roles.cache.has(tier.roleId)).length;
+        const count = roleEntries.filter(tier => member.roles.cache.has(tier.roleId)).length;
         if (count > 1)
             multiTierMembers += 1;
+        if (dryRunDiffs.length < 10) {
+            const diff = describeXpRoleDiff(member, (0, utils_1.ensureUser)(member.id).xp, roleEntries, botHighest);
+            if (diff.hasChange)
+                dryRunDiffs.push(diff.line);
+        }
     }
     return {
-        configuredTierCount: XP_ROLE_TIERS.length,
+        configuredTierCount: roleEntries.length,
         existingTierCount: existingTierRoles.length,
         missing,
         hierarchyBlocked,
+        dryRunDiffs,
         multiTierMembers,
         canManageRoles,
-        botHighestRolePosition: botHighest
+        botHighestRolePosition: botHighest,
+        configurationErrors
     };
 }
 async function runRoleSanityFix(guild, startedByUserId, sourceChannelId) {
@@ -3101,7 +3434,8 @@ async function runRoleSanityFix(guild, startedByUserId, sourceChannelId) {
         return { started: false, reason: "XP role sync already running." };
     }
     XP_ROLE_SYNC_RUNNING_GUILDS.add(guild.id);
-    void runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId)
+    void ensureXpTierRoles(guild)
+        .then(() => runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId))
         .catch(error => {
         appendAuditEvent("rolesanity_fix_failed", {
             guildId: guild.id,
@@ -4438,7 +4772,10 @@ function useItem(userId, itemId, quantity) {
     (0, utils_1.addInventoryItem)(userId, itemId, qty);
     return { error: "Use action failed safely; item was restored." };
 }
-function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selectedArmorId, approachRaw, extractionRoute, branchDecision = "stay_course") {
+function performRaid(...args) {
+    return (0, utils_1.withDeferredPointsSave)(() => performRaidUnbatched(...args));
+}
+function performRaidUnbatched(userId, bet, tension, mapKeyRaw, selectedWeaponId, selectedArmorId, approachRaw, extractionRoute, branchDecision = "stay_course") {
     const user = (0, utils_1.ensureUser)(userId);
     const now = Date.now();
     if (now - user.lastRaid < RAID_COOLDOWN_MS) {
@@ -4471,6 +4808,8 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
     const pmcLevelBeforeRaid = (0, utils_1.getPmcLevel)(user.pmcXP);
     const pmcTierBeforeRaid = (0, utils_1.getPmcTierForLevel)(pmcLevelBeforeRaid);
     const pmcBuffs = (0, utils_1.getPmcBuffs)(pmcLevelBeforeRaid, user.pmcPrestige);
+    const sirGru = user.followers?.sir_gru;
+    const followerBonuses = (0, utils_1.getSirGruRaidBonuses)(sirGru);
     const levelPressure = Math.max(0, Math.min(0.11, pmcLevelBeforeRaid * 0.00075));
     const tensionPressure = tension === "high" ? 0.05 : tension === "medium" ? 0.02 : -0.01;
     const difficultyScalar = 1 + levelPressure + Math.max(0, tensionPressure);
@@ -4492,12 +4831,14 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
     const bossPressurePenalty = bossSpawned
         ? (mapCfg.bossSuccessPenalty + mapCfg.bossRaidPressure + (boss?.successPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * mapDifficultyBossScale * latePmcBossScale
         : 0;
-    const finalSuccessChance = Math.max(0.06, Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + approach.successDelta + branchModifiers.successDelta + (mapEvent?.successDelta || 0) + mapReputationBeforeProgress.tier.successBonus - bossPressurePenalty));
+    const followerPreAssist = (0, utils_1.rollSirGruRaidAssist)(sirGru, { bet, bossSpawned });
+    const finalSuccessChance = Math.max(0.06, Math.min(0.93, cfg.successChance + mapCfg.successDelta + effectiveCondition.successDelta + gearBonus.attackBoost + pmcBuffs.successBonus + followerBonuses.successBonus + followerPreAssist.successBonus + approach.successDelta + branchModifiers.successDelta + (mapEvent?.successDelta || 0) + mapReputationBeforeProgress.tier.successBonus - bossPressurePenalty));
     const success = Math.random() < finalSuccessChance;
+    const followerAssist = (0, utils_1.rollSirGruRaidAssist)(sirGru, { bet, success, bossSpawned });
     (0, utils_1.removeTokens)(userId, bet);
     let rewardTokens = 0;
     if (success) {
-        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + approach.tokenMultiplierDelta + branchModifiers.tokenMultiplierDelta + (mapEvent?.tokenMultiplierDelta || 0) + mapReputationBeforeProgress.tier.tokenBonus;
+        const conditionTokenBoost = cfg.tokenMultiplier + mapCfg.tokenMultiplierDelta + effectiveCondition.tokenMultiplierDelta + gearBonus.tokenBoost + pmcBuffs.tokenBonus + followerBonuses.tokenBonus + followerAssist.tokenBonus + approach.tokenMultiplierDelta + branchModifiers.tokenMultiplierDelta + (mapEvent?.tokenMultiplierDelta || 0) + mapReputationBeforeProgress.tier.tokenBonus;
         rewardTokens = Math.max(1, Math.floor(bet * (conditionTokenBoost + (Math.random() * 0.12 - 0.07))));
         (0, utils_1.addTokens)(userId, rewardTokens);
     }
@@ -4514,7 +4855,7 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         const tensionBossDelta = tension === "high" ? 0.08 : tension === "low" ? -0.03 : 0;
         const mapAndBossKillPenalty = (mapCfg.bossKillPenalty + mapCfg.bossRaidPressure + (boss?.killPenalty || 0) * difficultyScalar + (boss?.raidPressure || 0) * difficultyScalar) * (1 + mapDifficultyIndex * 0.05) * latePmcBossScale;
         const pmcRaidMastery = Math.max(0, Math.min(0.14, pmcLevelBeforeRaid * 0.00085));
-        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + tensionBossDelta + approach.bossKillDelta + mapReputationBeforeProgress.tier.bossKillBonus + (bossCombat?.counterBonus || 0) - mapAndBossKillPenalty - (bossCombat?.killPenalty || 0)));
+        bossKillChance = Math.max(0.1, Math.min(0.9, 0.42 + gearBonus.attackBoost * 1.8 + pmcRaidMastery + followerBonuses.bossKillBonus + followerPreAssist.bossKillBonus + tensionBossDelta + approach.bossKillDelta + mapReputationBeforeProgress.tier.bossKillBonus + (bossCombat?.counterBonus || 0) - mapAndBossKillPenalty - (bossCombat?.killPenalty || 0)));
         bossDefeated = Math.random() < bossKillChance;
         if (bossDefeated) {
             const rolledBossReward = RaidDomain.rollBossSuccessRewards({
@@ -4581,12 +4922,12 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         ? bossCombat.phases[Math.min(bossPhasesReached, bossCombat.phases.length) - 1]
         : null;
     const bossPhaseLootRoll = bossDefeated && (bossCombat?.phases.length || 0) >= 3 ? 1 : 0;
-    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll + branchModifiers.bonusLootRolls + (mapEvent?.lootBonusRolls || 0) });
+    const loot = RaidRuntime.rollRaidLoot({ success, tension, mapCfg, bossDefeated, boss, difficultyScalar, bonusRolls: approach.lootBonusRolls + bossPhaseLootRoll + branchModifiers.bonusLootRolls + (mapEvent?.lootBonusRolls || 0) + followerAssist.bonusLootRolls });
     for (const drop of loot) {
         (0, utils_1.addInventoryItem)(userId, drop.id, drop.qty);
     }
     const baseRaidXpGain = RaidDomain.rollRaidXpGain(tension, success, bet, effectiveCondition.xpMultiplier * gearBonus.xpMultiplier * (1 + pmcBuffs.xpBonus) * approach.xpMultiplier, mapCfg);
-    const progressionScale = RaidDomain.getPmcXpGainScale(pmcLevelBeforeRaid, mapCfg, tension, success);
+    const progressionScale = RaidDomain.getPmcXpGainScale(pmcLevelBeforeRaid, mapCfg, tension, success) * (1 + followerBonuses.xpBonus + followerAssist.xpBonus);
     const scaledRaidXpGain = Math.max(1, Math.floor(baseRaidXpGain * progressionScale * RaidDomain.RAID_PMC_XP_SCALE));
     const rxpGain = scaledRaidXpGain + bossBonusXp;
     user.rxp += rxpGain;
@@ -4597,6 +4938,16 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
     user.lastRaid = now;
     const pmcLevelAfterRaid = (0, utils_1.getPmcLevel)(user.pmcXP);
     (0, utils_1.applyPmcMilestoneRewards)(userId);
+    const followerRaidProgress = (0, utils_1.awardSirGruRaidXp)(user, { success, bossSpawned, bossDefeated, tension, mapDifficulty: mapCfg.difficulty });
+    if (followerRaidProgress.levelAfter > followerRaidProgress.levelBefore) {
+        appendAuditEvent("sir_gru_level_up", {
+            userId,
+            levelBefore: followerRaidProgress.levelBefore,
+            levelAfter: followerRaidProgress.levelAfter,
+            xpGained: followerRaidProgress.xpGained,
+            maxPerkUnlocked: followerRaidProgress.maxPerkUnlocked
+        });
+    }
     for (const gearId of [gearBonus.weapon?.id, gearBonus.armor?.id].filter((id) => Boolean(id))) {
         (0, gearEconomy_1.resolveGearLoss)(user, gearId, success);
     }
@@ -4604,7 +4955,7 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
     const pmcTierUnlocked = pmcTierAfterRaid && (!pmcTierBeforeRaid || pmcTierAfterRaid.level > pmcTierBeforeRaid.level)
         ? pmcTierAfterRaid
         : null;
-    const failureMitigation = success ? 0 : Math.floor(bet * (gearBonus.defenseBoost + pmcBuffs.defenseBonus) * 0.7);
+    const failureMitigation = success ? 0 : Math.floor(bet * (gearBonus.defenseBoost + pmcBuffs.defenseBonus + followerBonuses.defenseBonus + followerAssist.defenseBonus) * 0.7) + followerAssist.flatFailureMitigation;
     if (failureMitigation > 0)
         (0, utils_1.addTokens)(userId, failureMitigation);
     const baseRewardTokens = rewardTokens;
@@ -4654,6 +5005,8 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         selectedWeaponId: gearBonus.weapon?.id || null,
         selectedArmorId: gearBonus.armor?.id || null,
         pmcBuffs,
+        followerBonuses,
+        followerAssist: followerAssist.triggeredAbilities,
         tension,
         condition: condition.label,
         approach: approach.key,
@@ -4689,7 +5042,13 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         pmcPrestige: user.pmcPrestige,
         pmcLevel: pmcLevelAfterRaid,
         pmcTierUnlockedLevel: pmcTierUnlocked?.level || null,
-        pmcTierUnlockedLabel: pmcTierUnlocked?.label || null
+        pmcTierUnlockedLabel: pmcTierUnlocked?.label || null,
+        sirGruXpGained: followerRaidProgress.xpGained,
+        sirGruLevel: followerRaidProgress.levelAfter,
+        sirGruLevelBefore: followerRaidProgress.levelBefore,
+        sirGruMaxPerkUnlocked: followerRaidProgress.maxPerkUnlocked,
+        sirGruAbilities: followerAssist.unlockedAbilities.map(ability => ability.name),
+        sirGruTriggeredAbilities: followerAssist.triggeredAbilities
     });
     return {
         success,
@@ -4748,8 +5107,32 @@ function performRaid(userId, bet, tension, mapKeyRaw, selectedWeaponId, selected
         pmcXP: user.pmcXP,
         pmcLevel: pmcLevelAfterRaid,
         pmcPrestige: user.pmcPrestige,
-        pmcPrestigeLabel: (0, utils_1.getPmcPrestigeTier)(user.pmcPrestige).label
+        pmcPrestigeLabel: (0, utils_1.getPmcPrestigeTier)(user.pmcPrestige).label,
+        sirGruXpGained: followerRaidProgress.xpGained,
+        sirGruLevel: followerRaidProgress.levelAfter || undefined,
+        sirGruLevelBefore: followerRaidProgress.levelBefore || undefined,
+        sirGruMaxPerkUnlocked: followerRaidProgress.maxPerkUnlocked,
+        sirGruAbilities: followerAssist.unlockedAbilities.map(ability => ability.name),
+        sirGruTriggeredAbilities: followerAssist.triggeredAbilities
     };
+}
+const activeRaidDecisions = new Map();
+async function awaitRaidDecision(interaction, message, ids, time) {
+    const validIds = new Set(ids);
+    activeRaidDecisions.set(message.id, { userId: interaction.user.id, ids: validIds });
+    try {
+        const selected = await message.awaitMessageComponent({
+            componentType: discord_js_1.ComponentType.Button,
+            time,
+            filter: candidate => candidate.user.id === interaction.user.id && validIds.has(candidate.customId)
+        }).catch(() => null);
+        if (selected)
+            await selected.deferUpdate().catch(() => undefined);
+        return selected;
+    }
+    finally {
+        activeRaidDecisions.delete(message.id);
+    }
 }
 async function resolveRareRouteDecision(interaction, route, mapLabel) {
     const payload = JSON.parse((0, payloads_1.buildRareRouteDecisionPayload)({
@@ -4761,15 +5144,9 @@ async function resolveRareRouteDecision(interaction, route, mapLabel) {
         embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
         components: payload.components
     });
-    const validIds = new Set(Object.values(payloads_1.RAID_ENCOUNTER_IDS));
-    const selected = await message.awaitMessageComponent({
-        componentType: discord_js_1.ComponentType.Button,
-        time: 20000,
-        filter: candidate => candidate.user.id === interaction.user.id && validIds.has(candidate.customId)
-    }).catch(() => null);
+    const selected = await awaitRaidDecision(interaction, message, [payloads_1.RAID_ENCOUNTER_IDS.hiddenExit, payloads_1.RAID_ENCOUNTER_IDS.routeCache, payloads_1.RAID_ENCOUNTER_IDS.stayCourse], 20000);
     if (!selected)
         return "stay_course";
-    await selected.deferUpdate().catch(() => undefined);
     if (selected.customId === payloads_1.RAID_ENCOUNTER_IDS.hiddenExit)
         return "hidden_exit";
     if (selected.customId === payloads_1.RAID_ENCOUNTER_IDS.routeCache)
@@ -4782,14 +5159,9 @@ async function resolveRaidBranchDecision(interaction, mapLabel, tension) {
         embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
         components: payload.components
     });
-    const selected = await message.awaitMessageComponent({
-        componentType: discord_js_1.ComponentType.Button,
-        time: 15000,
-        filter: candidate => candidate.user.id === interaction.user.id && [payloads_1.RAID_ENCOUNTER_IDS.securePerimeter, payloads_1.RAID_ENCOUNTER_IDS.pushObjective, payloads_1.RAID_ENCOUNTER_IDS.stayCourse].includes(candidate.customId)
-    }).catch(() => null);
+    const selected = await awaitRaidDecision(interaction, message, [payloads_1.RAID_ENCOUNTER_IDS.securePerimeter, payloads_1.RAID_ENCOUNTER_IDS.pushObjective, payloads_1.RAID_ENCOUNTER_IDS.stayCourse], 15000);
     if (!selected)
         return "stay_course";
-    await selected.deferUpdate().catch(() => undefined);
     if (selected.customId === payloads_1.RAID_ENCOUNTER_IDS.securePerimeter)
         return "secure_perimeter";
     if (selected.customId === payloads_1.RAID_ENCOUNTER_IDS.pushObjective)
@@ -4802,21 +5174,19 @@ async function presentBossBattle(interaction, result) {
     const bossName = result.bossName;
     const bossHpMax = result.bossHpMax;
     const pmcHpMax = result.pmcHpMax;
-    const totalTurns = Math.max(3, Math.min(5, result.bossPhaseNames?.length || 3));
+    const phaseCount = result.bossPhaseNames?.length || 3;
+    const totalTurns = Math.max(6, Math.min(8, phaseCount + 4));
     let action;
-    let battleBossHp = bossHpMax;
-    let battlePmcHp = pmcHpMax;
-    let rage = 0;
-    let armorBreak = 0;
-    let specialAttack;
-    let scanRevealed = false;
+    let state = { turn: 0, bossHp: bossHpMax, pmcHp: pmcHpMax, rage: 0, armorBreak: 0, scanRevealed: false };
+    let battleLog = [];
     const actionIds = new Map([
         [payloads_1.RAID_ENCOUNTER_IDS.attack, "attack"],
         [payloads_1.RAID_ENCOUNTER_IDS.defend, "defend"],
         [payloads_1.RAID_ENCOUNTER_IDS.heal, "heal"],
         [payloads_1.RAID_ENCOUNTER_IDS.scan, "scan"]
     ]);
-    const renderFrame = async (turn, animationFrame, interactive) => {
+    const renderFrame = async (finished) => {
+        const phase = (0, combat_1.getBossBattlePhase)(bossName, state.bossHp, bossHpMax);
         const payload = JSON.parse((0, payloads_1.buildBossBattlePayload)({
             bossName,
             bossTitle: result.bossTitle,
@@ -4824,8 +5194,10 @@ async function presentBossBattle(interaction, result) {
             bossFerocity: result.bossFerocity,
             bossTraitLabels: result.bossTraitLabels,
             bossPhaseNames: result.bossPhaseNames,
-            bossCurrentPhase: result.bossCurrentPhase,
-            bossDefeated: result.bossDefeated,
+            bossCurrentPhase: phase.name,
+            phaseMechanic: phase.mechanic,
+            counteredTraits: result.bossCounteredTraits,
+            bossDefeated: state.bossHp <= 0,
             bossKillChance: result.bossKillChance,
             bossHpMax,
             bossHpFinal: result.bossHpRemaining || 0,
@@ -4835,87 +5207,59 @@ async function presentBossBattle(interaction, result) {
             pmcHpFinal: result.pmcHpRemaining || 0,
             weaponName: result.selectedWeaponName,
             armorName: result.selectedArmorName,
-            turn,
+            turn: state.turn,
             totalTurns,
             action,
-            animationFrame,
-            interactive,
-            bossHpCurrent: battleBossHp,
-            pmcHpCurrent: battlePmcHp,
-            rage,
-            armorBreak,
-            specialAttack,
-            scanRevealed
+            animationFrame: state.turn === 0 ? 0 : 3,
+            interactive: !finished,
+            finished,
+            bossHpCurrent: state.bossHp,
+            pmcHpCurrent: state.pmcHp,
+            rage: state.rage,
+            armorBreak: state.armorBreak,
+            specialAttack: state.rage >= 60 ? "Countercharge imminent" : undefined,
+            scanRevealed: state.scanRevealed,
+            medPatchCount: (0, utils_1.getInventoryCount)(interaction.user.id, "med_patch"),
+            decisionDeadline: finished ? undefined : Date.now() + 8000,
+            battleLog
         }));
-        const displayed = await interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components })
-            .then(() => true)
-            .catch(() => false);
-        return displayed;
+        return interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components }).catch(() => null);
     };
-    for (let entranceFrame = 0; entranceFrame < 4; entranceFrame++) {
-        if (!await renderFrame(0, entranceFrame, entranceFrame === 3))
-            return null;
-        if (entranceFrame < 3)
-            await new Promise(resolve => setTimeout(resolve, 350));
+    if (result.bossDefeated || result.success === false) {
+        state.bossHp = result.bossHpRemaining ?? bossHpMax;
+        state.pmcHp = result.pmcHpRemaining ?? pmcHpMax;
+        await renderFrame(true);
+        return null;
     }
-    for (let turn = 0; turn <= totalTurns; turn++) {
-        if (turn > 0) {
-            if (!await renderFrame(turn, 1, false))
-                return null;
-            await new Promise(resolve => setTimeout(resolve, 300));
-            if (!await renderFrame(turn, 2, false))
-                return null;
-            await new Promise(resolve => setTimeout(resolve, 350));
-            if (!await renderFrame(turn, 3, turn < totalTurns))
-                return null;
+    while (!(0, combat_1.isBossBattleFinished)(state, totalTurns)) {
+        const message = await renderFrame(false);
+        if (!message)
+            return { defeated: state.bossHp <= 0, bossHp: state.bossHp, pmcHp: state.pmcHp, scanRevealed: state.scanRevealed };
+        const selected = await awaitRaidDecision(interaction, message, [...actionIds.keys(), payloads_1.RAID_ENCOUNTER_IDS.extract], 8000);
+        if (selected?.customId === payloads_1.RAID_ENCOUNTER_IDS.extract) {
+            battleLog = ["Extraction chosen. Secured raid rewards retained."];
+            break;
         }
-        if (turn >= totalTurns)
-            return { defeated: battleBossHp <= 0, bossHp: battleBossHp, pmcHp: battlePmcHp, scanRevealed };
-        if (turn < totalTurns) {
-            const message = await interaction.fetchReply().catch(() => null);
-            const selected = message && "awaitMessageComponent" in message
-                ? await message.awaitMessageComponent({
-                    componentType: discord_js_1.ComponentType.Button,
-                    time: 8000,
-                    filter: candidate => candidate.user.id === interaction.user.id && actionIds.has(candidate.customId)
-                }).catch(() => null)
-                : null;
-            action = selected ? actionIds.get(selected.customId) : "attack";
-            if (selected)
-                await selected.deferUpdate().catch(() => undefined);
-            const damageRoll = 30 + Math.floor(Math.random() * 36);
-            if (action === "attack") {
-                battleBossHp = Math.max(0, battleBossHp - damageRoll - Math.floor(armorBreak * 0.12));
-                armorBreak = Math.min(100, armorBreak + 18);
-                rage = Math.min(100, rage + 14);
-            }
-            else if (action === "defend") {
-                battlePmcHp = Math.max(0, battlePmcHp - Math.max(4, Math.floor(damageRoll * 0.28)));
-                rage = Math.max(0, rage - 8);
-            }
-            else if (action === "heal") {
-                if ((0, utils_1.getInventoryCount)(interaction.user.id, "med_patch") > 0) {
-                    (0, utils_1.removeInventoryItem)(interaction.user.id, "med_patch", 1);
-                    battlePmcHp = Math.min(pmcHpMax, battlePmcHp + 70);
-                }
-                else {
-                    battlePmcHp = Math.max(0, battlePmcHp - Math.floor(damageRoll * 0.65));
-                }
-            }
-            else if (action === "scan") {
-                scanRevealed = true;
-                armorBreak = Math.min(100, armorBreak + 8);
-            }
-            specialAttack = rage >= 70 ? "Infernal Countercharge" : undefined;
-            if (specialAttack && action !== "defend") {
-                battlePmcHp = Math.max(0, battlePmcHp - Math.floor(12 + rage * 0.16));
-                rage = Math.min(100, rage + 6);
-            }
-        }
+        action = selected ? actionIds.get(selected.customId) || "attack" : "attack";
+        const resolved = (0, combat_1.resolveBossTurn)({ state, action, totalTurns, pmcHpMax, medPatchCount: (0, utils_1.getInventoryCount)(interaction.user.id, "med_patch") });
+        if (resolved.medPatchesUsed)
+            (0, utils_1.removeInventoryItem)(interaction.user.id, "med_patch", resolved.medPatchesUsed);
+        state = resolved.state;
+        battleLog = [...(!selected ? ["Action timed out. Auto-attack selected."] : []), ...resolved.log];
     }
-    return { defeated: battleBossHp <= 0, bossHp: battleBossHp, pmcHp: battlePmcHp, scanRevealed };
+    await renderFrame(true);
+    return { defeated: state.bossHp <= 0, bossHp: state.bossHp, pmcHp: state.pmcHp, scanRevealed: state.scanRevealed };
 }
-function reconcileBossBattleOutcome(userId, mapCfg, result, battle) {
+function reconcileBossBattleOutcome(...args) {
+    return (0, utils_1.withDeferredPointsSave)(() => reconcileBossBattleOutcomeUnbatched(...args));
+}
+function reconcileBossBattleOutcomeUnbatched(userId, mapCfg, result, battle) {
+    result.bossHpRemaining = battle.bossHp;
+    result.pmcHpRemaining = battle.pmcHp;
+    if (result.bossName && result.bossHpMax) {
+        result.bossCurrentPhase = (0, combat_1.getBossBattlePhase)(result.bossName, battle.bossHp, result.bossHpMax).name;
+        result.bossPhasesReached = RaidDomain.getBossCombatProfile(result.bossName).phases.filter(phase => battle.bossHp <= result.bossHpMax * phase.thresholdPct / 100).length;
+    }
     if (!result.success || result.bossDefeated || !battle.defeated || !result.bossName)
         return;
     const user = (0, utils_1.ensureUser)(userId);
@@ -4940,6 +5284,11 @@ function reconcileBossBattleOutcome(userId, mapCfg, result, battle) {
     progress.bestStreak = Math.max(progress.bestStreak, progress.currentStreak);
     progress.heartUpgradeLevel = Math.min(3, Math.floor(progress.kills / 3));
     progress.alternateFormUnlocked = progress.kills >= 5;
+    result.bossCurrentStreak = progress.currentStreak;
+    result.bossBestStreak = progress.bestStreak;
+    result.bossIntelLevel = progress.intelLevel;
+    result.bossHeartUpgradeLevel = progress.heartUpgradeLevel;
+    result.bossAlternateFormUnlocked = progress.alternateFormUnlocked;
     const history = user.raidHistory[0];
     if (history && history.bossName === result.bossName) {
         history.bossDefeated = true;
@@ -5084,7 +5433,7 @@ function buildBossRosterPayload() {
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(0xd97706)
         .setTitle("👑 Raid Boss Roster")
-        .setDescription("Premium tactical index for all bosses, including home map, threat class, reward ranges, and rotation influence.")
+        .setDescription(`${RaidDomain.RAID_BOSS_ROSTER.length} bosses • Home territories and threat ratings`)
         .addFields({
         name: "Rotation Key",
         value: Object.values(RaidDomain.RAID_MAPS).map(map => `${RaidDomain.RAID_MAP_SHORT_LABELS[map.key]} = ${map.label}`).join("\n"),
@@ -5102,27 +5451,22 @@ function buildBossRosterPayload() {
         value: bossLeaderboard.map((boss, index) => `#${index + 1} ${boss.name} • ${boss.totalKills} kills • Best streak ${boss.bestStreak}`).join("\n") || "No boss kills recorded yet.",
         inline: false
     });
-    for (const boss of RaidDomain.RAID_BOSS_ROSTER) {
-        const combatProfile = RaidDomain.getBossCombatProfile(boss.name);
-        const traitLine = combatProfile.traits.map(key => {
-            const trait = RaidDomain.BOSS_TRAITS[key];
-            return `${trait.label}${trait.counterApproach ? ` [${RaidDomain.RAID_APPROACHES[trait.counterApproach].label}]` : ""}`;
-        }).join(" • ");
+    const bossRows = RaidDomain.RAID_BOSS_ROSTER.map(boss => {
+        const threat = boss.ferocity >= 2 ? "CAT" : boss.ferocity >= 1.7 ? "APX" : boss.ferocity >= 1.35 ? "BRT" : boss.ferocity >= 1 ? "ELT" : "VET";
+        return `**${boss.name}** • ${threat} ${boss.ferocity.toFixed(2)}x\n${boss.homeMapLabel}`;
+    });
+    chunkDetailLines(bossRows, 7).forEach((chunk, index) => {
         embed.addFields({
-            name: `${boss.name} (${boss.title})`,
-            value: [
-                `Home: ${RaidDomain.RAID_MAP_SHORT_LABELS[boss.homeMapKey]} • ${boss.homeMapDifficulty}`,
-                `Threat: ${boss.ferocity >= 2 ? "Cataclysmic" : boss.ferocity >= 1.7 ? "Apex" : boss.ferocity >= 1.35 ? "Brutal" : boss.ferocity >= 1 ? "Elite" : "Veteran"} • Ferocity ${boss.ferocity.toFixed(2)}`,
-                `Traits: ${traitLine}`,
-                `Phases: ${combatProfile.phases.map(phase => phase.name).join(" → ")}`,
-                `Rewards: XP ${boss.bonusXpRange[0]}-${boss.bonusXpRange[1]} • Tokens ${boss.tokenRewardRange[0]}-${boss.tokenRewardRange[1]} • Rare ${(boss.rareDropChance * 100).toFixed(0)}%`,
-                `Signature Drops: ${boss.weaponDrops[0]} • ${boss.armorDrops[0]}`,
-                "Rematches: 5 kills unlock a chance for an Alternate Form with increased ferocity."
-            ].join("\n"),
+            name: `Boss Index ${index + 1}`,
+            value: chunk.slice(0, 1024),
             inline: false
         });
-    }
-    return JSON.stringify({ embed: embed.toJSON() });
+    });
+    const selector = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
+        .setCustomId(payloads_1.RAID_RESULT_ACTION_IDS.bossIntel)
+        .setPlaceholder("Boss intel and personal progress")
+        .addOptions(RaidDomain.RAID_BOSS_ROSTER.map(boss => ({ label: boss.name, value: boss.name, description: `${boss.homeMapLabel} • ${boss.ferocity.toFixed(2)}x ferocity` }))));
+    return JSON.stringify({ embed: embed.toJSON(), components: [selector.toJSON()] });
 }
 function buildLeaderboardPayload() {
     const top = (0, economy_1.getLeaderboard)();
@@ -5169,6 +5513,14 @@ function buildPmcProfilePayload(user) {
     const prestigeEligible = progress.level >= utils_1.PMC_PRESTIGE_LEVEL_REQUIREMENT && state.pmcPrestige < utils_1.PMC_PRESTIGE_CAP;
     const nextPrestigeTier = (0, utils_1.getPmcPrestigeTier)(Math.min(utils_1.PMC_PRESTIGE_CAP, state.pmcPrestige + 1));
     const buffs = (0, utils_1.getPmcBuffs)(progress.level, state.pmcPrestige);
+    const sirGru = state.followers?.sir_gru || null;
+    const sirGruProgress = sirGru ? (0, utils_1.getSirGruProgress)(sirGru) : null;
+    const sirGruStats = sirGruProgress ? (0, utils_1.getSirGruStats)(sirGruProgress.level) : null;
+    const sirGruBonuses = sirGru ? (0, utils_1.getSirGruRaidBonuses)(sirGru) : null;
+    const sirGruAbilities = (0, utils_1.getSirGruUnlockedAbilities)(sirGru || undefined);
+    const nextSirGruAbility = sirGruProgress
+        ? (0, utils_1.getSirGruUnlockedAbilities)({ ...sirGru, level: 100, xp: Number.MAX_SAFE_INTEGER }).find(ability => ability.level > sirGruProgress.level)
+        : null;
     const tier = (0, utils_1.getPmcTierForLevel)(progress.level);
     const tierVisual = getPmcTierVisual(progress.level);
     const raids = Math.max(0, state.pmcRaids);
@@ -5256,6 +5608,18 @@ function buildPmcProfilePayload(user) {
             `Loss Mitigation: +${(buffs.defenseBonus * 100).toFixed(2)}%`,
             `Raid XP Gain: +${(buffs.xpBonus * 100).toFixed(2)}%`
         ].join(" | "),
+        inline: false
+    }, {
+        name: "Follower: Sir Gru",
+        value: sirGru && sirGruProgress && sirGruStats && sirGruBonuses ? [
+            `Status: Active • Level ${sirGruProgress.level}/100${sirGruProgress.capped ? " • Max perk active" : ""}`,
+            `Progress: ${sirGruProgress.capped ? "MAX" : `${sirGruProgress.intoLevel}/${Math.max(1, sirGruProgress.nextThreshold - sirGruProgress.currentThreshold)} XP • ${sirGruProgress.needForNext} to next level`}`,
+            `Stats: Scouting ${sirGruStats.scouting} • Firepower ${sirGruStats.firepower} • Guard ${sirGruStats.guard} • Loyalty ${sirGruStats.loyalty}`,
+            `Abilities: ${sirGruAbilities.map(ability => ability.name).join(", ") || "None"}`,
+            `Next Ability: ${nextSirGruAbility ? `Lv ${nextSirGruAbility.level} • ${nextSirGruAbility.name}` : "All abilities unlocked"}`,
+            `Raid Perks: +${(sirGruBonuses.successBonus * 100).toFixed(2)}% success • +${(sirGruBonuses.tokenBonus * 100).toFixed(2)}% tokens • +${(sirGruBonuses.defenseBonus * 100).toFixed(2)}% defense • +${(sirGruBonuses.xpBonus * 100).toFixed(2)}% raid XP • +${(sirGruBonuses.bossKillBonus * 100).toFixed(2)}% boss kill`,
+            `History: ${sirGru.raids} raids • ${sirGru.bossAssists} boss assists`
+        ].join("\n") : "Unlocks automatically at PMC Prestige I.",
         inline: false
     }, {
         name: "Boss Trophy Case",
@@ -7509,6 +7873,37 @@ const commandHandlers = {
         const guild = interaction.guild;
         if (!guild)
             return "This command can only be used in a server.";
+        const pause = interaction.options.getBoolean("pause");
+        const retry = interaction.options.getBoolean("retry") || false;
+        const configXp = interaction.options.getInteger("config_xp");
+        const configRole = interaction.options.getRole("config_role");
+        const configName = interaction.options.getString("config_name")?.trim();
+        if (configXp !== null || configRole || configName) {
+            if (!configXp || configXp <= 0 || !configRole) {
+                return "To configure an XP role tier, provide config_xp and config_role. config_name is optional.";
+            }
+            const configured = upsertXpRoleEntry({ xp: configXp, roleId: configRole.id, name: configName || configRole.name });
+            appendAuditEvent("xp_role_config_updated", {
+                guildId: guild.id,
+                actorId: interaction.user.id,
+                xp: configXp,
+                roleId: configRole.id,
+                name: configName || configRole.name,
+                configuredTierCount: configured.length
+            });
+            await ensureXpTierRoles(guild);
+            return `XP role tier configured: ${configXp.toLocaleString()} XP -> ${configName || configRole.name}. Run /rolesanity dry_run:true to preview member changes.`;
+        }
+        if (pause !== null) {
+            XP_ROLE_SYNC_PAUSED = pause;
+            appendAuditEvent("xp_role_sync_pause_changed", { guildId: guild.id, paused: pause, actorId: interaction.user.id });
+            if (!pause)
+                void drainXpRoleSyncQueue();
+        }
+        if (retry)
+            void retryXpRoleDeadLetters();
+        if (XP_ROLE_SYNC_PAUSED)
+            return "XP role synchronization is paused for maintenance.";
         if (XP_ROLE_SYNC_RUNNING_GUILDS.has(guild.id)) {
             return "An XP role sync is already running for this server. Please wait for it to finish.";
         }
@@ -7697,6 +8092,14 @@ const commandHandlers = {
             ? (0, utils_1.formatProgressPercent)(xpIntoLevel / levelSpan)
             : "100%";
         const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
+        const roleEntries = getEffectiveXpRoleEntries();
+        const currentRole = roleEntries.filter(entry => user.xp >= entry.xp).pop();
+        const nextRole = roleEntries.find(entry => entry.xp > user.xp);
+        const roleProgress = currentRole && nextRole
+            ? `${Math.max(0, user.xp - currentRole.xp).toLocaleString()}/${(nextRole.xp - currentRole.xp).toLocaleString()} XP`
+            : nextRole
+                ? `${user.xp.toLocaleString()}/${nextRole.xp.toLocaleString()} XP`
+                : "Highest configured role reached";
         const streakText = user.dailyStreak > 0 ? `${user.dailyStreak} day streak` : "No active streak";
         const achievements = user.achievements.length > 0
             ? user.achievements.slice(0, 4).join("\n")
@@ -7716,6 +8119,15 @@ const commandHandlers = {
                 `Level: **${engagementLevel.toLocaleString()}**`,
                 `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
                 `Completion: **${progressPercent}**`
+            ].join("\n"),
+            inline: true
+        }, {
+            name: "🎖️ XP Role",
+            value: [
+                `Current: **${currentRole?.name || "No role yet"}**`,
+                `Progress: **${roleProgress}**`,
+                `Next: **${nextRole ? `${nextRole.name} at ${nextRole.xp.toLocaleString()} XP` : "Maximum tier"}**`,
+                `Unlock history: **${user.xpRoleUnlocks.length}**`
             ].join("\n"),
             inline: true
         }, {
@@ -7781,6 +8193,7 @@ const commandHandlers = {
             ? user.achievements.slice(0, 6).join("\n")
             : "No achievements yet";
         const pmcProgress = (0, utils_1.getPmcProgress)(user.pmcXP);
+        const roleProgress = getXpRoleProgress(user.xp);
         const embed = new discord_js_1.EmbedBuilder()
             .setColor(prestigeBadge.color)
             .setTitle("📊 XP Intelligence Report")
@@ -7804,6 +8217,15 @@ const commandHandlers = {
                 `📆 Daily streak: **${user.dailyStreak.toLocaleString()}**`,
                 `⏱️ Last XP: **${lastXpAt}**`,
                 `🏆 Achievements: **${user.achievements.length.toLocaleString()}**`
+            ].join("\n"),
+            inline: true
+        }, {
+            name: "🎖️ XP Role Track",
+            value: [
+                `Current: **${roleProgress.currentRole?.name || "No role yet"}**`,
+                `Next: **${roleProgress.nextRole ? `${roleProgress.nextRole.name} at ${roleProgress.nextRole.xp.toLocaleString()} XP` : "Maximum tier"}**`,
+                roleProgress.progressBar,
+                roleProgress.progressText
             ].join("\n"),
             inline: true
         }, {
@@ -7840,8 +8262,12 @@ const commandHandlers = {
             ].join("\n"),
             inline: true
         }, {
-            name: "✨ Recent Unlocks",
+            name: "✨ Recent Achievements",
             value: achievements,
+            inline: false
+        }, {
+            name: "🎖️ Recent Role Unlocks",
+            value: formatXpRoleUnlocks(interaction.user.id, 5),
             inline: false
         })
             .setFooter({ text: "Detailed progression data is sourced from persisted state." });
@@ -7953,7 +8379,7 @@ const commandHandlers = {
         const snapshot = (0, utils_1.getXpPersistenceSnapshot)(target.id);
         const effectiveXp = Math.max(snapshot.memoryXp, snapshot.primaryXp ?? 0, snapshot.backupXp ?? 0);
         const level = (0, utils_1.getXPLevel)(effectiveXp);
-        const unlocked = XP_ROLE_TIERS.filter(entry => effectiveXp >= entry.xp).pop();
+        const unlocked = getEffectiveXpRoleEntries().filter(entry => effectiveXp >= entry.xp).pop();
         let roleStatus = "No XP tier unlocked yet (below first threshold).";
         if (interaction.guild && unlocked) {
             await interaction.guild.roles.fetch().catch(() => undefined);
@@ -8010,9 +8436,10 @@ const commandHandlers = {
         if (!guild)
             return "This command can only be used in a server.";
         const fix = interaction.options.getBoolean("fix") || false;
+        const dryRun = interaction.options.getBoolean("dry_run") || false;
         const report = await collectRoleSanityReport(guild);
         let fixNote = "No remediation requested.";
-        if (fix) {
+        if (fix && !dryRun) {
             const fixResult = await runRoleSanityFix(guild, interaction.user.id, interaction.channelId || null);
             fixNote = fixResult.started
                 ? "Remediation started: background XP role sync launched."
@@ -8041,9 +8468,32 @@ const commandHandlers = {
             inline: false
         }, {
             name: "Fix Mode",
-            value: fixNote,
+            value: dryRun ? "Dry run: no roles or members will be changed." : fixNote,
+            inline: false
+        }, {
+            name: "Sync Metrics",
+            value: [
+                `Queue: ${XP_ROLE_SYNC_QUEUE.length}`,
+                `Retries: ${XP_ROLE_SYNC_METRICS.retries}`,
+                `Dead letters: ${readXpRoleDeadLetters().length}`,
+                `Processed: ${XP_ROLE_SYNC_METRICS.processed}`,
+                `Mutations: +${XP_ROLE_SYNC_METRICS.added} / -${XP_ROLE_SYNC_METRICS.removed}`,
+                `Failures: ${XP_ROLE_SYNC_METRICS.failed}`,
+                `Last sync: ${XP_ROLE_SYNC_METRICS.lastSyncAt ? new Date(XP_ROLE_SYNC_METRICS.lastSyncAt).toISOString() : "never"}`,
+                `Last success: ${XP_ROLE_SYNC_METRICS.lastSuccessAt ? new Date(XP_ROLE_SYNC_METRICS.lastSuccessAt).toISOString() : "never"}`,
+                `Last dead-letter replay: ${XP_ROLE_SYNC_METRICS.lastDeadLetterReplayAt ? new Date(XP_ROLE_SYNC_METRICS.lastDeadLetterReplayAt).toISOString() : "never"}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Dry-Run Member Diff",
+            value: dryRun
+                ? (report.dryRunDiffs.length ? report.dryRunDiffs.join("\n").slice(0, 1024) : "No sampled member changes detected.")
+                : "Use dry_run:true to preview sampled add/remove changes before fixing.",
             inline: false
         });
+        if (report.configurationErrors.length) {
+            embed.addFields({ name: "Configuration Errors", value: report.configurationErrors.slice(0, 10).join("\n"), inline: false });
+        }
         if (report.missing.length) {
             embed.addFields({
                 name: "Missing Roles",
@@ -8953,11 +9403,14 @@ const commandHandlers = {
         if (!["low", "medium", "high"].includes(tension))
             return "Tension must be low, medium, or high.";
         if (Date.now() - userState.lastRaid < RAID_COOLDOWN_MS)
-            return "Raid systems are still recharging.";
+            return `Raid ready <t:${Math.ceil((userState.lastRaid + RAID_COOLDOWN_MS) / 1000)}:R>.`;
         if (bet < MIN_RAID_BET)
             return `Minimum raid bet is ${MIN_RAID_BET} FN Token$.`;
         if (!(0, utils_1.canAffordTokens)(userId, bet))
-            return "Not enough FN Token$.";
+            return `Not enough FN Token$. Wallet: ${(0, utils_1.getTokens)(userId).toLocaleString()} • Required: ${bet.toLocaleString()}.`;
+        const loadoutCheck = RaidRuntime.getRaidLoadoutBonus({ userId, condition: RaidDomain.RAID_CONDITIONS[0], selectedWeaponId, selectedArmorId, getInventoryCount: utils_1.getInventoryCount, getBestOwnedGear });
+        if (loadoutCheck.error)
+            return loadoutCheck.error;
         activeRaidEncounters.add(userId);
         try {
             const reputation = RaidDomain.getMapReputationProgress((0, utils_1.getMapReputationEntry)(userId, mapCfg.key).points);
@@ -9392,6 +9845,8 @@ client.once("clientReady", async () => {
         if (guild) {
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
+            await ensureXpTierRoles(guild);
+            await retryXpRoleDeadLetters();
             purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
@@ -9632,7 +10087,8 @@ client.on("interactionCreate", async (interaction) => {
         }
         else if (action === "craft") {
             const recipe = gearEconomy_1.CRAFT_RECIPES.find(entry => entry.outputId === interaction.fields.getTextInputValue("item").trim().toLowerCase());
-            result = recipe ? (0, gearEconomy_1.craftItem)(user, recipe) : { error: "Unknown recipe output. Use upgrade_core, blueprint_bossbreaker, or tactical_overdrive." };
+            const recipeExamples = gearEconomy_1.CRAFT_RECIPES.slice(0, 8).map(entry => entry.outputId).join(", ");
+            result = recipe ? (0, gearEconomy_1.craftItem)(user, recipe) : { error: `Unknown recipe output. Use one of: ${recipeExamples}.` };
         }
         else {
             const itemId = interaction.fields.getTextInputValue("item").trim().toLowerCase();
@@ -10179,10 +10635,39 @@ client.on("interactionCreate", async (interaction) => {
         }
         return;
     }
+    if (interaction.isButton() && Object.values(payloads_1.RAID_ENCOUNTER_IDS).includes(interaction.customId)) {
+        const decision = activeRaidDecisions.get(interaction.message.id);
+        const error = !decision || !decision.ids.has(interaction.customId)
+            ? "This raid decision has ended."
+            : decision.userId !== interaction.user.id
+                ? "Only the deployed PMC can choose this raid action."
+                : null;
+        if (error)
+            await interaction.reply({ content: error, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.bossIntel) {
+        const bossName = interaction.values[0];
+        if (!RaidDomain.RAID_BOSS_ROSTER.some(boss => boss.name === bossName)) {
+            await interaction.reply({ content: "This boss is no longer available.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const payload = JSON.parse((0, payloads_1.buildBossIntelPayload)({ bossName, progress: (0, utils_1.getBossProgressEntry)(interaction.user.id, bossName) }));
+        await interaction.reply({ embeds: [embedFromPayload("bosses", payload.embed, interaction.user)], flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.supplies) {
+        const state = (0, utils_1.ensureUser)(interaction.user.id);
+        const payload = JSON.parse((0, payloads_1.buildShopPayload)({ shopItemIds: catalog_1.SHOP_ITEMS.filter(id => catalog_1.ITEM_DEFS[id]?.kind === "consumable"), inventory: state.inventory, wallet: (0, utils_1.getTokens)(interaction.user.id) }));
+        await interaction.reply({ embeds: [embedFromPayload("shop", payload.embed, interaction.user)], components: payload.components || [], flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
     if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.inventory) {
-        const payload = JSON.parse((0, payloads_1.buildInventoryPayload)({ inventory: (0, utils_1.ensureUser)(interaction.user.id).inventory, wallet: (0, utils_1.getTokens)(interaction.user.id) }));
+        const state = (0, utils_1.ensureUser)(interaction.user.id);
+        const payload = JSON.parse((0, payloads_1.buildInventoryPayload)({ inventory: state.inventory, wallet: (0, utils_1.getTokens)(interaction.user.id), gearDurability: state.gearDurability, insuredGear: state.insuredGear }));
         await interaction.reply({
             embeds: [embedFromPayload("inventory", payload.embed, interaction.user)],
+            components: payload.components || [],
             flags: discord_js_1.MessageFlags.Ephemeral
         }).catch(() => undefined);
         return;
@@ -10244,6 +10729,7 @@ client.on("interactionCreate", async (interaction) => {
         try {
             await interaction.reply({
                 embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
+                components: payload.components || [],
                 flags: discord_js_1.MessageFlags.Ephemeral
             });
         }
@@ -10259,9 +10745,10 @@ client.on("interactionCreate", async (interaction) => {
         }
         return;
     }
-    if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.mastery) {
-        const latestMapKey = (0, utils_1.ensureUser)(interaction.user.id).raidHistory[0]?.mapKey;
-        const payload = JSON.parse(buildMapMasteryPayload(interaction.user.id, latestMapKey));
+    if (interaction.isButton() && (interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.mastery || interaction.customId.startsWith(`${payloads_1.RAID_RESULT_ACTION_IDS.mastery}:`))) {
+        const selectedMapKey = interaction.customId.slice(payloads_1.RAID_RESULT_ACTION_IDS.mastery.length + 1);
+        const mapKey = Object.prototype.hasOwnProperty.call(RaidDomain.RAID_MAPS, selectedMapKey) ? selectedMapKey : (0, utils_1.ensureUser)(interaction.user.id).raidHistory[0]?.mapKey;
+        const payload = JSON.parse(buildMapMasteryPayload(interaction.user.id, mapKey));
         await interaction.reply({
             embeds: [embedFromPayload("raidintel", payload.embed, interaction.user)],
             flags: discord_js_1.MessageFlags.Ephemeral
@@ -10409,19 +10896,25 @@ client.on("messageCreate", async (message) => {
         Boolean(message.reference) ||
         message.attachments.size > 0;
     if (isCommunicationEvent) {
-        const nextXp = (0, utils_1.addXP)(message.author.id, 1);
+        const currentXp = (0, utils_1.ensureUser)(message.author.id).xp;
+        const nextXp = (0, utils_1.addXP)(message.author.id, MESSAGE_XP_GAIN);
         appendAuditEvent("engagement_xp", {
             userId: message.author.id,
             guildId: message.guildId,
             channelId: message.channelId,
-            xpDelta: 1,
+            xpDelta: MESSAGE_XP_GAIN,
             totalXp: nextXp,
             reference: Boolean(message.reference),
             mentionCount: message.mentions.users.size,
             attachmentCount: message.attachments.size
         });
         if (message.guild) {
-            await syncXpRolesForUserInGuild(message.guild, message.author.id, nextXp);
+            const roleEntries = getEffectiveXpRoleEntries();
+            const crossedThreshold = roleEntries.some(entry => currentXp < entry.xp && nextXp >= entry.xp);
+            if (crossedThreshold) {
+                enqueueXpRoleSync(message.guild, message.author.id, nextXp);
+                void notifyXpThresholdUnlock(message.guild, message.author.id, currentXp, nextXp);
+            }
         }
     }
     if (message.content.trim().toLowerCase() === `${PREFIX}ping`) {

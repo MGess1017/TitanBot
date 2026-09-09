@@ -3,8 +3,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PMC_LEVEL_THRESHOLDS = exports.PMC_PRESTIGE_TIERS = exports.PMC_TIER_MILESTONES = exports.PMC_PRESTIGE_CAP = exports.PMC_PRESTIGE_LEVEL_REQUIREMENT = exports.PMC_LEVEL_CAP = exports.XP_LEVEL_THRESHOLDS = exports.points = exports.GAME_STAT_KEYS = void 0;
+exports.PMC_LEVEL_THRESHOLDS = exports.PMC_PRESTIGE_TIERS = exports.PMC_TIER_MILESTONES = exports.PMC_PRESTIGE_CAP = exports.PMC_PRESTIGE_LEVEL_REQUIREMENT = exports.PMC_LEVEL_CAP = exports.XP_LEVEL_THRESHOLDS = exports.points = exports.SIR_GRU_ABILITIES = exports.SIR_GRU_MAX_LEVEL = exports.SIR_GRU_FOLLOWER_ID = exports.GAME_STAT_KEYS = void 0;
+exports.getSirGruLevelXp = getSirGruLevelXp;
+exports.getSirGruLevelFromXp = getSirGruLevelFromXp;
+exports.getSirGruProgress = getSirGruProgress;
+exports.getSirGruStats = getSirGruStats;
+exports.getSirGruRaidBonuses = getSirGruRaidBonuses;
+exports.ensureSirGruFollower = ensureSirGruFollower;
+exports.awardSirGruRaidXp = awardSirGruRaidXp;
 exports.savePoints = savePoints;
+exports.withDeferredPointsSave = withDeferredPointsSave;
+exports.getPointsSaveDiagnostics = getPointsSaveDiagnostics;
 exports.getXpPersistenceSnapshot = getXpPersistenceSnapshot;
 exports.ensureUser = ensureUser;
 exports.getMapReputationEntry = getMapReputationEntry;
@@ -44,6 +53,8 @@ exports.getBossProgressEntry = getBossProgressEntry;
 exports.recordBossProgress = recordBossProgress;
 exports.getPmcMasteryLevel = getPmcMasteryLevel;
 exports.applyPmcMilestoneRewards = applyPmcMilestoneRewards;
+exports.getSirGruUnlockedAbilities = getSirGruUnlockedAbilities;
+exports.rollSirGruRaidAssist = rollSirGruRaidAssist;
 const fs_extra_1 = __importDefault(require("fs-extra"));
 const path_1 = __importDefault(require("path"));
 exports.GAME_STAT_KEYS = [
@@ -58,6 +69,117 @@ exports.GAME_STAT_KEYS = [
     "hilo",
     "keno"
 ];
+exports.SIR_GRU_FOLLOWER_ID = "sir_gru";
+exports.SIR_GRU_MAX_LEVEL = 100;
+exports.SIR_GRU_ABILITIES = [
+    { level: 1, name: "Scout Ahead", desc: "Sir Gru marks safer lanes for a small raid success boost." },
+    { level: 15, name: "Ammo Runner", desc: "Successful raids can gain extra token yield from recovered munitions." },
+    { level: 30, name: "Guardian Intercept", desc: "Failed raids receive extra mitigation when Sir Gru pulls the team out." },
+    { level: 50, name: "Boss Mark", desc: "Boss encounters gain a higher takedown chance." },
+    { level: 75, name: "Cache Sniffer", desc: "Successful raids can gain an additional loot roll." },
+    { level: 100, name: "Gru's Last Stand", desc: "Max-level Sir Gru improves every raid bonus and always adds an extra cache roll on success." }
+];
+function getSirGruLevelXp(level) {
+    const safeLevel = Math.max(1, Math.min(exports.SIR_GRU_MAX_LEVEL, Math.floor(level)));
+    return Math.floor(Math.pow(safeLevel - 1, 2) * 40);
+}
+function getSirGruLevelFromXp(xp) {
+    const safeXp = Math.max(0, Math.floor(xp));
+    let level = 1;
+    for (let next = 2; next <= exports.SIR_GRU_MAX_LEVEL; next++) {
+        if (safeXp < getSirGruLevelXp(next))
+            break;
+        level = next;
+    }
+    return level;
+}
+function getSirGruProgress(follower) {
+    const xp = Math.max(0, Math.floor(follower.xp || 0));
+    const level = getSirGruLevelFromXp(xp);
+    const currentThreshold = getSirGruLevelXp(level);
+    const capped = level >= exports.SIR_GRU_MAX_LEVEL;
+    const nextThreshold = capped ? currentThreshold : getSirGruLevelXp(level + 1);
+    return {
+        level,
+        xp,
+        currentThreshold,
+        nextThreshold,
+        intoLevel: Math.max(0, xp - currentThreshold),
+        needForNext: capped ? 0 : Math.max(0, nextThreshold - xp),
+        capped
+    };
+}
+function getSirGruStats(level) {
+    const safeLevel = Math.max(1, Math.min(exports.SIR_GRU_MAX_LEVEL, Math.floor(level)));
+    return {
+        scouting: 4 + Math.floor(safeLevel * 0.55),
+        firepower: 3 + Math.floor(safeLevel * 0.5),
+        guard: 3 + Math.floor(safeLevel * 0.45),
+        loyalty: 5 + Math.floor(safeLevel * 0.6)
+    };
+}
+function getSirGruRaidBonuses(follower) {
+    if (!follower)
+        return { successBonus: 0, tokenBonus: 0, defenseBonus: 0, xpBonus: 0, bossKillBonus: 0, maxPerkActive: false };
+    const level = getSirGruProgress(follower).level;
+    const scale = level / exports.SIR_GRU_MAX_LEVEL;
+    const maxPerkActive = level >= exports.SIR_GRU_MAX_LEVEL;
+    return {
+        successBonus: Math.min(0.018, 0.012 * scale + (maxPerkActive ? 0.006 : 0)),
+        tokenBonus: Math.min(0.035, 0.018 * scale + (maxPerkActive ? 0.017 : 0)),
+        defenseBonus: Math.min(0.028, 0.014 * scale + (maxPerkActive ? 0.014 : 0)),
+        xpBonus: Math.min(0.055, 0.02 * scale + (maxPerkActive ? 0.035 : 0)),
+        bossKillBonus: Math.min(0.03, 0.014 * scale + (maxPerkActive ? 0.016 : 0)),
+        maxPerkActive
+    };
+}
+function ensureSirGruFollower(user, now = Date.now()) {
+    if ((user.pmcPrestige || 0) < 1)
+        return null;
+    if (!user.followers || typeof user.followers !== "object")
+        user.followers = {};
+    const existing = user.followers[exports.SIR_GRU_FOLLOWER_ID];
+    if (existing) {
+        existing.id = exports.SIR_GRU_FOLLOWER_ID;
+        existing.name = "Sir Gru";
+        existing.xp = Math.max(0, Math.floor(existing.xp || 0));
+        existing.level = getSirGruLevelFromXp(existing.xp);
+        existing.unlockedAt = Math.max(0, Math.floor(existing.unlockedAt || now));
+        existing.raids = Math.max(0, Math.floor(existing.raids || 0));
+        existing.bossAssists = Math.max(0, Math.floor(existing.bossAssists || 0));
+        existing.maxPerkUnlocked = existing.maxPerkUnlocked || existing.level >= exports.SIR_GRU_MAX_LEVEL;
+        return existing;
+    }
+    user.followers[exports.SIR_GRU_FOLLOWER_ID] = {
+        id: exports.SIR_GRU_FOLLOWER_ID,
+        name: "Sir Gru",
+        level: 1,
+        xp: 0,
+        unlockedAt: now,
+        raids: 0,
+        bossAssists: 0,
+        maxPerkUnlocked: false
+    };
+    return user.followers[exports.SIR_GRU_FOLLOWER_ID];
+}
+function awardSirGruRaidXp(user, input) {
+    const follower = ensureSirGruFollower(user);
+    if (!follower)
+        return { follower: null, xpGained: 0, levelBefore: 0, levelAfter: 0, maxPerkUnlocked: false };
+    const before = getSirGruProgress(follower).level;
+    const difficultyBonus = input.mapDifficulty === "Cataclysmic" ? 5 : input.mapDifficulty === "Brutal" ? 4 : input.mapDifficulty === "Elite" ? 3 : input.mapDifficulty === "Hard" ? 2 : 1;
+    const tensionBonus = input.tension === "high" ? 4 : input.tension === "medium" ? 2 : 0;
+    const xpGained = 8 + difficultyBonus + tensionBonus + (input.success ? 5 : 1) + (input.bossSpawned ? 4 : 0) + (input.bossDefeated ? 12 : 0);
+    follower.xp = Math.max(0, Math.floor(follower.xp + xpGained));
+    follower.raids += 1;
+    if (input.bossDefeated)
+        follower.bossAssists += 1;
+    follower.level = getSirGruLevelFromXp(follower.xp);
+    const maxPerkUnlocked = !follower.maxPerkUnlocked && follower.level >= exports.SIR_GRU_MAX_LEVEL;
+    if (maxPerkUnlocked)
+        follower.maxPerkUnlocked = true;
+    return { follower, xpGained, levelBefore: before, levelAfter: follower.level, maxPerkUnlocked };
+}
 function defaultGameStatEntry() {
     return {
         played: 0,
@@ -120,6 +242,7 @@ function defaultUserState() {
         pmcMasteryLevel: 0,
         pmcPrestigePerks: [],
         pmcMilestonesClaimed: [],
+        followers: {},
         pmcCallsign: "Rookie",
         pmcBanner: "standard",
         lastXP: 0,
@@ -148,6 +271,7 @@ function defaultUserState() {
         casinoLossToday: 0,
         casinoJackpotContribution: 0,
         casinoAchievements: [],
+        xpRoleUnlocks: [],
         raidHistory: [],
         lastRaid: 0,
         inventory: {},
@@ -219,11 +343,35 @@ exports.points = store.users;
 function shouldSkipPointsPersistence() {
     return process.env.RUNTIME_TEST_NO_POINTS_SAVE === "1";
 }
+let pointsSaveBatchDepth = 0;
+let pointsSaveBatchDirty = false;
+let deferredPointsSaves = 0;
 function savePoints() {
+    if (pointsSaveBatchDepth > 0) {
+        pointsSaveBatchDirty = true;
+        deferredPointsSaves += 1;
+        return;
+    }
     // Runtime tests can disable disk writes to avoid polluting live JSON stores.
     if (shouldSkipPointsPersistence())
         return;
     writePointsFileAtomic({ users: exports.points });
+}
+function withDeferredPointsSave(fn) {
+    pointsSaveBatchDepth += 1;
+    try {
+        return fn();
+    }
+    finally {
+        pointsSaveBatchDepth -= 1;
+        if (pointsSaveBatchDepth === 0 && pointsSaveBatchDirty) {
+            pointsSaveBatchDirty = false;
+            savePoints();
+        }
+    }
+}
+function getPointsSaveDiagnostics() {
+    return { batchDepth: pointsSaveBatchDepth, batchDirty: pointsSaveBatchDirty, deferredSaves: deferredPointsSaves };
 }
 function getXpPersistenceSnapshot(userId) {
     const memory = exports.points[userId];
@@ -278,6 +426,14 @@ function ensureUser(userId) {
         user.pmcPrestigePerks = [];
     if (!Array.isArray(user.pmcMilestonesClaimed))
         user.pmcMilestonesClaimed = [];
+    if (!user.followers || typeof user.followers !== "object")
+        user.followers = {};
+    if ((user.pmcPrestige || 0) >= 1) {
+        const hadSirGru = Boolean(user.followers[exports.SIR_GRU_FOLLOWER_ID]);
+        ensureSirGruFollower(user);
+        if (!hadSirGru)
+            savePoints();
+    }
     if (user.pmcCallsign === undefined)
         user.pmcCallsign = "Rookie";
     if (user.pmcBanner === undefined)
@@ -334,6 +490,8 @@ function ensureUser(userId) {
         user.casinoJackpotContribution = 0;
     if (!Array.isArray(user.casinoAchievements))
         user.casinoAchievements = [];
+    if (!Array.isArray(user.xpRoleUnlocks))
+        user.xpRoleUnlocks = [];
     if (!Array.isArray(user.raidHistory))
         user.raidHistory = [];
     if (user.lastRaid === undefined)
@@ -698,8 +856,12 @@ function performPmcPrestige(userId) {
     user.pmcXP = 0;
     user.rxp = 0;
     const tier = getPmcPrestigeTier(user.pmcPrestige);
+    const follower = ensureSirGruFollower(user);
     user.pmcPrestigePerks = Array.from(new Set([...user.pmcPrestigePerks, `prestige_${user.pmcPrestige}_raid_mastery`]));
     user.achievements.push(`${tier.badge} PMC Prestige ${tier.numeral}: ${tier.label}`);
+    if (follower && !user.achievements.includes("Sir Gru joined your PMC as a Prestige I follower.")) {
+        user.achievements.push("Sir Gru joined your PMC as a Prestige I follower.");
+    }
     savePoints();
     return { prestige: user.pmcPrestige, tier };
 }
@@ -876,4 +1038,54 @@ function applyPmcMilestoneRewards(userId) {
     if (claimed.length || currentMastery > previous)
         savePoints();
     return { claimed, masteryLevel: currentMastery };
+}
+function getSirGruUnlockedAbilities(follower) {
+    if (!follower)
+        return [];
+    const level = getSirGruProgress(follower).level;
+    return exports.SIR_GRU_ABILITIES.filter(ability => level >= ability.level);
+}
+function rollSirGruRaidAssist(follower, input) {
+    const unlockedAbilities = getSirGruUnlockedAbilities(follower);
+    const triggeredAbilities = [];
+    const random = input.random || Math.random;
+    let successBonus = 0;
+    let tokenBonus = 0;
+    let defenseBonus = 0;
+    let xpBonus = 0;
+    let bossKillBonus = 0;
+    let bonusLootRolls = 0;
+    let flatFailureMitigation = 0;
+    const hasAbility = (name) => unlockedAbilities.some(ability => ability.name === name);
+    if (hasAbility("Scout Ahead")) {
+        successBonus += 0.004;
+        triggeredAbilities.push("Scout Ahead: safer route marked");
+    }
+    if (hasAbility("Ammo Runner") && input.success === true && random() < 0.16) {
+        tokenBonus += 0.035;
+        triggeredAbilities.push("Ammo Runner: bonus munitions sold");
+    }
+    if (hasAbility("Guardian Intercept") && input.success === false) {
+        defenseBonus += 0.018;
+        flatFailureMitigation += Math.max(1, Math.floor(input.bet * 0.04));
+        triggeredAbilities.push("Guardian Intercept: extraction loss reduced");
+    }
+    if (hasAbility("Boss Mark") && input.bossSpawned) {
+        bossKillBonus += 0.022;
+        triggeredAbilities.push("Boss Mark: weak point called out");
+    }
+    if (hasAbility("Cache Sniffer") && input.success && random() < 0.2) {
+        bonusLootRolls += 1;
+        triggeredAbilities.push("Cache Sniffer: extra cache located");
+    }
+    if (hasAbility("Gru's Last Stand")) {
+        successBonus += 0.006;
+        tokenBonus += input.success === true ? 0.02 : 0;
+        defenseBonus += 0.012;
+        xpBonus += 0.025;
+        bossKillBonus += input.bossSpawned ? 0.014 : 0;
+        bonusLootRolls += input.success === true ? 1 : 0;
+        triggeredAbilities.push("Gru's Last Stand: max-level perk active");
+    }
+    return { unlockedAbilities, triggeredAbilities, successBonus, tokenBonus, defenseBonus, xpBonus, bossKillBonus, bonusLootRolls, flatFailureMitigation };
 }

@@ -42,6 +42,31 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
    - `/leaderboard`: View the XP leaderboard.
    - `/addpoints @user amount`: Add mod points to a specified user.
 
+## Raid Quality of Life
+- Boss encounters show current HP, health-based phases, phase mechanics, matched trait counters, rage warnings, med patch stock, and an action deadline.
+- Combat uses one Discord update per turn. Attack remains the eight-second timeout default. Combat ends at zero HP or the turn limit.
+- Heal is disabled at full HP or with no med patches; stale heal requests consume neither items nor turns. Valid heals restore up to 70 HP and consume one med patch.
+- **Extract Now** ends the optional boss fight and keeps already-settled extraction rewards. It does not reroll the raid or award a boss kill. Raids with an already-resolved boss kill or a failed extraction skip optional combat.
+- Raid result cards group duplicate loot stacks, prioritize rare drops, show item totals and final HP, and provide Inventory, History, Boss Roster, map-specific Mastery, and Supplies shortcuts.
+- `/bosses` includes a selector for every existing boss's traits, counter approaches, HP phases, possible gear drops, and your kill, streak, intel, heart-upgrade, and alternate-form progress.
+- Invalid loadouts are rejected before route decisions. Decision buttons are restricted to the deployed player; expired controls receive a private response.
+- `npm run test:runtime:raid-qol` checks combat, every boss's phase thresholds and intel card limits, loot summaries, and mocked Discord battle interactions without logging in or writing player data.
+
+### VPS Update
+Run from the existing bot repository on the VPS. Keep the current `.env` and `src/data` files. A fast-forward pull stops on conflicting local changes; resolve those without discarding live player data.
+
+```bash
+set -e
+git pull --ff-only origin main
+npm install --include=dev
+npm run verify:all
+npm run restart:pm2
+npx pm2 save
+npx pm2 logs titan-raid-bot --lines 50 --nostream
+```
+
+The verification gate builds `dist` before PM2 restarts `titan-raid-bot`. Check the logs for successful login and command registration.
+
 ## Operations and Reliability
 - Optional webhook alerts:
    - Set `OPS_ALERT_WEBHOOK_URL` in `.env` to receive critical runtime alerts (login failure, uncaught exception, unhandled rejection).

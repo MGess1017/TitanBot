@@ -1,8 +1,24 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ARMOR_IDS = exports.WEAPON_IDS = exports.ULTRA_RARE_COLLECTIBLE_IDS = exports.COLLECTIBLE_ITEM_IDS = exports.SHOP_ITEMS = exports.ITEM_DEFS = exports.BOSS_HEART_IDS = exports.BOSS_HEART_DEFS = exports.COLLECTIBLE_FIXED_VENDOR_PRICE = void 0;
+exports.ARMOR_IDS = exports.WEAPON_IDS = exports.ULTRA_RARE_COLLECTIBLE_IDS = exports.COLLECTIBLE_ITEM_IDS = exports.SHOP_ITEMS = exports.ITEM_DEFS = exports.BOSS_HEART_IDS = exports.BOSS_HEART_DEFS = exports.VENDOR_SELL_PRICE_OVERRIDES = exports.COLLECTIBLE_FIXED_VENDOR_PRICE = void 0;
 exports.getVendorSellPrice = getVendorSellPrice;
 exports.COLLECTIBLE_FIXED_VENDOR_PRICE = 100000000;
+exports.VENDOR_SELL_PRICE_OVERRIDES = {
+    collector_ember_contract: 25000,
+    collector_sable_vault_coin: 50000,
+    collector_nullglass_eye: 75000,
+    collector_warlock_seal: 100000,
+    collector_bloodmoon_deed: 150000,
+    collector_abyss_ledger: 250000,
+    collector_void_saint_relic: 400000,
+    collector_starless_codex: 650000,
+    collector_titan_vault_core: 1000000,
+    collector_eclipse_vault_deed: 10000000,
+    collector_void_emperor_crown: 25000000,
+    collector_abyssal_world_key: 50000000,
+    collector_black_sun_heart: 75000000,
+    collector_eternity_contract: 100000000
+};
 exports.BOSS_HEART_DEFS = {
     "The Grave Warden": {
         id: "heart_grave_warden",
@@ -104,6 +120,20 @@ exports.ITEM_DEFS = {
     collector_omega_reliquary: { id: "collector_omega_reliquary", name: "Omega Reliquary", desc: "Extremely rare collectible reliquary once held by sovereign war priests. Vendor payout is fixed at 100,000,000 FN Token$.", rarity: "mythic", price: 1, kind: "collectible" },
     collector_paradox_shard: { id: "collector_paradox_shard", name: "Paradox Shard", desc: "Extremely rare collectible paradox crystal with unstable temporal signatures. Vendor payout is fixed at 100,000,000 FN Token$.", rarity: "mythic", price: 1, kind: "collectible" },
     collector_blackstar_diadem: { id: "collector_blackstar_diadem", name: "Blackstar Diadem", desc: "Extremely rare collectible diadem from the deepest collapsed citadels. Vendor payout is fixed at 100,000,000 FN Token$.", rarity: "mythic", price: 1, kind: "collectible" },
+    collector_ember_contract: { id: "collector_ember_contract", name: "Ember Contract", desc: "Rare sealed bounty contract with a fixed vendor payout of 25,000 FN Token$.", rarity: "rare", price: 25000, kind: "collectible" },
+    collector_sable_vault_coin: { id: "collector_sable_vault_coin", name: "Sable Vault Coin", desc: "Rare black-mint vault coin with a fixed vendor payout of 50,000 FN Token$.", rarity: "rare", price: 50000, kind: "collectible" },
+    collector_nullglass_eye: { id: "collector_nullglass_eye", name: "Nullglass Eye", desc: "Legendary surveillance relic with a fixed vendor payout of 75,000 FN Token$.", rarity: "legendary", price: 75000, kind: "collectible" },
+    collector_warlock_seal: { id: "collector_warlock_seal", name: "Warlock Seal", desc: "Legendary command sigil with a fixed vendor payout of 100,000 FN Token$.", rarity: "legendary", price: 100000, kind: "collectible" },
+    collector_bloodmoon_deed: { id: "collector_bloodmoon_deed", name: "Bloodmoon Deed", desc: "Legendary forbidden land deed with a fixed vendor payout of 150,000 FN Token$.", rarity: "legendary", price: 150000, kind: "collectible" },
+    collector_abyss_ledger: { id: "collector_abyss_ledger", name: "Abyss Ledger", desc: "Mythic black-market ledger with a fixed vendor payout of 250,000 FN Token$.", rarity: "mythic", price: 250000, kind: "collectible" },
+    collector_void_saint_relic: { id: "collector_void_saint_relic", name: "Void Saint Relic", desc: "Super-rare mythic shrine relic with a fixed vendor payout of 400,000 FN Token$.", rarity: "mythic", price: 400000, kind: "collectible" },
+    collector_starless_codex: { id: "collector_starless_codex", name: "Starless Codex", desc: "Super-rare mythic codex with a fixed vendor payout of 650,000 FN Token$.", rarity: "mythic", price: 650000, kind: "collectible" },
+    collector_titan_vault_core: { id: "collector_titan_vault_core", name: "Titan Vault Core", desc: "Super-rare apex vault core with a fixed vendor payout of 1,000,000 FN Token$.", rarity: "mythic", price: 1000000, kind: "collectible" },
+    collector_eclipse_vault_deed: { id: "collector_eclipse_vault_deed", name: "Eclipse Vault Deed", desc: "Extremely rare vault deed with a fixed vendor payout of 10,000,000 FN Token$.", rarity: "mythic", price: 10000000, kind: "collectible" },
+    collector_void_emperor_crown: { id: "collector_void_emperor_crown", name: "Void Emperor Crown", desc: "Extremely rare sovereign crown with a fixed vendor payout of 25,000,000 FN Token$.", rarity: "mythic", price: 25000000, kind: "collectible" },
+    collector_abyssal_world_key: { id: "collector_abyssal_world_key", name: "Abyssal World Key", desc: "Extremely rare world-key relic with a fixed vendor payout of 50,000,000 FN Token$.", rarity: "mythic", price: 50000000, kind: "collectible" },
+    collector_black_sun_heart: { id: "collector_black_sun_heart", name: "Black Sun Heart", desc: "Extremely rare stellar relic with a fixed vendor payout of 75,000,000 FN Token$.", rarity: "mythic", price: 75000000, kind: "collectible" },
+    collector_eternity_contract: { id: "collector_eternity_contract", name: "Eternity Contract", desc: "Extremely rare immortal bounty contract with a fixed vendor payout of 100,000,000 FN Token$.", rarity: "mythic", price: 100000000, kind: "collectible" },
     data_shard: { id: "data_shard", name: "Data Shard", desc: "Compact raid intel slice with a reliable vendor floor.", rarity: "uncommon", price: 140, kind: "intel" },
     intel_cache: { id: "intel_cache", name: "Intel Cache", desc: "Recovered command cache with actionable raid information.", rarity: "rare", price: 220, kind: "intel" },
     blacksite_map: { id: "blacksite_map", name: "Blacksite Map", desc: "Elite intel map pointing at hidden cache routes.", rarity: "legendary", price: 520, kind: "intel" },
@@ -119,6 +149,13 @@ exports.ITEM_DEFS = {
     power_cell: { id: "power_cell", name: "Power Cell", desc: "Portable energy cell used in advanced systems and salvage chains.", rarity: "uncommon", price: 96, kind: "module" },
     signal_array: { id: "signal_array", name: "Signal Array", desc: "High-grade relay module recovered from command tech.", rarity: "rare", price: 310, kind: "module" },
     vault_keycard: { id: "vault_keycard", name: "Vault Keycard", desc: "Restricted access card used for sealed vault logistics.", rarity: "epic", price: 360, kind: "key" },
+    rail_barrel: { id: "rail_barrel", name: "Rail Barrel", desc: "Raid-only precision barrel used to assemble Rail Sniper platforms.", rarity: "legendary", price: 1800, kind: "module" },
+    plasma_focusing_lens: { id: "plasma_focusing_lens", name: "Plasma Focusing Lens", desc: "Raid-only optic core used to assemble Plasma Carbines.", rarity: "epic", price: 1250, kind: "module" },
+    reactor_edge_core: { id: "reactor_edge_core", name: "Reactor Edge Core", desc: "Drop-only blade core used to forge Reactor Blade variants.", rarity: "legendary", price: 2400, kind: "module" },
+    nullburst_chamber: { id: "nullburst_chamber", name: "Nullburst Chamber", desc: "Exclusive boss-drop chamber used for Nullburst Launcher assembly.", rarity: "mythic", price: 5200, kind: "module" },
+    eclipse_blade_fragment: { id: "eclipse_blade_fragment", name: "Eclipse Blade Fragment", desc: "Exclusive deep-map fragment used to craft Eclipse Glaives.", rarity: "mythic", price: 7600, kind: "module" },
+    demoncore_shaft: { id: "demoncore_shaft", name: "Demoncore Shaft", desc: "Exclusive boss-forged haft used to craft Demoncore Lances.", rarity: "mythic", price: 9000, kind: "module" },
+    chaos_splinter: { id: "chaos_splinter", name: "Chaos Splinter", desc: "Extremely rare Wizard-touched weapon part required for Chaos Staff construction.", rarity: "mythic", price: 18500, kind: "module" },
     boneway_key: { id: "boneway_key", name: "Boneway Key", desc: "Mythic ossuary key that can expose a hidden Catacomb Smuggler extraction.", rarity: "mythic", price: 18500, kind: "key" },
     null_route_cipher: { id: "null_route_cipher", name: "Null Route Cipher", desc: "Mythic blacksite sequence capable of stabilizing a hidden rift extraction.", rarity: "mythic", price: 24000, kind: "intel" },
     sovereign_evac_transponder: { id: "sovereign_evac_transponder", name: "Sovereign Evac Transponder", desc: "Mythic command credential for dormant high-security evacuation lifts.", rarity: "mythic", price: 32000, kind: "key" },
@@ -211,6 +248,14 @@ exports.ITEM_DEFS = {
     enhanced_reactor_blade: { id: "enhanced_reactor_blade", name: "Enhanced Reactor Blade", desc: "Refined reactor edge with superior close-quarter finish rate.", rarity: "mythic", price: 4360, kind: "weapon", raidAttack: 0.108 },
     enhanced_nullburst_launcher: { id: "enhanced_nullburst_launcher", name: "Enhanced Nullburst Launcher", desc: "Apex-enhanced anomaly launcher with extreme breach output.", rarity: "mythic", price: 4720, kind: "weapon", raidAttack: 0.113 },
     enhanced_starforged_reaper: { id: "enhanced_starforged_reaper", name: "Enhanced Starforged Reaper", desc: "Ultra-enhanced apex weapon with endgame raid dominance.", rarity: "mythic", price: 5400, kind: "weapon", raidAttack: 0.12 },
+    emberfall_carbine: { id: "emberfall_carbine", name: "Emberfall Carbine", desc: "Raid-found rare carbine scaled for aggressive heat and ash routes.", rarity: "rare", price: 1350, kind: "weapon", raidAttack: 0.052 },
+    gravecoil_rifle: { id: "gravecoil_rifle", name: "Gravecoil Rifle", desc: "Raid-found rare coil rifle with reliable boss-pressure control.", rarity: "rare", price: 1580, kind: "weapon", raidAttack: 0.057 },
+    voidspike_halberd: { id: "voidspike_halberd", name: "Voidspike Halberd", desc: "Legendary raid polearm scaled for elite breach finishes.", rarity: "legendary", price: 5200, kind: "weapon", raidAttack: 0.093 },
+    bloodmoon_arbalest: { id: "bloodmoon_arbalest", name: "Bloodmoon Arbalest", desc: "Legendary boss-hunter arbalest found in bloodmoon siege routes.", rarity: "legendary", price: 6800, kind: "weapon", raidAttack: 0.104 },
+    nullstorm_cannon: { id: "nullstorm_cannon", name: "Nullstorm Cannon", desc: "Mythic raid cannon with scaled anomaly burst output.", rarity: "mythic", price: 18500, kind: "weapon", raidAttack: 0.135 },
+    abyssal_railgun: { id: "abyssal_railgun", name: "Abyssal Railgun", desc: "Mythic deep-map railgun that punches through fortified boss phases.", rarity: "mythic", price: 26000, kind: "weapon", raidAttack: 0.148 },
+    black_sun_lance: { id: "black_sun_lance", name: "Black Sun Lance", desc: "Super-rare eclipse weapon with apex boss conversion power.", rarity: "mythic", price: 64000, kind: "weapon", raidAttack: 0.17 },
+    titanbreaker_maul: { id: "titanbreaker_maul", name: "Titanbreaker Maul", desc: "Super-rare raid-only maul scaled for the hardest boss encounters.", rarity: "mythic", price: 90000, kind: "weapon", raidAttack: 0.185 },
     field_vest: { id: "field_vest", name: "Field Vest", desc: "Basic armor reducing raid losses.", rarity: "common", price: 65, kind: "armor", raidDefense: 0.01 },
     tactical_armor: { id: "tactical_armor", name: "Tactical Armor", desc: "Balanced armor with durability.", rarity: "uncommon", price: 180, kind: "armor", raidDefense: 0.018 },
     guardian_plate: { id: "guardian_plate", name: "Guardian Plate", desc: "Advanced armor reducing failure penalty.", rarity: "rare", price: 520, kind: "armor", raidDefense: 0.03 },
@@ -271,16 +316,42 @@ exports.COLLECTIBLE_ITEM_IDS = [
     "collector_eternal_halo",
     "collector_omega_reliquary",
     "collector_paradox_shard",
-    "collector_blackstar_diadem"
+    "collector_blackstar_diadem",
+    "collector_ember_contract",
+    "collector_sable_vault_coin",
+    "collector_nullglass_eye",
+    "collector_warlock_seal",
+    "collector_bloodmoon_deed",
+    "collector_abyss_ledger",
+    "collector_void_saint_relic",
+    "collector_starless_codex",
+    "collector_titan_vault_core",
+    "collector_eclipse_vault_deed",
+    "collector_void_emperor_crown",
+    "collector_abyssal_world_key",
+    "collector_black_sun_heart",
+    "collector_eternity_contract"
 ];
 exports.ULTRA_RARE_COLLECTIBLE_IDS = [
     "collector_eternal_halo",
     "collector_omega_reliquary",
     "collector_paradox_shard",
-    "collector_blackstar_diadem"
+    "collector_blackstar_diadem",
+    "collector_abyss_ledger",
+    "collector_void_saint_relic",
+    "collector_starless_codex",
+    "collector_titan_vault_core",
+    "collector_eclipse_vault_deed",
+    "collector_void_emperor_crown",
+    "collector_abyssal_world_key",
+    "collector_black_sun_heart",
+    "collector_eternity_contract"
 ];
 const COLLECTIBLE_ITEM_ID_SET = new Set(exports.COLLECTIBLE_ITEM_IDS);
 function getVendorSellPrice(itemId) {
+    const override = exports.VENDOR_SELL_PRICE_OVERRIDES[itemId];
+    if (override)
+        return override;
     if (COLLECTIBLE_ITEM_ID_SET.has(itemId))
         return exports.COLLECTIBLE_FIXED_VENDOR_PRICE;
     const item = exports.ITEM_DEFS[itemId];
@@ -288,5 +359,5 @@ function getVendorSellPrice(itemId) {
         return 0;
     return Math.max(1, Math.floor(item.price * 0.6));
 }
-exports.WEAPON_IDS = ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade", "scrap_shotgun", "breach_pistol", "hush_repeater", "arc_rifle", "volt_smg", "dune_cutter", "widowmaker_dmr", "magma_caster", "echo_lancer", "grav_pike", "venom_flechette", "rift_carbine", "obsidian_repeater", "siege_cannon", "frostfang_rifle", "stormpiercer", "aurora_smg", "basilisk_dmr", "overclock_minigun", "nebula_glaive", "nullburst_launcher", "phantom_scythe", "sunflare_accelerator", "starforged_reaper", "enhanced_pulse_rifle", "enhanced_marksman_dmr", "enhanced_thermal_lance", "enhanced_plasma_carbine", "enhanced_rail_sniper", "enhanced_reactor_blade", "enhanced_nullburst_launcher", "enhanced_starforged_reaper", "acid_spitter", "caustic_reaper", "hellhound_carbine", "bloodfang_blade", "doom_scepter", "widow_arc", "chaos_staff", "reality_breaker", "eclipse_glaive", "demoncore_lance"];
+exports.WEAPON_IDS = ["rust_blade", "combat_knife", "scav_smg", "pulse_rifle", "marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade", "scrap_shotgun", "breach_pistol", "hush_repeater", "arc_rifle", "volt_smg", "dune_cutter", "widowmaker_dmr", "magma_caster", "echo_lancer", "grav_pike", "venom_flechette", "rift_carbine", "obsidian_repeater", "siege_cannon", "frostfang_rifle", "stormpiercer", "aurora_smg", "basilisk_dmr", "overclock_minigun", "nebula_glaive", "nullburst_launcher", "phantom_scythe", "sunflare_accelerator", "starforged_reaper", "enhanced_pulse_rifle", "enhanced_marksman_dmr", "enhanced_thermal_lance", "enhanced_plasma_carbine", "enhanced_rail_sniper", "enhanced_reactor_blade", "enhanced_nullburst_launcher", "enhanced_starforged_reaper", "emberfall_carbine", "gravecoil_rifle", "voidspike_halberd", "bloodmoon_arbalest", "nullstorm_cannon", "abyssal_railgun", "black_sun_lance", "titanbreaker_maul", "acid_spitter", "caustic_reaper", "hellhound_carbine", "bloodfang_blade", "doom_scepter", "widow_arc", "chaos_staff", "reality_breaker", "eclipse_glaive", "demoncore_lance"];
 exports.ARMOR_IDS = ["field_vest", "scout_weave", "tactical_armor", "guardian_plate", "storm_shell", "shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace", "patchwork_rig", "breacher_webbing", "fogrunner_wrap", "arcskin_vest", "warden_harness", "emberguard_mail", "coastwatch_shell", "nomad_carbon", "nightglass_cloak", "bulwark_plating", "shockframe_suit", "gravebark_mesh", "riftguard_coat", "bastion_weave", "siegebreaker_plate", "hollowbastion", "stormforged_aegis", "cryptsteel_exoshell", "leviathan_shell", "tidelock_panoply", "dreadnought_cuirass", "voidscale_regalia", "eclipse_ward", "sovereign_bastion", "acidbound_shell", "venomward_suit", "hellhide_harness", "doomplate_carapace", "crownfall_raiment", "chaos_mantle", "apocalypse_aegis", "eclipse_bulwark", "demoncore_mail", "wraithveil_hood"];

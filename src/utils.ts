@@ -435,10 +435,36 @@ function shouldSkipPointsPersistence(): boolean {
     return process.env.RUNTIME_TEST_NO_POINTS_SAVE === "1";
 }
 
+let pointsSaveBatchDepth = 0;
+let pointsSaveBatchDirty = false;
+let deferredPointsSaves = 0;
+
 export function savePoints(): void {
+    if (pointsSaveBatchDepth > 0) {
+        pointsSaveBatchDirty = true;
+        deferredPointsSaves += 1;
+        return;
+    }
     // Runtime tests can disable disk writes to avoid polluting live JSON stores.
     if (shouldSkipPointsPersistence()) return;
     writePointsFileAtomic({ users: points });
+}
+
+export function withDeferredPointsSave<T>(fn: () => T): T {
+    pointsSaveBatchDepth += 1;
+    try {
+        return fn();
+    } finally {
+        pointsSaveBatchDepth -= 1;
+        if (pointsSaveBatchDepth === 0 && pointsSaveBatchDirty) {
+            pointsSaveBatchDirty = false;
+            savePoints();
+        }
+    }
+}
+
+export function getPointsSaveDiagnostics(): { batchDepth: number; batchDirty: boolean; deferredSaves: number } {
+    return { batchDepth: pointsSaveBatchDepth, batchDirty: pointsSaveBatchDirty, deferredSaves: deferredPointsSaves };
 }
 
 export type XpPersistenceSnapshot = {

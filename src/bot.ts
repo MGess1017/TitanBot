@@ -79,6 +79,7 @@ import {
     savePoints,
     transferWalletTokens,
     withdrawFromBank,
+    withDeferredPointsSave,
     XP_LEVEL_THRESHOLDS,
     xpBar
 } from "./utils";
@@ -112,10 +113,11 @@ import { ARMOR_IDS, BOSS_HEART_DEFS, BOSS_HEART_IDS, COLLECTIBLE_ITEM_IDS, getVe
 import { awardBossHeartAchievement, getUnlockedBossHeartNames } from "./game/bossHearts";
 import { getBossPortraitUrl } from "./game/bossPortraits";
 import { CRAFT_RECIPES, craftItem, dismantleGear, getDynamicVendorPrice, insureGear, repairGear, resolveGearLoss, saveLoadout, upgradeGear } from "./game/gearEconomy";
-import { buildBossBattlePayload, buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildSellPickerPayload, buildShopPayload, buildTradeActionPayload, getSellableInventoryOptions, GEAR_UI_IDS, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS, rarityBadge } from "./game/payloads";
+import { buildBossBattlePayload, buildBossIntelPayload, buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildSellPickerPayload, buildShopPayload, buildTradeActionPayload, getSellableInventoryOptions, GEAR_UI_IDS, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS, rarityBadge } from "./game/payloads";
 import { getRaidOutcome, getRaidRewards } from "./game/raid";
 import * as RaidDomain from "./raid/domain";
 import * as RaidRuntime from "./raid/runtime";
+import { getBossBattlePhase, isBossBattleFinished, resolveBossTurn, type BossAction, type BossBattleState } from "./raid/combat";
 import { buildTicketTranscriptStub, exportTicketTranscript } from "./services/ticketTranscript";
 import type { TicketTranscriptStub } from "./services/ticketTranscript";
 import { buildTicketCommandHandlers } from "./commands/ticketCommands";
@@ -5709,7 +5711,11 @@ function useItem(userId: string, itemId: string, quantity: number): { error?: st
     return { error: "Use action failed safely; item was restored." };
 }
 
-function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: string | null, selectedWeaponId?: string | null, selectedArmorId?: string | null, approachRaw?: string | null, extractionRoute?: RaidDomain.RareExtractionRoute | null, branchDecision: RaidDomain.RaidBranchDecisionKey = "stay_course"): {
+function performRaid(...args: Parameters<typeof performRaidUnbatched>): ReturnType<typeof performRaidUnbatched> {
+    return withDeferredPointsSave(() => performRaidUnbatched(...args));
+}
+
+function performRaidUnbatched(userId: string, bet: number, tension: string, mapKeyRaw?: string | null, selectedWeaponId?: string | null, selectedArmorId?: string | null, approachRaw?: string | null, extractionRoute?: RaidDomain.RareExtractionRoute | null, branchDecision: RaidDomain.RaidBranchDecisionKey = "stay_course"): {
     error?: string;
     success?: boolean;
     net?: number;
@@ -6139,6 +6145,24 @@ function performRaid(userId: string, bet: number, tension: string, mapKeyRaw?: s
     };
 }
 
+const activeRaidDecisions = new Map<string, { userId: string; ids: Set<string> }>();
+
+async function awaitRaidDecision(interaction: ChatInputCommandInteraction, message: Awaited<ReturnType<ChatInputCommandInteraction["fetchReply"]>>, ids: string[], time: number) {
+    const validIds = new Set(ids);
+    activeRaidDecisions.set(message.id, { userId: interaction.user.id, ids: validIds });
+    try {
+        const selected = await message.awaitMessageComponent({
+            componentType: ComponentType.Button,
+            time,
+            filter: candidate => candidate.user.id === interaction.user.id && validIds.has(candidate.customId)
+        }).catch(() => null);
+        if (selected) await selected.deferUpdate().catch(() => undefined);
+        return selected;
+    } finally {
+        activeRaidDecisions.delete(message.id);
+    }
+}
+
 async function resolveRareRouteDecision(interaction: ChatInputCommandInteraction, route: RaidDomain.RareExtractionRoute, mapLabel: string): Promise<RaidDomain.RaidBranchDecisionKey> {
     const payload = JSON.parse(buildRareRouteDecisionPayload({
         route,
@@ -6149,14 +6173,8 @@ async function resolveRareRouteDecision(interaction: ChatInputCommandInteraction
         embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
         components: payload.components
     });
-    const validIds = new Set<string>(Object.values(RAID_ENCOUNTER_IDS));
-    const selected = await message.awaitMessageComponent({
-        componentType: ComponentType.Button,
-        time: 20_000,
-        filter: candidate => candidate.user.id === interaction.user.id && validIds.has(candidate.customId)
-    }).catch(() => null);
+    const selected = await awaitRaidDecision(interaction, message, [RAID_ENCOUNTER_IDS.hiddenExit, RAID_ENCOUNTER_IDS.routeCache, RAID_ENCOUNTER_IDS.stayCourse], 20_000);
     if (!selected) return "stay_course";
-    await selected.deferUpdate().catch(() => undefined);
     if (selected.customId === RAID_ENCOUNTER_IDS.hiddenExit) return "hidden_exit";
     if (selected.customId === RAID_ENCOUNTER_IDS.routeCache) return "route_cache";
     return "stay_course";
@@ -6168,24 +6186,21 @@ async function resolveRaidBranchDecision(interaction: ChatInputCommandInteractio
         embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
         components: payload.components
     });
-    const selected = await message.awaitMessageComponent({
-        componentType: ComponentType.Button,
-        time: 15_000,
-        filter: candidate => candidate.user.id === interaction.user.id && [RAID_ENCOUNTER_IDS.securePerimeter, RAID_ENCOUNTER_IDS.pushObjective, RAID_ENCOUNTER_IDS.stayCourse].includes(candidate.customId as typeof RAID_ENCOUNTER_IDS.securePerimeter)
-    }).catch(() => null);
+    const selected = await awaitRaidDecision(interaction, message, [RAID_ENCOUNTER_IDS.securePerimeter, RAID_ENCOUNTER_IDS.pushObjective, RAID_ENCOUNTER_IDS.stayCourse], 15_000);
     if (!selected) return "stay_course";
-    await selected.deferUpdate().catch(() => undefined);
     if (selected.customId === RAID_ENCOUNTER_IDS.securePerimeter) return "secure_perimeter";
     if (selected.customId === RAID_ENCOUNTER_IDS.pushObjective) return "push_objective";
     return "stay_course";
 }
 
 async function presentBossBattle(interaction: ChatInputCommandInteraction, result: {
+    success?: boolean;
     bossName?: string;
     bossTitle?: string;
     bossImageUrl?: string;
     bossFerocity?: number;
     bossTraitLabels?: string[];
+    bossCounteredTraits?: string[];
     bossPhaseNames?: string[];
     bossCurrentPhase?: string;
     bossDefeated?: boolean;
@@ -6205,20 +6220,17 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
     const pmcHpMax = result.pmcHpMax;
     const phaseCount = result.bossPhaseNames?.length || 3;
     const totalTurns = Math.max(6, Math.min(8, phaseCount + 4));
-    let action: "attack" | "defend" | "heal" | "scan" | undefined;
-    let battleBossHp = bossHpMax;
-    let battlePmcHp = pmcHpMax;
-    let rage = 0;
-    let armorBreak = 0;
-    let specialAttack: string | undefined;
-    let scanRevealed = false;
-    const actionIds = new Map<string, "attack" | "defend" | "heal" | "scan">([
+    let action: BossAction | undefined;
+    let state: BossBattleState = { turn: 0, bossHp: bossHpMax, pmcHp: pmcHpMax, rage: 0, armorBreak: 0, scanRevealed: false };
+    let battleLog: string[] = [];
+    const actionIds = new Map<string, BossAction>([
         [RAID_ENCOUNTER_IDS.attack, "attack"],
         [RAID_ENCOUNTER_IDS.defend, "defend"],
         [RAID_ENCOUNTER_IDS.heal, "heal"],
         [RAID_ENCOUNTER_IDS.scan, "scan"]
     ]);
-    const renderFrame = async (turn: number, animationFrame: number, interactive: boolean): Promise<boolean> => {
+    const renderFrame = async (finished: boolean) => {
+        const phase = getBossBattlePhase(bossName, state.bossHp, bossHpMax);
         const payload = JSON.parse(buildBossBattlePayload({
             bossName,
             bossTitle: result.bossTitle,
@@ -6226,8 +6238,10 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
             bossFerocity: result.bossFerocity,
             bossTraitLabels: result.bossTraitLabels,
             bossPhaseNames: result.bossPhaseNames,
-            bossCurrentPhase: result.bossCurrentPhase,
-            bossDefeated: result.bossDefeated,
+            bossCurrentPhase: phase.name,
+            phaseMechanic: phase.mechanic,
+            counteredTraits: result.bossCounteredTraits,
+            bossDefeated: state.bossHp <= 0,
             bossKillChance: result.bossKillChance,
             bossHpMax,
             bossHpFinal: result.bossHpRemaining || 0,
@@ -6237,77 +6251,59 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
             pmcHpFinal: result.pmcHpRemaining || 0,
             weaponName: result.selectedWeaponName,
             armorName: result.selectedArmorName,
-            turn,
+            turn: state.turn,
             totalTurns,
             action,
-            animationFrame,
-            interactive,
-            bossHpCurrent: battleBossHp,
-            pmcHpCurrent: battlePmcHp,
-            rage,
-            armorBreak,
-            specialAttack,
-            scanRevealed
+            animationFrame: state.turn === 0 ? 0 : 3,
+            interactive: !finished,
+            finished,
+            bossHpCurrent: state.bossHp,
+            pmcHpCurrent: state.pmcHp,
+            rage: state.rage,
+            armorBreak: state.armorBreak,
+            specialAttack: state.rage >= 60 ? "Countercharge imminent" : undefined,
+            scanRevealed: state.scanRevealed,
+            medPatchCount: getInventoryCount(interaction.user.id, "med_patch"),
+            decisionDeadline: finished ? undefined : Date.now() + 8_000,
+            battleLog
         }));
-        const displayed = await interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components })
-            .then(() => true)
-            .catch(() => false);
-        return displayed;
+        return interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components }).catch(() => null);
     };
-    for (let entranceFrame = 0; entranceFrame < 4; entranceFrame++) {
-        if (!await renderFrame(0, entranceFrame, entranceFrame === 3)) return null;
-        if (entranceFrame < 3) await new Promise(resolve => setTimeout(resolve, 350));
+    if (result.bossDefeated || result.success === false) {
+        state.bossHp = result.bossHpRemaining ?? bossHpMax;
+        state.pmcHp = result.pmcHpRemaining ?? pmcHpMax;
+        await renderFrame(true);
+        return null;
     }
-    for (let turn = 0; turn <= totalTurns; turn++) {
-        if (turn > 0) {
-            if (!await renderFrame(turn, 1, false)) return null;
-            await new Promise(resolve => setTimeout(resolve, 300));
-            if (!await renderFrame(turn, 2, false)) return null;
-            await new Promise(resolve => setTimeout(resolve, 350));
-            if (!await renderFrame(turn, 3, turn < totalTurns)) return null;
+    while (!isBossBattleFinished(state, totalTurns)) {
+        const message = await renderFrame(false);
+        if (!message) return { defeated: state.bossHp <= 0, bossHp: state.bossHp, pmcHp: state.pmcHp, scanRevealed: state.scanRevealed };
+        const selected = await awaitRaidDecision(interaction, message, [...actionIds.keys(), RAID_ENCOUNTER_IDS.extract], 8_000);
+        if (selected?.customId === RAID_ENCOUNTER_IDS.extract) {
+            battleLog = ["Extraction chosen. Secured raid rewards retained."];
+            break;
         }
-        if (turn >= totalTurns) return { defeated: battleBossHp <= 0, bossHp: battleBossHp, pmcHp: battlePmcHp, scanRevealed };
-        if (turn < totalTurns) {
-            const message = await interaction.fetchReply().catch(() => null);
-            const selected = message && "awaitMessageComponent" in message
-                ? await message.awaitMessageComponent({
-                    componentType: ComponentType.Button,
-                    time: 8_000,
-                    filter: candidate => candidate.user.id === interaction.user.id && actionIds.has(candidate.customId)
-                }).catch(() => null)
-                : null;
-            action = selected ? actionIds.get(selected.customId) : "attack";
-            if (selected) await selected.deferUpdate().catch(() => undefined);
-            const damageRoll = 30 + Math.floor(Math.random() * 36);
-            if (action === "attack") {
-                battleBossHp = Math.max(0, battleBossHp - damageRoll - Math.floor(armorBreak * 0.12));
-                armorBreak = Math.min(100, armorBreak + 18);
-                rage = Math.min(100, rage + 10);
-            } else if (action === "defend") {
-                battlePmcHp = Math.max(0, battlePmcHp - Math.max(4, Math.floor(damageRoll * 0.28)));
-                rage = Math.max(0, rage - 14);
-            } else if (action === "heal") {
-                if (getInventoryCount(interaction.user.id, "med_patch") > 0) {
-                    removeInventoryItem(interaction.user.id, "med_patch", 1);
-                    battlePmcHp = Math.min(pmcHpMax, battlePmcHp + 70);
-                } else {
-                    battlePmcHp = Math.max(0, battlePmcHp - Math.floor(damageRoll * 0.65));
-                }
-            } else if (action === "scan") {
-                scanRevealed = true;
-                armorBreak = Math.min(100, armorBreak + 8);
-            }
-            specialAttack = rage >= 70 ? "Infernal Countercharge" : undefined;
-            if (specialAttack && action !== "defend") {
-                battlePmcHp = Math.max(0, battlePmcHp - Math.floor(12 + rage * 0.16));
-                rage = Math.min(100, rage + 6);
-            }
-        }
+        action = selected ? actionIds.get(selected.customId) || "attack" : "attack";
+        const resolved = resolveBossTurn({ state, action, totalTurns, pmcHpMax, medPatchCount: getInventoryCount(interaction.user.id, "med_patch") });
+        if (resolved.medPatchesUsed) removeInventoryItem(interaction.user.id, "med_patch", resolved.medPatchesUsed);
+        state = resolved.state;
+        battleLog = [...(!selected ? ["Action timed out. Auto-attack selected."] : []), ...resolved.log];
     }
-    return { defeated: battleBossHp <= 0, bossHp: battleBossHp, pmcHp: battlePmcHp, scanRevealed };
+    await renderFrame(true);
+    return { defeated: state.bossHp <= 0, bossHp: state.bossHp, pmcHp: state.pmcHp, scanRevealed: state.scanRevealed };
 }
 
-function reconcileBossBattleOutcome(userId: string, mapCfg: RaidDomain.RaidMapConfig, result: ReturnType<typeof performRaid>, battle: { defeated: boolean; bossHp: number; pmcHp: number; scanRevealed: boolean }): void {
+function reconcileBossBattleOutcome(...args: Parameters<typeof reconcileBossBattleOutcomeUnbatched>): ReturnType<typeof reconcileBossBattleOutcomeUnbatched> {
+    return withDeferredPointsSave(() => reconcileBossBattleOutcomeUnbatched(...args));
+}
+
+function reconcileBossBattleOutcomeUnbatched(userId: string, mapCfg: RaidDomain.RaidMapConfig, result: ReturnType<typeof performRaid>, battle: { defeated: boolean; bossHp: number; pmcHp: number; scanRevealed: boolean }): void {
+    result.bossHpRemaining = battle.bossHp;
+    result.pmcHpRemaining = battle.pmcHp;
+    if (result.bossName && result.bossHpMax) {
+        result.bossCurrentPhase = getBossBattlePhase(result.bossName, battle.bossHp, result.bossHpMax).name;
+        result.bossPhasesReached = RaidDomain.getBossCombatProfile(result.bossName).phases.filter(phase => battle.bossHp <= result.bossHpMax! * phase.thresholdPct / 100).length;
+    }
     if (!result.success || result.bossDefeated || !battle.defeated || !result.bossName) return;
     const user = ensureUser(userId);
     const bonusXp = Math.max(40, Math.floor((result.bossBonusXp || 40) * 1.1));
@@ -6330,6 +6326,11 @@ function reconcileBossBattleOutcome(userId: string, mapCfg: RaidDomain.RaidMapCo
     progress.bestStreak = Math.max(progress.bestStreak, progress.currentStreak);
     progress.heartUpgradeLevel = Math.min(3, Math.floor(progress.kills / 3));
     progress.alternateFormUnlocked = progress.kills >= 5;
+    result.bossCurrentStreak = progress.currentStreak;
+    result.bossBestStreak = progress.bestStreak;
+    result.bossIntelLevel = progress.intelLevel;
+    result.bossHeartUpgradeLevel = progress.heartUpgradeLevel;
+    result.bossAlternateFormUnlocked = progress.alternateFormUnlocked;
     const history = user.raidHistory[0];
     if (history && history.bossName === result.bossName) {
         history.bossDefeated = true;
@@ -6487,7 +6488,7 @@ function buildBossRosterPayload(): string {
     const embed = new EmbedBuilder()
         .setColor(0xd97706)
         .setTitle("👑 Raid Boss Roster")
-        .setDescription("Premium tactical index for all bosses, including home map, threat class, reward ranges, and rotation influence.")
+        .setDescription(`${RaidDomain.RAID_BOSS_ROSTER.length} bosses • Home territories and threat ratings`)
         .addFields(
             {
                 name: "Rotation Key",
@@ -6511,11 +6512,8 @@ function buildBossRosterPayload(): string {
         );
 
     const bossRows = RaidDomain.RAID_BOSS_ROSTER.map(boss => {
-        const combatProfile = RaidDomain.getBossCombatProfile(boss.name);
-        const traitLine = combatProfile.traits.slice(0, 2).map(key => RaidDomain.BOSS_TRAITS[key]?.label || key).join("/") || "standard";
-        const phaseLine = combatProfile.phases.slice(0, 3).map(phase => phase.name).join(" > ") || "Contact";
         const threat = boss.ferocity >= 2 ? "CAT" : boss.ferocity >= 1.7 ? "APX" : boss.ferocity >= 1.35 ? "BRT" : boss.ferocity >= 1 ? "ELT" : "VET";
-        return `${RaidDomain.RAID_MAP_SHORT_LABELS[boss.homeMapKey]} ${boss.name} (${threat} ${boss.ferocity.toFixed(2)}) | Rare ${(boss.rareDropChance * 100).toFixed(0)}% | ${traitLine} | ${phaseLine}`;
+        return `**${boss.name}** • ${threat} ${boss.ferocity.toFixed(2)}x\n${boss.homeMapLabel}`;
     });
 
     chunkDetailLines(bossRows, 7).forEach((chunk, index) => {
@@ -6526,7 +6524,13 @@ function buildBossRosterPayload(): string {
         });
     });
 
-    return JSON.stringify({ embed: embed.toJSON() });
+    const selector = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId(RAID_RESULT_ACTION_IDS.bossIntel)
+            .setPlaceholder("Boss intel and personal progress")
+            .addOptions(RaidDomain.RAID_BOSS_ROSTER.map(boss => ({ label: boss.name, value: boss.name, description: `${boss.homeMapLabel} • ${boss.ferocity.toFixed(2)}x ferocity` })))
+    );
+    return JSON.stringify({ embed: embed.toJSON(), components: [selector.toJSON()] });
 }
 
 function buildLeaderboardPayload(): string {
@@ -10786,9 +10790,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const approachRaw = interaction.options.getString("approach") || "balanced";
         const mapCfg = RaidDomain.resolveRaidMap(mapRaw);
         if (!["low", "medium", "high"].includes(tension)) return "Tension must be low, medium, or high.";
-        if (Date.now() - userState.lastRaid < RAID_COOLDOWN_MS) return "Raid systems are still recharging.";
+        if (Date.now() - userState.lastRaid < RAID_COOLDOWN_MS) return `Raid ready <t:${Math.ceil((userState.lastRaid + RAID_COOLDOWN_MS) / 1000)}:R>.`;
         if (bet < MIN_RAID_BET) return `Minimum raid bet is ${MIN_RAID_BET} FN Token$.`;
-        if (!canAffordTokens(userId, bet)) return "Not enough FN Token$.";
+        if (!canAffordTokens(userId, bet)) return `Not enough FN Token$. Wallet: ${getTokens(userId).toLocaleString()} • Required: ${bet.toLocaleString()}.`;
+        const loadoutCheck = RaidRuntime.getRaidLoadoutBonus({ userId, condition: RaidDomain.RAID_CONDITIONS[0], selectedWeaponId, selectedArmorId, getInventoryCount, getBestOwnedGear });
+        if (loadoutCheck.error) return loadoutCheck.error;
 
         activeRaidEncounters.add(userId);
         try {
@@ -10802,9 +10808,9 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             const result = performRaid(userId, bet, tension, mapRaw, selectedWeaponId, selectedArmorId, approachRaw, rareRoute, branchDecision);
             if (result.error) return result.error;
             if (result.bossSpawned) {
-                            const battle = await presentBossBattle(interaction, result);
-                            if (battle) reconcileBossBattleOutcome(userId, mapCfg, result, battle);
-                        }
+                const battle = await presentBossBattle(interaction, result);
+                if (battle) reconcileBossBattleOutcome(userId, mapCfg, result, battle);
+            }
             const [tensionLabel] = (result.tension || tension).split(" | ");
             recordRaidTelemetry({
                 mapLabel: result.mapLabel || mapCfg.label,
@@ -12098,10 +12104,41 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
+    if (interaction.isButton() && Object.values(RAID_ENCOUNTER_IDS).includes(interaction.customId as typeof RAID_ENCOUNTER_IDS.attack)) {
+        const decision = activeRaidDecisions.get(interaction.message.id);
+        const error = !decision || !decision.ids.has(interaction.customId)
+            ? "This raid decision has ended."
+            : decision.userId !== interaction.user.id
+                ? "Only the deployed PMC can choose this raid action."
+                : null;
+        if (error) await interaction.reply({ content: error, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === RAID_RESULT_ACTION_IDS.bossIntel) {
+        const bossName = interaction.values[0];
+        if (!RaidDomain.RAID_BOSS_ROSTER.some(boss => boss.name === bossName)) {
+            await interaction.reply({ content: "This boss is no longer available.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const payload = JSON.parse(buildBossIntelPayload({ bossName, progress: getBossProgressEntry(interaction.user.id, bossName) }));
+        await interaction.reply({ embeds: [embedFromPayload("bosses", payload.embed, interaction.user)], flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === RAID_RESULT_ACTION_IDS.supplies) {
+        const state = ensureUser(interaction.user.id);
+        const payload = JSON.parse(buildShopPayload({ shopItemIds: SHOP_ITEMS.filter(id => ITEM_DEFS[id]?.kind === "consumable"), inventory: state.inventory, wallet: getTokens(interaction.user.id) }));
+        await interaction.reply({ embeds: [embedFromPayload("shop", payload.embed, interaction.user)], components: payload.components || [], flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+
     if (interaction.isButton() && interaction.customId === RAID_RESULT_ACTION_IDS.inventory) {
-        const payload = JSON.parse(buildInventoryPayload({ inventory: ensureUser(interaction.user.id).inventory, wallet: getTokens(interaction.user.id) }));
+        const state = ensureUser(interaction.user.id);
+        const payload = JSON.parse(buildInventoryPayload({ inventory: state.inventory, wallet: getTokens(interaction.user.id), gearDurability: state.gearDurability, insuredGear: state.insuredGear }));
         await interaction.reply({
             embeds: [embedFromPayload("inventory", payload.embed, interaction.user)],
+            components: payload.components || [],
             flags: MessageFlags.Ephemeral
         }).catch(() => undefined);
         return;
@@ -12177,6 +12214,7 @@ client.on("interactionCreate", async interaction => {
         try {
             await interaction.reply({
                 embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
+                components: payload.components || [],
                 flags: MessageFlags.Ephemeral
             });
         } catch (error) {
@@ -12192,9 +12230,10 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
-    if (interaction.isButton() && interaction.customId === RAID_RESULT_ACTION_IDS.mastery) {
-        const latestMapKey = ensureUser(interaction.user.id).raidHistory[0]?.mapKey;
-        const payload = JSON.parse(buildMapMasteryPayload(interaction.user.id, latestMapKey));
+    if (interaction.isButton() && (interaction.customId === RAID_RESULT_ACTION_IDS.mastery || interaction.customId.startsWith(`${RAID_RESULT_ACTION_IDS.mastery}:`))) {
+        const selectedMapKey = interaction.customId.slice(RAID_RESULT_ACTION_IDS.mastery.length + 1);
+        const mapKey = Object.prototype.hasOwnProperty.call(RaidDomain.RAID_MAPS, selectedMapKey) ? selectedMapKey : ensureUser(interaction.user.id).raidHistory[0]?.mapKey;
+        const payload = JSON.parse(buildMapMasteryPayload(interaction.user.id, mapKey));
         await interaction.reply({
             embeds: [embedFromPayload("raidintel", payload.embed, interaction.user)],
             flags: MessageFlags.Ephemeral

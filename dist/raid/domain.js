@@ -12,6 +12,7 @@ exports.getMapReputationProgress = getMapReputationProgress;
 exports.calculateMapReputationGain = calculateMapReputationGain;
 exports.getBossCombatProfile = getBossCombatProfile;
 exports.getBossCombatModifiers = getBossCombatModifiers;
+exports.getBossWeaponDropWeight = getBossWeaponDropWeight;
 exports.isAdvancedRaidDifficulty = isAdvancedRaidDifficulty;
 exports.getRaidDifficultyIndex = getRaidDifficultyIndex;
 exports.getBossRotationWeight = getBossRotationWeight;
@@ -25,6 +26,7 @@ exports.rollBossVariant = rollBossVariant;
 exports.rollRaidXpGain = rollRaidXpGain;
 exports.getPmcXpGainScale = getPmcXpGainScale;
 exports.rollBossSuccessRewards = rollBossSuccessRewards;
+const catalog_1 = require("../game/catalog");
 exports.RAID_CONDITIONS = [
     { key: "storm", label: "Storm Front", description: "Visibility drops and extraction lanes are unstable.", successDelta: -0.03, tokenMultiplierDelta: 0.08, xpMultiplier: 1.1 },
     { key: "fog", label: "Dense Fog", description: "Long-range pressure is reduced, stealth routing improves.", successDelta: -0.01, tokenMultiplierDelta: 0.05, xpMultiplier: 1.06 },
@@ -178,6 +180,28 @@ exports.RAID_LOOT_TUNING_BY_DIFFICULTY = {
 function pickOne(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
 }
+function rarityDropScore(itemId) {
+    const rarity = String(catalog_1.ITEM_DEFS[itemId]?.rarity || "common").toLowerCase();
+    if (rarity === "mythic")
+        return 5;
+    if (rarity === "legendary")
+        return 3.25;
+    if (rarity === "epic")
+        return 2;
+    if (rarity === "rare")
+        return 1.25;
+    if (rarity === "uncommon")
+        return 0.75;
+    return 0.45;
+}
+function getBossWeaponDropWeight(itemId, difficulty) {
+    const difficultyIndex = getRaidDifficultyIndex(difficulty);
+    const rarityScore = rarityDropScore(itemId);
+    return Math.max(0.1, rarityScore * (1 + difficultyIndex * 0.18));
+}
+function pickBossWeaponDrop(ids, difficulty) {
+    return pickWeightedEntry(ids.map(id => ({ id, weight: getBossWeaponDropWeight(id, difficulty) }))).id;
+}
 function pickWeightedEntry(arr) {
     const eligible = arr.filter(entry => entry.weight > 0);
     if (!eligible.length)
@@ -245,12 +269,37 @@ exports.RAID_MAPS = {
         bossPool: [
             { name: "Thalrex Mourntide", title: "Drowned Godspeaker", ferocity: 2.08, successPenalty: 0.19, killPenalty: 0.22, raidPressure: 0.036, bonusXpRange: [340, 520], tokenRewardRange: [260, 420], weaponDrops: ["rail_sniper", "reactor_blade", "enhanced_reactor_blade", "enhanced_starforged_reaper"], armorDrops: ["titan_carapace", "adaptive_mesh"], rareDropChance: 0.5 }
         ],
-        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"], failureWeapons: ["marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "rail_sniper"], successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"], failureArmor: ["shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit"], bossKit: { weaponId: "rail_sniper", armorId: "titan_carapace" }, scrapBonus: 7, bonusLootPool: [{ id: "common_crate", weight: 7 }, { id: "rare_crate", weight: 8 }, { id: "epic_crate", weight: 6 }, { id: "tactical_crate", weight: 4 }, { id: "mythic_crate", weight: 2 }, { id: "scav_beacon", weight: 6 }, { id: "relic_fragment", weight: 4 }, { id: "mythic_circuit", weight: 2 }], crateDropTable: [{ id: "common_crate", weight: 4 }, { id: "rare_crate", weight: 5 }, { id: "epic_crate", weight: 5 }, { id: "tactical_crate", weight: 4 }, { id: "mythic_crate", weight: 3 }], bossCrateDropTable: [{ id: "rare_crate", weight: 2 }, { id: "epic_crate", weight: 3 }, { id: "tactical_crate", weight: 4 }, { id: "mythic_crate", weight: 5 }]
+        successWeapons: ["ion_cannon", "thermal_lance", "plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade"], failureWeapons: ["marksman_dmr", "ion_cannon", "thermal_lance", "plasma_carbine", "rail_sniper"], successArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit", "titan_carapace"], failureArmor: ["shadow_cloak", "void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit"], bossKit: { weaponId: "rail_sniper", armorId: "titan_carapace" }, scrapBonus: 7, bonusLootPool: [{ id: "common_crate", weight: 7 }, { id: "rare_crate", weight: 8 }, { id: "epic_crate", weight: 6 }, { id: "tactical_crate", weight: 4 }, { id: "mythic_crate", weight: 2 }, { id: "scav_beacon", weight: 6 }, { id: "relic_fragment", weight: 4 }, { id: "mythic_circuit", weight: 2 }, { id: "plasma_focusing_lens", weight: 2 }, { id: "rail_barrel", weight: 1 }], crateDropTable: [{ id: "common_crate", weight: 4 }, { id: "rare_crate", weight: 5 }, { id: "epic_crate", weight: 5 }, { id: "tactical_crate", weight: 4 }, { id: "mythic_crate", weight: 3 }], bossCrateDropTable: [{ id: "rare_crate", weight: 2 }, { id: "epic_crate", weight: 3 }, { id: "tactical_crate", weight: 4 }, { id: "mythic_crate", weight: 5 }, { id: "nullburst_chamber", weight: 0.7 }]
+    },
+    obsidian_spire: {
+        key: "obsidian_spire", label: "FN Obsidian Spire", difficulty: "Brutal", helpSummary: "Brutal vertical fortress, elite parts, high boss activity.", description: "A black-glass tower with exposed ascent lanes, shielded armories, and boss patrols stacked through every deck.", lootTier: "Weapon Parts / Legendary", recommendedTension: "high", successDelta: -0.17, tokenMultiplierDelta: 0.36, xpMultiplier: 1.52, lootGearChanceBonus: 0.21, resourceChanceBonus: 0.18, legendaryChanceBonus: 0.105, fnCoinChanceBonus: 0.055, bossName: "Veyra the Blackglass Matriarch", bossSpawnChance: 0.39, bossSuccessPenalty: 0.2, bossKillPenalty: 0.24, bossRaidPressure: 0.024, bossBonusXpRange: [310, 520],
+        bossPool: [{ name: "Veyra the Blackglass Matriarch", title: "Spire Tyrant", ferocity: 2.12, successPenalty: 0.19, killPenalty: 0.23, raidPressure: 0.036, bonusXpRange: [360, 590], tokenRewardRange: [300, 520], weaponDrops: ["rail_sniper", "enhanced_rail_sniper", "eclipse_glaive", "voidspike_halberd", "abyssal_railgun"], armorDrops: ["titan_carapace", "eclipse_ward"], rareDropChance: 0.54 }],
+        successWeapons: ["rail_sniper", "reactor_blade", "enhanced_rail_sniper", "enhanced_reactor_blade", "eclipse_glaive", "voidspike_halberd", "abyssal_railgun"], failureWeapons: ["plasma_carbine", "mythic_hammer", "rail_sniper", "reactor_blade", "emberfall_carbine"], successArmor: ["aegis_exosuit", "titan_carapace", "leviathan_shell", "eclipse_ward"], failureArmor: ["void_shield", "adaptive_mesh", "juggernaut_frame", "aegis_exosuit"], bossKit: { weaponId: "eclipse_glaive", armorId: "eclipse_ward" }, scrapBonus: 11, bonusLootPool: [{ id: "rail_barrel", weight: 6 }, { id: "plasma_focusing_lens", weight: 5 }, { id: "reactor_edge_core", weight: 3 }, { id: "black_ice_lens", weight: 3 }, { id: "mythic_crate", weight: 2 }], crateDropTable: [{ id: "tactical_crate", weight: 3 }, { id: "mythic_crate", weight: 4 }], bossCrateDropTable: [{ id: "mythic_crate", weight: 5 }, { id: "eclipse_blade_fragment", weight: 1 }]
+    },
+    nullforge_depths: {
+        key: "nullforge_depths", label: "FN Nullforge Depths", difficulty: "Cataclysmic", helpSummary: "Cataclysmic forge complex, mythic parts, severe boss pressure.", description: "An underground forge where anomaly reactors misfire, route exits collapse, and boss encounters are nearly expected.", lootTier: "Mythic Parts / Apex", recommendedTension: "high", successDelta: -0.2, tokenMultiplierDelta: 0.42, xpMultiplier: 1.62, lootGearChanceBonus: 0.25, resourceChanceBonus: 0.2, legendaryChanceBonus: 0.13, fnCoinChanceBonus: 0.07, bossName: "Nullforge Archon", bossSpawnChance: 0.46, bossSuccessPenalty: 0.23, bossKillPenalty: 0.28, bossRaidPressure: 0.03, bossBonusXpRange: [420, 720],
+        bossPool: [{ name: "Nullforge Archon", title: "Reactor Saint", ferocity: 2.34, successPenalty: 0.23, killPenalty: 0.27, raidPressure: 0.042, bonusXpRange: [480, 820], tokenRewardRange: [420, 760], weaponDrops: ["nullburst_launcher", "enhanced_nullburst_launcher", "demoncore_lance", "nullstorm_cannon", "abyssal_railgun"], armorDrops: ["dreadnought_cuirass", "sovereign_bastion"], rareDropChance: 0.64 }],
+        successWeapons: ["enhanced_rail_sniper", "enhanced_reactor_blade", "nullburst_launcher", "demoncore_lance", "nullstorm_cannon", "abyssal_railgun"], failureWeapons: ["rail_sniper", "reactor_blade", "enhanced_plasma_carbine", "gravecoil_rifle"], successArmor: ["dreadnought_cuirass", "voidscale_regalia", "sovereign_bastion"], failureArmor: ["aegis_exosuit", "titan_carapace", "leviathan_shell"], bossKit: { weaponId: "nullburst_launcher", armorId: "sovereign_bastion" }, scrapBonus: 13, bonusLootPool: [{ id: "reactor_edge_core", weight: 5 }, { id: "nullburst_chamber", weight: 2 }, { id: "mythic_circuit", weight: 4 }, { id: "hydra_capacitor", weight: 3 }, { id: "collector_titan_vault_core", weight: 0.05 }], crateDropTable: [{ id: "tactical_crate", weight: 2 }, { id: "mythic_crate", weight: 5 }], bossCrateDropTable: [{ id: "mythic_crate", weight: 5 }, { id: "nullburst_chamber", weight: 2 }, { id: "chaos_splinter", weight: 0.35 }]
+    },
+    bloodmoon_cathedral: {
+        key: "bloodmoon_cathedral", label: "FN Bloodmoon Cathedral", difficulty: "Brutal", helpSummary: "Brutal cathedral siege, boss-heavy relic runs.", description: "A cathedral-fortress under a red sky where every nave is a choke point and relic wardens stalk extraction teams.", lootTier: "Relic Parts / Boss Loot", recommendedTension: "high", successDelta: -0.185, tokenMultiplierDelta: 0.39, xpMultiplier: 1.57, lootGearChanceBonus: 0.22, resourceChanceBonus: 0.16, legendaryChanceBonus: 0.12, fnCoinChanceBonus: 0.06, bossName: "Cardinal Voss Bloodwake", bossSpawnChance: 0.42, bossSuccessPenalty: 0.22, bossKillPenalty: 0.26, bossRaidPressure: 0.028, bossBonusXpRange: [370, 660],
+        bossPool: [{ name: "Cardinal Voss Bloodwake", title: "Red Choir Butcher", ferocity: 2.26, successPenalty: 0.21, killPenalty: 0.26, raidPressure: 0.04, bonusXpRange: [430, 760], tokenRewardRange: [380, 680], weaponDrops: ["reactor_blade", "demoncore_lance", "doom_scepter"], armorDrops: ["doomplate_carapace", "demoncore_mail"], rareDropChance: 0.6 }],
+        successWeapons: ["reactor_blade", "doom_scepter", "demoncore_lance", "enhanced_reactor_blade"], failureWeapons: ["mythic_hammer", "rail_sniper", "reactor_blade"], successArmor: ["doomplate_carapace", "demoncore_mail", "voidscale_regalia"], failureArmor: ["juggernaut_frame", "aegis_exosuit", "titan_carapace"], bossKit: { weaponId: "demoncore_lance", armorId: "demoncore_mail" }, scrapBonus: 12, bonusLootPool: [{ id: "demoncore_shaft", weight: 2 }, { id: "reactor_edge_core", weight: 4 }, { id: "relic_fragment", weight: 6 }, { id: "collector_bloodmoon_deed", weight: 0.1 }], crateDropTable: [{ id: "epic_crate", weight: 2 }, { id: "tactical_crate", weight: 3 }, { id: "mythic_crate", weight: 4 }], bossCrateDropTable: [{ id: "mythic_crate", weight: 5 }, { id: "demoncore_shaft", weight: 2 }]
+    },
+    eclipse_bastion: {
+        key: "eclipse_bastion", label: "FN Eclipse Bastion", difficulty: "Cataclysmic", helpSummary: "Cataclysmic bastion, eclipse gear, very high boss spawn.", description: "A shielded bastion caught in permanent eclipse, loaded with sealed blade fragments and punishing command bosses.", lootTier: "Eclipse Gear / Ultra", recommendedTension: "high", successDelta: -0.215, tokenMultiplierDelta: 0.48, xpMultiplier: 1.68, lootGearChanceBonus: 0.28, resourceChanceBonus: 0.22, legendaryChanceBonus: 0.145, fnCoinChanceBonus: 0.08, bossName: "Eclipse Praetor Nyx", bossSpawnChance: 0.5, bossSuccessPenalty: 0.25, bossKillPenalty: 0.3, bossRaidPressure: 0.034, bossBonusXpRange: [520, 920],
+        bossPool: [{ name: "Eclipse Praetor Nyx", title: "Black Sun General", ferocity: 2.52, successPenalty: 0.25, killPenalty: 0.3, raidPressure: 0.048, bonusXpRange: [600, 1040], tokenRewardRange: [540, 980], weaponDrops: ["eclipse_glaive", "chaos_staff", "enhanced_starforged_reaper", "black_sun_lance", "abyssal_railgun"], armorDrops: ["eclipse_ward", "apocalypse_aegis"], rareDropChance: 0.72 }],
+        successWeapons: ["eclipse_glaive", "enhanced_starforged_reaper", "chaos_staff", "reality_breaker", "black_sun_lance"], failureWeapons: ["enhanced_rail_sniper", "enhanced_reactor_blade", "nullburst_launcher", "voidspike_halberd"], successArmor: ["eclipse_ward", "apocalypse_aegis", "chaos_mantle"], failureArmor: ["dreadnought_cuirass", "voidscale_regalia", "sovereign_bastion"], bossKit: { weaponId: "eclipse_glaive", armorId: "apocalypse_aegis" }, scrapBonus: 14, bonusLootPool: [{ id: "eclipse_blade_fragment", weight: 3 }, { id: "chaos_splinter", weight: 0.5 }, { id: "black_ice_lens", weight: 5 }, { id: "collector_eclipse_vault_deed", weight: 0.02 }], crateDropTable: [{ id: "tactical_crate", weight: 1 }, { id: "mythic_crate", weight: 6 }], bossCrateDropTable: [{ id: "mythic_crate", weight: 6 }, { id: "eclipse_blade_fragment", weight: 2 }, { id: "chaos_splinter", weight: 0.5 }]
+    },
+    titanfall_crucible: {
+        key: "titanfall_crucible", label: "FN Titanfall Crucible", difficulty: "Cataclysmic", helpSummary: "Cataclysmic endgame arena, maximum boss pressure.", description: "A collapsed titan arena where elite raid teams fight through boss chains, unstable vaults, and catastrophic reward spikes.", lootTier: "Apex Boss / Jackpot", recommendedTension: "high", successDelta: -0.235, tokenMultiplierDelta: 0.56, xpMultiplier: 1.78, lootGearChanceBonus: 0.32, resourceChanceBonus: 0.24, legendaryChanceBonus: 0.165, fnCoinChanceBonus: 0.095, bossName: "Asterion the Titanbreaker", bossSpawnChance: 0.55, bossSuccessPenalty: 0.28, bossKillPenalty: 0.34, bossRaidPressure: 0.04, bossBonusXpRange: [700, 1300],
+        bossPool: [{ name: "Asterion the Titanbreaker", title: "Vault Ender", ferocity: 2.8, successPenalty: 0.29, killPenalty: 0.35, raidPressure: 0.055, bonusXpRange: [820, 1500], tokenRewardRange: [760, 1400], weaponDrops: ["chaos_staff", "demoncore_lance", "enhanced_starforged_reaper", "black_sun_lance", "titanbreaker_maul"], armorDrops: ["chaos_mantle", "sovereign_bastion", "apocalypse_aegis"], rareDropChance: 0.82 }],
+        successWeapons: ["chaos_staff", "demoncore_lance", "enhanced_starforged_reaper", "reality_breaker", "black_sun_lance", "titanbreaker_maul"], failureWeapons: ["eclipse_glaive", "nullburst_launcher", "enhanced_reactor_blade", "nullstorm_cannon"], successArmor: ["chaos_mantle", "apocalypse_aegis", "sovereign_bastion"], failureArmor: ["eclipse_ward", "voidscale_regalia", "dreadnought_cuirass"], bossKit: { weaponId: "chaos_staff", armorId: "chaos_mantle" }, scrapBonus: 16, bonusLootPool: [{ id: "chaos_splinter", weight: 0.8 }, { id: "demoncore_shaft", weight: 2 }, { id: "nullburst_chamber", weight: 2 }, { id: "collector_titan_vault_core", weight: 0.08 }, { id: "collector_eternity_contract", weight: 0.004 }], crateDropTable: [{ id: "mythic_crate", weight: 1 }], bossCrateDropTable: [{ id: "mythic_crate", weight: 7 }, { id: "chaos_splinter", weight: 0.9 }, { id: "collector_titan_vault_core", weight: 0.08 }]
     }
 };
 exports.RAID_MAP_CHOICES = Object.values(exports.RAID_MAPS).map(map => ({ name: map.label, value: map.key }));
 exports.RAID_DIFFICULTY_ORDER = ["Beginner", "Mid", "Hard", "Elite", "Brutal", "Cataclysmic"];
-exports.RAID_MAP_SHORT_LABELS = { plagued_cemetary: "CEM", slaughterhouse: "SLH", boogerswoodz: "BGZ", megayachtolopolis: "MYO", warlords_warcamp: "WWC", sunken_village: "SVL" };
+exports.RAID_MAP_SHORT_LABELS = { plagued_cemetary: "CEM", slaughterhouse: "SLH", boogerswoodz: "BGZ", megayachtolopolis: "MYO", warlords_warcamp: "WWC", sunken_village: "SVL", obsidian_spire: "OBS", nullforge_depths: "NFD", bloodmoon_cathedral: "BMC", eclipse_bastion: "ECB", titanfall_crucible: "TFC" };
 exports.RAID_BOSS_ROSTER = Object.values(exports.RAID_MAPS).flatMap(mapCfg => mapCfg.bossPool.map(boss => ({ ...boss, homeMapKey: mapCfg.key, homeMapLabel: mapCfg.label, homeMapDifficulty: mapCfg.difficulty })));
 function getRaidDifficultyIndex(difficulty) {
     const idx = exports.RAID_DIFFICULTY_ORDER.indexOf(difficulty);
@@ -264,10 +313,16 @@ function getBossRotationWeight(boss, mapCfg) {
     const ferocityBias = Math.max(1, Math.round(boss.ferocity * 1.8));
     return Math.max(0.02, (sameMapBonus + sameDifficultyBonus + distanceBonus + ferocityBias) * (boss.spawnWeight || 1));
 }
+const bossRotationTableCache = new Map();
 function getBossRotationTable(mapCfg) {
+    const cached = bossRotationTableCache.get(mapCfg.key);
+    if (cached)
+        return cached;
     const weighted = exports.RAID_BOSS_ROSTER.map(boss => ({ boss, weight: getBossRotationWeight(boss, mapCfg) }));
     const total = weighted.reduce((sum, entry) => sum + entry.weight, 0) || 1;
-    return weighted.map(entry => ({ ...entry, sharePct: Math.round((entry.weight / total) * 1000) / 10 }));
+    const computed = weighted.map(entry => ({ ...entry, sharePct: Math.round((entry.weight / total) * 1000) / 10 }));
+    bossRotationTableCache.set(mapCfg.key, computed);
+    return computed;
 }
 function formatBossRotationShares(boss) {
     return Object.values(exports.RAID_MAPS).map(mapCfg => {
@@ -354,7 +409,15 @@ exports.WEAPON_TRAITS = {
     enhanced_rail_sniper: { successBonus: 0.025, tokenBonus: 0.024, conditionSuccess: { fog: -0.008, urban: -0.006, low_power: 0.014 }, note: "Enhanced long-range rig amplifies precision and extraction economics." },
     enhanced_reactor_blade: { successBonus: 0.026, tokenBonus: 0.019, xpBonus: 0.035, conditionSuccess: { urban: 0.02, night: 0.02 }, note: "Enhanced reactor edge massively rewards close-quarter domination." },
     enhanced_nullburst_launcher: { successBonus: 0.027, tokenBonus: 0.028, conditionSuccess: { radiation: 0.022, ashfall: 0.016 }, note: "Enhanced anomaly launcher excels in severe environment raids." },
-    enhanced_starforged_reaper: { successBonus: 0.03, tokenBonus: 0.03, xpBonus: 0.05, conditionSuccess: { storm: 0.016, radiation: 0.02, night: 0.016 }, note: "Apex-enhanced starforged platform defines top-end raid conversion power." }
+    enhanced_starforged_reaper: { successBonus: 0.03, tokenBonus: 0.03, xpBonus: 0.05, conditionSuccess: { storm: 0.016, radiation: 0.02, night: 0.016 }, note: "Apex-enhanced starforged platform defines top-end raid conversion power." },
+    emberfall_carbine: { successBonus: 0.015, tokenBonus: 0.012, conditionSuccess: { heatwave: 0.018, ashfall: 0.012 }, note: "Scaled rare carbine converts heat pressure into stable extraction damage." },
+    gravecoil_rifle: { successBonus: 0.016, xpBonus: 0.018, conditionSuccess: { night: 0.014, fog: 0.012 }, note: "Coil timing rewards disciplined boss lane control." },
+    voidspike_halberd: { successBonus: 0.024, xpBonus: 0.032, conditionSuccess: { urban: 0.018, low_power: 0.014 }, note: "Legendary halberd turns close breach finishes into extra raid XP." },
+    bloodmoon_arbalest: { successBonus: 0.026, tokenBonus: 0.024, conditionSuccess: { night: 0.022, crosswind: 0.012 }, note: "Boss-hunter arbalest improves precision payouts under severe routes." },
+    nullstorm_cannon: { successBonus: 0.032, tokenBonus: 0.034, conditionSuccess: { storm: 0.026, radiation: 0.02 }, note: "Mythic cannon punishes hard-map boss armor and storm pressure." },
+    abyssal_railgun: { successBonus: 0.035, tokenBonus: 0.036, conditionSuccess: { fog: -0.008, low_power: 0.026 }, note: "Deep-map railgun amplifies boss-phase takedowns in powered lanes." },
+    black_sun_lance: { successBonus: 0.04, tokenBonus: 0.045, xpBonus: 0.055, conditionSuccess: { night: 0.032, ashfall: 0.026 }, note: "Super-rare eclipse lance scales hard into apex boss encounters." },
+    titanbreaker_maul: { successBonus: 0.044, tokenBonus: 0.05, xpBonus: 0.065, conditionSuccess: { urban: 0.026, radiation: 0.03 }, note: "Titanbreaker mass cracks the hardest bosses and multiplies raid mastery value." }
 };
 exports.ARMOR_TRAITS = {
     acidbound_shell: { successBonus: 0.022, conditionSuccess: { radiation: 0.03, ashfall: 0.022 }, conditionImmunity: ["radiation"], note: "Corrosion seal neutralizes radiation exposure." },
@@ -399,13 +462,13 @@ exports.ARMOR_TRAITS = {
     sovereign_bastion: { successBonus: 0.012, tokenBonus: 0.03, conditionSuccess: { radiation: 0.016 }, conditionImmunity: ["radiation"], note: "Apex bastion armor offers elite resilience without breaking cap limits." }
 };
 exports.RAID_WEAPON_DISCOVERY_TABLE = [
-    { id: "scrap_shotgun", weight: 18 }, { id: "breach_pistol", weight: 18 }, { id: "hush_repeater", weight: 16 }, { id: "arc_rifle", weight: 14 }, { id: "volt_smg", weight: 14 }, { id: "dune_cutter", weight: 13 }, { id: "widowmaker_dmr", weight: 12 }, { id: "aurora_smg", weight: 11 }, { id: "magma_caster", weight: 10 }, { id: "echo_lancer", weight: 10 }, { id: "grav_pike", weight: 9 }, { id: "venom_flechette", weight: 9 }, { id: "rift_carbine", weight: 8 }, { id: "basilisk_dmr", weight: 7 }, { id: "obsidian_repeater", weight: 6 }, { id: "siege_cannon", weight: 5 }, { id: "frostfang_rifle", weight: 5 }, { id: "stormpiercer", weight: 4 }, { id: "overclock_minigun", weight: 4 }, { id: "nullburst_launcher", weight: 3 }, { id: "phantom_scythe", weight: 3 }, { id: "nebula_glaive", weight: 2 }, { id: "sunflare_accelerator", weight: 2 }, { id: "starforged_reaper", weight: 1 }, { id: "enhanced_pulse_rifle", weight: 4 }, { id: "enhanced_marksman_dmr", weight: 3 }, { id: "enhanced_thermal_lance", weight: 3 }, { id: "enhanced_plasma_carbine", weight: 3 }, { id: "enhanced_rail_sniper", weight: 2 }, { id: "enhanced_reactor_blade", weight: 2 }, { id: "acid_spitter", weight: 2 }, { id: "caustic_reaper", weight: 2 }, { id: "hellhound_carbine", weight: 2 }, { id: "bloodfang_blade", weight: 2 }, { id: "doom_scepter", weight: 1 }, { id: "widow_arc", weight: 1 }, { id: "chaos_staff", weight: 0.05 }, { id: "reality_breaker", weight: 0.4 }, { id: "eclipse_glaive", weight: 0.5 }, { id: "demoncore_lance", weight: 0.3 }
+    { id: "scrap_shotgun", weight: 18 }, { id: "breach_pistol", weight: 18 }, { id: "hush_repeater", weight: 16 }, { id: "arc_rifle", weight: 14 }, { id: "volt_smg", weight: 14 }, { id: "dune_cutter", weight: 13 }, { id: "widowmaker_dmr", weight: 12 }, { id: "aurora_smg", weight: 11 }, { id: "magma_caster", weight: 10 }, { id: "echo_lancer", weight: 10 }, { id: "grav_pike", weight: 9 }, { id: "venom_flechette", weight: 9 }, { id: "rift_carbine", weight: 8 }, { id: "basilisk_dmr", weight: 7 }, { id: "obsidian_repeater", weight: 6 }, { id: "siege_cannon", weight: 5 }, { id: "frostfang_rifle", weight: 5 }, { id: "stormpiercer", weight: 4 }, { id: "overclock_minigun", weight: 4 }, { id: "emberfall_carbine", weight: 4 }, { id: "gravecoil_rifle", weight: 3 }, { id: "voidspike_halberd", weight: 2 }, { id: "bloodmoon_arbalest", weight: 1.5 }, { id: "nullburst_launcher", weight: 3 }, { id: "phantom_scythe", weight: 3 }, { id: "nebula_glaive", weight: 2 }, { id: "sunflare_accelerator", weight: 2 }, { id: "starforged_reaper", weight: 1 }, { id: "nullstorm_cannon", weight: 0.75 }, { id: "abyssal_railgun", weight: 0.45 }, { id: "black_sun_lance", weight: 0.12 }, { id: "titanbreaker_maul", weight: 0.07 }, { id: "enhanced_pulse_rifle", weight: 4 }, { id: "enhanced_marksman_dmr", weight: 3 }, { id: "enhanced_thermal_lance", weight: 3 }, { id: "enhanced_plasma_carbine", weight: 3 }, { id: "enhanced_rail_sniper", weight: 2 }, { id: "enhanced_reactor_blade", weight: 2 }, { id: "acid_spitter", weight: 2 }, { id: "caustic_reaper", weight: 2 }, { id: "hellhound_carbine", weight: 2 }, { id: "bloodfang_blade", weight: 2 }, { id: "doom_scepter", weight: 1 }, { id: "widow_arc", weight: 1 }, { id: "chaos_staff", weight: 0.05 }, { id: "reality_breaker", weight: 0.4 }, { id: "eclipse_glaive", weight: 0.5 }, { id: "demoncore_lance", weight: 0.3 }
 ];
 exports.RAID_ARMOR_DISCOVERY_TABLE = [
     { id: "patchwork_rig", weight: 18 }, { id: "breacher_webbing", weight: 18 }, { id: "fogrunner_wrap", weight: 16 }, { id: "arcskin_vest", weight: 15 }, { id: "warden_harness", weight: 14 }, { id: "emberguard_mail", weight: 13 }, { id: "coastwatch_shell", weight: 13 }, { id: "nomad_carbon", weight: 12 }, { id: "nightglass_cloak", weight: 11 }, { id: "bulwark_plating", weight: 10 }, { id: "shockframe_suit", weight: 10 }, { id: "gravebark_mesh", weight: 9 }, { id: "riftguard_coat", weight: 8 }, { id: "bastion_weave", weight: 7 }, { id: "siegebreaker_plate", weight: 6 }, { id: "hollowbastion", weight: 5 }, { id: "stormforged_aegis", weight: 5 }, { id: "cryptsteel_exoshell", weight: 4 }, { id: "leviathan_shell", weight: 4 }, { id: "tidelock_panoply", weight: 3 }, { id: "dreadnought_cuirass", weight: 3 }, { id: "voidscale_regalia", weight: 2 }, { id: "eclipse_ward", weight: 2 }, { id: "sovereign_bastion", weight: 1 }, { id: "acidbound_shell", weight: 2 }, { id: "venomward_suit", weight: 2 }, { id: "hellhide_harness", weight: 2 }, { id: "doomplate_carapace", weight: 1 }, { id: "crownfall_raiment", weight: 1 }, { id: "chaos_mantle", weight: 0.05 }, { id: "apocalypse_aegis", weight: 0.4 }, { id: "eclipse_bulwark", weight: 0.5 }, { id: "demoncore_mail", weight: 0.3 }, { id: "wraithveil_hood", weight: 1 }
 ];
 exports.RAID_APEX_WEAPON_DISCOVERY_TABLE = [
-    { id: "nullburst_launcher", weight: 3 }, { id: "phantom_scythe", weight: 3 }, { id: "sunflare_accelerator", weight: 2 }, { id: "starforged_reaper", weight: 1 }, { id: "overclock_minigun", weight: 2 }, { id: "nebula_glaive", weight: 2 }, { id: "enhanced_nullburst_launcher", weight: 2 }, { id: "enhanced_starforged_reaper", weight: 1 }
+    { id: "nullburst_launcher", weight: 3 }, { id: "phantom_scythe", weight: 3 }, { id: "sunflare_accelerator", weight: 2 }, { id: "starforged_reaper", weight: 1 }, { id: "overclock_minigun", weight: 2 }, { id: "nebula_glaive", weight: 2 }, { id: "nullstorm_cannon", weight: 1.2 }, { id: "abyssal_railgun", weight: 0.8 }, { id: "black_sun_lance", weight: 0.28 }, { id: "titanbreaker_maul", weight: 0.16 }, { id: "enhanced_nullburst_launcher", weight: 2 }, { id: "enhanced_starforged_reaper", weight: 1 }
 ];
 exports.RAID_APEX_ARMOR_DISCOVERY_TABLE = [
     { id: "tidelock_panoply", weight: 3 }, { id: "dreadnought_cuirass", weight: 3 }, { id: "voidscale_regalia", weight: 2 }, { id: "leviathan_shell", weight: 2 }, { id: "eclipse_ward", weight: 2 }, { id: "sovereign_bastion", weight: 1 }
@@ -425,7 +488,7 @@ function rollBossVariant(mapCfg) {
         raidPressure: variant.boss.raidPressure,
         bonusXpRange: variant.boss.bonusXpRange,
         tokenRewardRange: variant.boss.tokenRewardRange,
-        weaponDrop: pickOne(variant.boss.weaponDrops),
+        weaponDrop: pickBossWeaponDrop(variant.boss.weaponDrops, mapCfg.difficulty),
         armorDrop: pickOne(variant.boss.armorDrops),
         rareDropChance: variant.boss.rareDropChance,
         homeMapKey: variant.boss.homeMapKey,

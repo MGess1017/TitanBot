@@ -23,7 +23,12 @@ function buildSlashCommands(input) {
         new discord_js_1.SlashCommandBuilder()
             .setName("xprolesync")
             .setDescription("Admin: force-sync XP rank roles for all members now.")
-            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator),
+            .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
+            .addBooleanOption(o => o.setName("pause").setDescription("Pause or resume automatic role synchronization").setRequired(false))
+            .addBooleanOption(o => o.setName("retry").setDescription("Retry persisted failed sync jobs").setRequired(false))
+            .addIntegerOption(o => o.setName("config_xp").setDescription("XP threshold to create or update").setRequired(false).setMinValue(1))
+            .addRoleOption(o => o.setName("config_role").setDescription("Role to grant at the configured XP threshold").setRequired(false))
+            .addStringOption(o => o.setName("config_name").setDescription("Optional display name for this XP tier").setRequired(false).setMaxLength(80)),
         new discord_js_1.SlashCommandBuilder()
             .setName("status")
             .setDescription("Show bot runtime status."),
@@ -198,7 +203,8 @@ function buildSlashCommands(input) {
             .addUserOption(o => o.setName("user").setDescription("User to verify").setRequired(true)),
         new discord_js_1.SlashCommandBuilder().setName("rolesanity").setDescription("Admin: audit XP role configuration and assignment readiness")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
-            .addBooleanOption(o => o.setName("fix").setDescription("Attempt auto-remediation where possible").setRequired(false)),
+            .addBooleanOption(o => o.setName("fix").setDescription("Attempt auto-remediation where possible").setRequired(false))
+            .addBooleanOption(o => o.setName("dry_run").setDescription("Preview remediation without changing roles").setRequired(false)),
         new discord_js_1.SlashCommandBuilder().setName("ticketsanity").setDescription("Admin: audit ticket store integrity and channel consistency")
             .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.Administrator)
             .addBooleanOption(o => o.setName("fix").setDescription("Attempt auto-remediation where possible").setRequired(false)),

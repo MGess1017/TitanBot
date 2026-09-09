@@ -494,10 +494,16 @@ export function getBossRotationWeight(boss: BossRosterEntry, mapCfg: RaidMapConf
     return Math.max(0.02, (sameMapBonus + sameDifficultyBonus + distanceBonus + ferocityBias) * (boss.spawnWeight || 1));
 }
 
+const bossRotationTableCache = new Map<string, Array<{ boss: BossRosterEntry; weight: number; sharePct: number }>>();
+
 export function getBossRotationTable(mapCfg: RaidMapConfig): Array<{ boss: BossRosterEntry; weight: number; sharePct: number }> {
+    const cached = bossRotationTableCache.get(mapCfg.key);
+    if (cached) return cached;
     const weighted = RAID_BOSS_ROSTER.map(boss => ({ boss, weight: getBossRotationWeight(boss, mapCfg) }));
     const total = weighted.reduce((sum, entry) => sum + entry.weight, 0) || 1;
-    return weighted.map(entry => ({ ...entry, sharePct: Math.round((entry.weight / total) * 1000) / 10 }));
+    const computed = weighted.map(entry => ({ ...entry, sharePct: Math.round((entry.weight / total) * 1000) / 10 }));
+    bossRotationTableCache.set(mapCfg.key, computed);
+    return computed;
 }
 
 export function formatBossRotationShares(boss: BossRosterEntry): string {
