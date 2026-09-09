@@ -183,7 +183,7 @@ const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
 const STRICT_ENV_REQUIRED = readEnvFlag("STRICT_ENV_REQUIRED", false);
 const ENABLE_STARTUP_AUTOPANELS = readEnvFlag("ENABLE_STARTUP_AUTOPANELS", true);
 const ENABLE_STARTUP_DEPLOYMENT_SUMMARY = readEnvFlag("ENABLE_STARTUP_DEPLOYMENT_SUMMARY", true);
-const MESSAGE_XP_GAIN = 2;
+const MESSAGE_XP_GAIN = 3;
 const XP_COOLDOWN_MS = 0;
 const RAID_COOLDOWN_MS = 5 * 1000;
 const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
@@ -3628,37 +3628,37 @@ function updateXpRoleSyncMetrics(update: (metrics: XpRoleSyncMetrics) => void): 
 }
 
 const XP_ROLE_TIERS = [
-    { xp: 1000, roleId: "1526854382199771166", name: "Tier 1" },
-    { xp: 2500, roleId: "1526854454455046194", name: "Tier 2" },
-    { xp: 10000, roleId: "1526854514345246752", name: "Tier 3" },
-    { xp: 20000, roleId: "1526854549946634360", name: "Tier 4" },
-    { xp: 50000, roleId: "1526854596721508433", name: "Tier 5" },
-    { xp: 100000, roleId: "1526854670260244480", name: "Tier 6" },
-    { xp: 120000, roleId: "1528237537846493264", name: "Recruit I" },
-    { xp: 150000, roleId: "1528237538752467155", name: "Recruit II" },
-    { xp: 180000, roleId: "1528237539557769236", name: "Recruit III" },
-    { xp: 210000, roleId: "1528237540039983154", name: "Scout I" },
-    { xp: 240000, roleId: "1528237540589572217", name: "Scout II" },
-    { xp: 270000, roleId: "1528237540828647436", name: "Scout III" },
-    { xp: 300000, roleId: "1528237541873029252", name: "Vanguard I" },
-    { xp: 330000, roleId: "1528237542590386386", name: "Vanguard II" },
-    { xp: 360000, roleId: "1528237543873576980", name: "Vanguard III" },
-    { xp: 390000, roleId: "1528237544398000199", name: "Ranger I" },
-    { xp: 420000, roleId: "1528237544960036874", name: "Ranger II" },
-    { xp: 450000, roleId: "1528237545597702205", name: "Ranger III" },
-    { xp: 480000, roleId: "1528237546142699530", name: "Striker I" },
-    { xp: 510000, roleId: "1528237546838954087", name: "Striker II" },
-    { xp: 540000, roleId: "1528237547849777232", name: "Striker III" },
-    { xp: 570000, roleId: "1528237548697030747", name: "Sentinel I" },
-    { xp: 600000, roleId: "1528237549795938557", name: "Sentinel II" },
-    { xp: 630000, roleId: "1528237551217803264", name: "Sentinel III" },
-    { xp: 660000, roleId: "1528237551389769779", name: "Warden I" },
-    { xp: 690000, roleId: "1528237552073576521", name: "Warden II" },
-    { xp: 720000, roleId: "1528237553453498368", name: "Warden III" },
-    { xp: 750000, roleId: "1528237554090905861", name: "Elite I" },
-    { xp: 780000, roleId: "1528237554795810967", name: "Elite II" },
-    { xp: 810000, roleId: "1528237555428884591", name: "Elite III" },
-    { xp: 840000, roleId: "1528237556406161521", name: "Titan Commander" }
+    { xp: 3000, roleId: "1526854382199771166", name: "Tier 1" },
+    { xp: 7500, roleId: "1526854454455046194", name: "Tier 2" },
+    { xp: 30000, roleId: "1526854514345246752", name: "Tier 3" },
+    { xp: 60000, roleId: "1526854549946634360", name: "Tier 4" },
+    { xp: 150000, roleId: "1526854596721508433", name: "Tier 5" },
+    { xp: 300000, roleId: "1526854670260244480", name: "Tier 6" },
+    { xp: 360000, roleId: "1528237537846493264", name: "Recruit I" },
+    { xp: 450000, roleId: "1528237538752467155", name: "Recruit II" },
+    { xp: 540000, roleId: "1528237539557769236", name: "Recruit III" },
+    { xp: 630000, roleId: "1528237540039983154", name: "Scout I" },
+    { xp: 720000, roleId: "1528237540589572217", name: "Scout II" },
+    { xp: 810000, roleId: "1528237540828647436", name: "Scout III" },
+    { xp: 900000, roleId: "1528237541873029252", name: "Vanguard I" },
+    { xp: 990000, roleId: "1528237542590386386", name: "Vanguard II" },
+    { xp: 1080000, roleId: "1528237543873576980", name: "Vanguard III" },
+    { xp: 1170000, roleId: "1528237544398000199", name: "Ranger I" },
+    { xp: 1260000, roleId: "1528237544960036874", name: "Ranger II" },
+    { xp: 1350000, roleId: "1528237545597702205", name: "Ranger III" },
+    { xp: 1440000, roleId: "1528237546142699530", name: "Striker I" },
+    { xp: 1530000, roleId: "1528237546838954087", name: "Striker II" },
+    { xp: 1620000, roleId: "1528237547849777232", name: "Striker III" },
+    { xp: 1710000, roleId: "1528237548697030747", name: "Sentinel I" },
+    { xp: 1800000, roleId: "1528237549795938557", name: "Sentinel II" },
+    { xp: 1890000, roleId: "1528237551217803264", name: "Sentinel III" },
+    { xp: 1980000, roleId: "1528237551389769779", name: "Warden I" },
+    { xp: 2070000, roleId: "1528237552073576521", name: "Warden II" },
+    { xp: 2160000, roleId: "1528237553453498368", name: "Warden III" },
+    { xp: 2250000, roleId: "1528237554090905861", name: "Elite I" },
+    { xp: 2340000, roleId: "1528237554795810967", name: "Elite II" },
+    { xp: 2430000, roleId: "1528237555428884591", name: "Elite III" },
+    { xp: 2520000, roleId: "1528237556406161521", name: "Titan Commander" }
 ] as const;
 
 type XpRoleEntry = { xp: number; roleId: string; name: string };
@@ -3802,6 +3802,10 @@ async function getEffectiveXpRoleEntriesForGuild(guild: Guild): Promise<XpRoleEn
 
 const XP_ROLE_COLORS = [0x64748b, 0x38bdf8, 0x22c55e, 0xeab308, 0xf97316, 0xef4444, 0xa855f7, 0x14b8a6] as const;
 
+function formatXpTierDisplayName(entry: XpRoleEntry): string {
+    return `${entry.name} [${entry.xp.toLocaleString()} XP]`;
+}
+
 async function ensureXpTierRoles(guild: Guild): Promise<XpRoleEntry[]> {
     const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
     if (!me || !me.permissions.has(PermissionFlagsBits.ManageRoles)) return getEffectiveXpRoleEntriesForGuild(guild);
@@ -3810,10 +3814,11 @@ async function ensureXpTierRoles(guild: Guild): Promise<XpRoleEntry[]> {
     let changed = false;
     for (let index = 0; index < entries.length; index++) {
         const entry = entries[index];
-        let role = guild.roles.cache.get(entry.roleId) || guild.roles.cache.find(candidate => candidate.name === entry.name) || null;
+        const displayName = formatXpTierDisplayName(entry);
+        let role = guild.roles.cache.get(entry.roleId) || guild.roles.cache.find(candidate => candidate.name === entry.name || candidate.name === displayName) || null;
         if (!role) {
             role = await guild.roles.create({
-                name: entry.name,
+                name: displayName,
                 color: XP_ROLE_COLORS[Math.min(index, XP_ROLE_COLORS.length - 1)],
                 reason: `Create missing XP tier role for ${entry.xp} XP`
             }).catch(() => null);
@@ -3826,6 +3831,15 @@ async function ensureXpTierRoles(guild: Guild): Promise<XpRoleEntry[]> {
         if (role.position >= (me.roles.highest?.position || 0)) {
             appendAuditEvent("xp_role_create_blocked", { guildId: guild.id, xp: entry.xp, roleId: role.id, reason: "role hierarchy" });
             continue;
+        }
+        // Keep the visible Discord role name in sync with the configured threshold so it never silently goes stale.
+        if (role.name !== displayName) {
+            const renamed = await role.setName(displayName, `XP tier threshold updated to ${entry.xp}`).catch(() => null);
+            if (renamed) {
+                appendAuditEvent("xp_role_renamed", { guildId: guild.id, roleId: role.id, xp: entry.xp, name: displayName });
+            } else {
+                appendAuditEvent("xp_role_rename_failed", { guildId: guild.id, roleId: role.id, xp: entry.xp, name: displayName });
+            }
         }
         if (entry.roleId !== role.id) {
             entries[index] = { ...entry, roleId: role.id };
@@ -4687,7 +4701,7 @@ async function resolveXpRoleLines(guild?: Guild | null): Promise<string[]> {
         const roleById = persistedEntry
             ? await guild.roles.fetch(persistedEntry.roleId).catch(() => null)
             : await guild.roles.fetch(entry.roleId).catch(() => null);
-        const roleName = `${entry.name} [${entry.xp} XP]`;
+        const roleName = formatXpTierDisplayName({ xp: entry.xp, roleId: entry.roleId, name: entry.name });
         const roleByName = guild.roles.cache.find(r => r.name === roleName) || null;
         const role = roleById || roleByName;
         if (role) {

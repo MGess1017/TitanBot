@@ -30,6 +30,25 @@ function runXpRoleRecoveryTests(): void {
     assert.match(botSource, /xp_role_post_mutation_verify_failed/, "role mutations must be verified after Discord writes");
     assert.match(botSource, /Dry-Run Member Diff/, "rolesanity must show member-level dry-run diffs");
     assert.match(botSource, /formatXpRoleUnlocks\(interaction\.user\.id, 5\)/, "xpstats must show recent XP role unlocks");
+
+    assert.match(botSource, /const MESSAGE_XP_GAIN = 3;/, "message XP gain must be increased to 3");
+
+    const tierMatches = Array.from(botSource.matchAll(/\{ xp: (\d+), roleId: "(\d+)", name: "([^"]+)" \}/g));
+    assert.equal(tierMatches.length, 31, "expected 31 configured XP role tiers");
+    const tiers = tierMatches.map(match => ({ xp: Number(match[1]), roleId: match[2], name: match[3] }));
+    for (let i = 1; i < tiers.length; i++) {
+        assert.ok(tiers[i].xp > tiers[i - 1].xp, `tier thresholds must strictly increase (${tiers[i - 1].name} -> ${tiers[i].name})`);
+    }
+    const recruitOne = tiers.find(tier => tier.name === "Recruit I");
+    const titanCommander = tiers.find(tier => tier.name === "Titan Commander");
+    assert.equal(recruitOne?.xp, 360000, "Recruit I must require 360,000 XP (3x the prior threshold)");
+    assert.equal(titanCommander?.xp, 2520000, "Titan Commander must require 2,520,000 XP (3x the prior threshold)");
+    const roleIds = new Set(tiers.map(tier => tier.roleId));
+    assert.equal(roleIds.size, 31, "tier role IDs must remain unique so existing Discord roles are reused, not duplicated");
+
+    assert.match(botSource, /function formatXpTierDisplayName\(entry: XpRoleEntry\): string \{\s*return `\$\{entry\.name\} \[\$\{entry\.xp\.toLocaleString\(\)\} XP\]`;/, "display name helper must format thresholds with thousands separators");
+    assert.match(botSource, /if \(role\.name !== displayName\) \{/, "ensureXpTierRoles must detect a stale Discord role name");
+    assert.match(botSource, /role\.setName\(displayName, `XP tier threshold updated to \$\{entry\.xp\}`\)/, "ensureXpTierRoles must rename the live Discord role when the threshold changes");
 }
 
 runXpRoleRecoveryTests();
