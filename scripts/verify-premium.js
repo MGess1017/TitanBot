@@ -55,8 +55,8 @@ function run() {
 
   const raidPayload = JSON.parse(raidPayloadRaw);
   assert.ok(Array.isArray(raidPayload.components), "Expected raid payload follow-up components");
-  assert.ok((raidPayload.embed.fields || []).some(field => field.name === "Premium Event Flags"), "Expected premium event flags field");
-  assert.ok((raidPayload.embed.fields || []).some(field => field.name === "Boss Encounter"), "Expected cinematic boss encounter field");
+  assert.ok((raidPayload.embed.fields || []).some(field => field.name === "Unlocks" && field.value.includes("Dreadwake Morvane's Heart") && field.value.includes("Steel Warlord")), "Expected concise premium unlock summary");
+  assert.ok((raidPayload.embed.fields || []).some(field => field.name === "Boss Engagement" && field.value.includes("Dreadwake Morvane")), "Expected concise boss engagement field");
 
   console.log("Premium verification passed.");
   console.log("- Boss heart normalization checks: 2");

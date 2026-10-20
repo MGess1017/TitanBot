@@ -328,12 +328,13 @@ function runEconomyAndRaidTests(): void {
         const battleOpening = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 0, totalTurns: 3 }));
         const battleFinal = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 3, totalTurns: 3 }));
         assert.equal(battleOpening.components[0].components.length, 5);
-        assert.ok(battleOpening.embed.fields[2].name.includes("ENTRANCE"));
+        assert.equal(battleOpening.embed.fields[2].name, "Action");
+        assert.match(battleOpening.embed.fields[2].value, /entered the combat zone/);
         assert.ok(battleOpening.embed.fields[0].value.includes("800/800"));
-        assert.ok(battleOpening.embed.fields[0].value.includes("Rage 0%"));
+        assert.match(battleOpening.embed.description, /Enraged/);
         const battleAction = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossHpMax: 800, bossHpFinal: 0, pmcHpMax: 600, pmcHpFinal: 240, turn: 1, totalTurns: 3, action: "scan", bossHpCurrent: 760, pmcHpCurrent: 600, rage: 20, armorBreak: 30, scanRevealed: true }));
-        assert.ok(battleAction.embed.fields[0].value.includes("Armor Break: 30%"));
-        assert.ok(battleAction.embed.fields[1].value.includes("Intel revealed"));
+        assert.ok(battleAction.embed.fields[0].value.includes("Armor break 30%"));
+        assert.match(battleAction.embed.fields[1].value, /intel revealed/i);
         assert.ok(battleFinal.embed.fields[0].value.includes("0/800"));
         assert.ok(battleFinal.embed.fields[1].value.includes("240/600"));
         assert.ok(battleFinal.embed.fields[2].value.includes("neutralized"));
@@ -435,10 +436,11 @@ function runEconomyAndRaidTests(): void {
             fallbackTension: "medium",
             armyIconUrl: "https://example.com/army.png"
         }));
-        assert.ok(premiumRaidPayload.embed.fields.some((field: { name: string }) => field.name === "Combat Sequence"));
-        assert.ok(premiumRaidPayload.embed.fields.some((field: { name: string }) => field.name === "Follower Support"));
-        assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Summary")?.value.includes("Prestige 3"));
-        assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Summary")?.value.includes("Catacomb Smuggler Exit"));
+        assert.ok(premiumRaidPayload.embed.fields.some((field: { name: string }) => field.name === "Boss Engagement"));
+        assert.ok(!premiumRaidPayload.embed.fields.some((field: { name: string }) => field.name === "Follower Support"));
+        assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Outcome")?.value.includes("PMC Prestige 3"));
+        assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Outcome")?.value.includes("Catacomb Smuggler Exit"));
+        assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Unlocks")?.value.includes("Map rank: Pathfinder"));
         assert.ok(premiumRaidPayload.components[0].components.some((component: { custom_id: string }) => component.custom_id === RAID_RESULT_ACTION_IDS.mastery));
         const botSource = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
         assert.match(botSource, /const totalTurns = Math\.max\(6, Math\.min\(8, phaseCount \+ 4\)\)/);

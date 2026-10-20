@@ -46,8 +46,8 @@ try {
         Math.random = originalRandom;
     }
     const report = JSON.parse(buildRaidResultPayload({ result: { success: true, objectiveOutcome: "Rescue Patrol: complete", mapEventDetails: "Relay opened.", loadoutSetLabel: "Cinderline", newGearNames: ["Cinderline Carbine"], loot: [{ id: "collector_titan_vault_core", qty: 1 }] }, mapCfg: RaidDomain.RAID_MAPS.obsidian_spire, fallbackTension: "high", armyIconUrl: "https://example.com/army.png" }));
-    assert.ok(report.embed.fields.some((field: { name: string }) => field.name === "Field Report"));
-    assert.ok(report.embed.fields.some((field: { name: string }) => field.name === "New Gear Discovered"));
+    assert.ok(!report.embed.fields.some((field: { name: string }) => field.name === "Field Report"));
+    assert.ok(report.embed.fields.find((field: { name: string }) => field.name === "New Gear")?.value.includes("Cinderline Carbine"));
     assert.ok(report.embed.fields.find((field: { name: string }) => field.name === "Rewards").value.includes("55,000,000"));
     assert.equal(Catalog.RAID_FIELD_GEAR.filter(item => item.kind === "weapon").length, 6);
     assert.equal(Catalog.RAID_FIELD_GEAR.filter(item => item.kind === "armor").length, 6);
@@ -157,7 +157,8 @@ try {
         for (const view of ["overview", "follower", "prestige", "mastery", "collection"]) {
             const payload = JSON.parse(context.buildPmcProfilePayload({ id: userId, username: "PMC Tester" }, view));
             const fields: Array<{ name: string; value: string }> = payload.embed.fields;
-            assert.ok(fields.every(field => field.value.length > 0 && field.value.length <= 1024));
+            assert.ok(fields.length <= 25);
+            assert.ok(fields.every(field => field.name.length <= 256 && field.value.length > 0 && field.value.length <= 1024));
             assert.ok(fields.reduce((total, field) => total + field.name.length + field.value.length, 0) + payload.embed.title.length + payload.embed.description.length < 5700);
             assert.ok(payload.components.length <= 5);
             assert.ok(payload.components[0].components[0].custom_id.endsWith(`:${userId}`));

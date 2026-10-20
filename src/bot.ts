@@ -46,7 +46,6 @@ import {
     getMapReputationEntry,
     getPmcBuffs,
     getPmcLevel,
-    getPmcMasteryLevel,
     getPmcPrestigeBonuses,
     getPmcPrestigePreview,
     getPmcPrestigeTier,
@@ -55,8 +54,6 @@ import {
     getSirGruProgress,
     getSirGruRaidBonuses,
     getSirGruStats,
-    getSirGruUnlockedAbilities,
-    getSirGruLevelXp,
     getFollowerSupportRole,
     FOLLOWER_SUPPORT_ROLES,
     SIR_GRU_ABILITIES,
@@ -132,6 +129,7 @@ import { handleCoreCommand } from "./commands/coreCommands";
 import { buildSlashCommands } from "./commands/slashCatalog";
 import { buildStartupSummary, buildStatusLines } from "./runtime/health";
 import { rejectIfRateLimited } from "./runtime/rateLimit";
+import { accrueVoiceXp, type VoiceXpAccrualState } from "./runtime/voiceXp";
 import { sanitizeTranscriptLine } from "./services/ticketText";
 import {
     archiveTicketByChannel as stateArchiveTicketByChannel,
@@ -172,7 +170,8 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
@@ -183,8 +182,7 @@ const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
 const STRICT_ENV_REQUIRED = readEnvFlag("STRICT_ENV_REQUIRED", false);
 const ENABLE_STARTUP_AUTOPANELS = readEnvFlag("ENABLE_STARTUP_AUTOPANELS", true);
 const ENABLE_STARTUP_DEPLOYMENT_SUMMARY = readEnvFlag("ENABLE_STARTUP_DEPLOYMENT_SUMMARY", true);
-const MESSAGE_XP_GAIN = 25;
-const XP_COOLDOWN_MS = 0;
+const MESSAGE_XP_GAIN = 100;
 const RAID_COOLDOWN_MS = 5 * 1000;
 const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
 const WEEKLY_BALANCE_REPORT_MS = 7 * 24 * 60 * 60 * 1000;
@@ -194,6 +192,13 @@ const BACKUP_STALE_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
 const PREFIX = "$";
 const MIN_BET = 1;
 const MIN_RAID_BET = 10;
+type VoiceXpSession = VoiceXpAccrualState & {
+    guild: Guild;
+    userId: string;
+    connected: boolean;
+    updatedAt: number;
+};
+const VOICE_XP_SESSIONS = new Map<string, VoiceXpSession>();
 const MOD_DATA_FILE = path.resolve(__dirname, "../src/data/moderation.json");
 const TRADE_DATA_FILE = path.resolve(__dirname, "../src/data/trades.json");
 const GIVEAWAY_DATA_FILE = path.resolve(__dirname, "../src/data/giveaways.json");
@@ -218,6 +223,12 @@ const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "";
 const ROLE_SELECTOR_CHANNEL_ID = "1554389202085482566";
+const TEMP_VOICE_CATEGORY_ID = "1523417152441421888";
+const TEMP_VOICE_PANEL_CHANNEL_NAME = "create-your-vc";
+const TEMP_VOICE_PANEL_BUTTON_ID = "temporary_vc:create";
+const TEMP_VOICE_CHANNEL_PREFIX = "temp-vc-";
+const VOICE_XP_TICK_MS = 15_000;
+const VOICE_XP_REMAINDER_TTL_MS = 24 * 60 * 60 * 1000;
 const SELF_ROLE_SELECTOR_ROLES = [
     { id: "1523420005708861632", label: "Role ID number 1", buttonId: "self_role_selector:role_one", style: ButtonStyle.Success },
     { id: "1491494698798551192", label: "Role ID number 2", buttonId: "self_role_selector:role_two", style: ButtonStyle.Secondary, emoji: "🟨" }
@@ -2028,6 +2039,7 @@ type GuildModerationState = {
         reportAdmin?: string | null;
         featureBrief?: string | null;
         roleSelector?: string | null;
+        voiceCreator?: string | null;
     };
 };
 
@@ -3125,13 +3137,13 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     return moderationStore.guilds[guildId];
 }
 
-function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector"): string | null {
+function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator"): string | null {
     const cfg = ensureGuildModeration(guildId);
     const value = cfg.panelMessageIds?.[panel];
     return value ? String(value) : null;
 }
 
-function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector", messageId: string | null): void {
+function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator", messageId: string | null): void {
     const cfg = ensureGuildModeration(guildId);
     if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
     cfg.panelMessageIds[panel] = messageId;
@@ -4117,6 +4129,95 @@ function enqueueXpRoleSync(guild: Guild, userId: string, xp: number): void {
     void drainXpRoleSyncQueue();
 }
 
+function awardEngagementXp(guild: Guild | null, userId: string, xpDelta: number): { previousXp: number; totalXp: number } {
+    const previousXp = ensureUser(userId).xp;
+    const totalXp = addXP(userId, xpDelta);
+    if (guild && getEffectiveXpRoleEntries().some(entry => previousXp < entry.xp && totalXp >= entry.xp)) {
+        enqueueXpRoleSync(guild, userId, totalXp);
+        void notifyXpThresholdUnlock(guild, userId, previousXp, totalXp);
+    }
+    return { previousXp, totalXp };
+}
+
+function voiceXpSessionKey(guildId: string, userId: string): string {
+    return `${guildId}:${userId}`;
+}
+
+function trackVoiceXpConnection(guild: Guild, userId: string, connected: boolean, now = Date.now()): void {
+    const key = voiceXpSessionKey(guild.id, userId);
+    const session = VOICE_XP_SESSIONS.get(key);
+    if (connected) {
+        if (session) {
+            session.guild = guild;
+            session.connected = true;
+            session.lastAccruedAt = now;
+            session.updatedAt = now;
+        } else {
+            VOICE_XP_SESSIONS.set(key, {
+                guild,
+                userId,
+                connected: true,
+                lastAccruedAt: now,
+                remainderMs: 0,
+                updatedAt: now
+            });
+        }
+        return;
+    }
+
+    if (!session || !session.connected) return;
+    awardConnectedVoiceXp(session, now);
+    session.connected = false;
+    session.lastAccruedAt = now;
+    session.updatedAt = now;
+}
+
+function awardConnectedVoiceXp(session: VoiceXpSession, now = Date.now()): void {
+    if (!session.connected) return;
+    const accrued = accrueVoiceXp(session, now);
+    session.lastAccruedAt = accrued.state.lastAccruedAt;
+    session.remainderMs = accrued.state.remainderMs;
+    session.updatedAt = now;
+    if (accrued.xp <= 0) return;
+
+    const award = awardEngagementXp(session.guild, session.userId, accrued.xp);
+    appendAuditEvent("voice_engagement_xp", {
+        guildId: session.guild.id,
+        userId: session.userId,
+        xpDelta: accrued.xp,
+        minutes: accrued.minutes,
+        totalXp: award.totalXp
+    });
+}
+
+function processVoiceXpSessions(now = Date.now()): void {
+    for (const [key, session] of VOICE_XP_SESSIONS.entries()) {
+        if (session.connected) {
+            if (!session.guild.voiceStates.cache.get(session.userId)?.channelId) {
+                awardConnectedVoiceXp(session, now);
+                session.connected = false;
+                session.lastAccruedAt = now;
+                session.updatedAt = now;
+            } else {
+                awardConnectedVoiceXp(session, now);
+            }
+        } else if (now - session.updatedAt >= VOICE_XP_REMAINDER_TTL_MS) {
+            VOICE_XP_SESSIONS.delete(key);
+        }
+    }
+}
+
+function seedConnectedVoiceXpSessions(): void {
+    const now = Date.now();
+    for (const guild of client.guilds.cache.values()) {
+        for (const state of guild.voiceStates.cache.values()) {
+            if (state.channelId && state.member && !state.member.user.bot) {
+                trackVoiceXpConnection(guild, state.member.id, true, now);
+            }
+        }
+    }
+}
+
 function getPrimaryGuild(): Guild | null {
     return DISCORD_GUILD_ID
         ? client.guilds.cache.get(DISCORD_GUILD_ID) || null
@@ -4846,7 +4947,7 @@ async function helpPageXP(guild?: Guild | null) {
             },
             {
                 name: "🪖 Progression Rules",
-                value: "• Engagement XP gives +1 for communication actions\n  (chat messages, replies, mentions, attachments).\n\n• Raid XP is tracked separately in your PMC profile."
+                value: "• Each eligible non-bot message grants 100 engagement XP (text, replies, mentions, or attachments).\n\n• Raid XP is tracked separately in your PMC profile."
             }
         );
 
@@ -6592,7 +6693,6 @@ function buildPmcProfilePayload(user: User, view: PmcProfileView = "overview"): 
     const sirGruProgress = sirGru ? getSirGruProgress(sirGru) : null;
     const sirGruStats = sirGruProgress ? getSirGruStats(sirGruProgress.level) : null;
     const sirGruBonuses = sirGru ? getSirGruRaidBonuses(sirGru) : null;
-    const sirGruAbilities = getSirGruUnlockedAbilities(sirGru || undefined);
     const nextSirGruAbility = sirGruProgress
         ? SIR_GRU_ABILITIES.find(ability => ability.level > sirGruProgress.level)
         : null;
@@ -6617,12 +6717,17 @@ function buildPmcProfilePayload(user: User, view: PmcProfileView = "overview"): 
     const ownedUltraCollectibles = collectibleEntries.filter(entry => ULTRA_RARE_COLLECTIBLE_IDS.includes(entry.id as (typeof ULTRA_RARE_COLLECTIBLE_IDS)[number])).length;
     const collectibleValue = collectibleEntries.reduce((sum, entry) => sum + (getVendorSellPrice(entry.id) * entry.qty), 0);
     const collectibleLine = collectibleEntries.length
-        ? collectibleEntries.slice(0, 6).map(entry => `${entry.def.name} x${entry.qty}`).join("\n")
+        ? collectibleEntries.slice(0, 3).map(entry => `${entry.def.name} x${entry.qty}`).join("\n")
         : "No collectibles found yet. Ultra-rare collectibles can only be found in raids.";
-    const bossProgressLines = (view === "collection" ? [...RaidDomain.RAID_BOSS_ROSTER] : []).sort((first, second) => (state.bossProgress?.[second.name]?.kills || 0) - (state.bossProgress?.[first.name]?.kills || 0)).slice(0, 6).map(boss => {
+    const bossProgressLines = (view === "collection" ? [...RaidDomain.RAID_BOSS_ROSTER] : [])
+        .filter(boss => (state.bossProgress?.[boss.name]?.kills || 0) > 0)
+        .sort((first, second) => (state.bossProgress?.[second.name]?.kills || 0) - (state.bossProgress?.[first.name]?.kills || 0))
+        .slice(0, 3)
+        .map(boss => {
         const entry = getBossProgressEntry(user.id, boss.name);
-        return `${boss.name}: ${entry.kills} kills • streak ${entry.currentStreak}/${entry.bestStreak} • intel ${entry.intelLevel}/5${entry.alternateFormUnlocked ? " • form unlocked" : ""}`;
+        return `${boss.name} • ${entry.kills}/${entry.encounters} kills • best streak ${entry.bestStreak}`;
     });
+    const latestBossEncounter = state.raidHistory.find(entry => entry.bossSpawned && entry.bossName);
     const winRate = raids > 0 ? ((wins / raids) * 100).toFixed(1) : "0.0";
     const recentTrend = state.raidHistory.slice(0, 5).map(entry => entry.success ? "W" : "L").join(" ") || "No recent raids";
     const thresholdLine = progress.capped
@@ -6641,15 +6746,10 @@ function buildPmcProfilePayload(user: User, view: PmcProfileView = "overview"): 
         .setColor(tierVisual.color)
         .setTitle(`🪖 ${state.pmcCallsign} • ${PMC_PROFILE_VIEWS[view]}`)
         .setDescription(`Level ${progress.level.toLocaleString()} • Prestige ${prestigeTier.numeral} • ${tier?.label || "Recruit"}`)
-        .setAuthor({ name: `${user.username} · Army Profile`, iconURL: tierVisual.iconUrl })
-        .setThumbnail(tierVisual.iconUrl)
         .addFields(
             {
-                name: "Profile Header",
+                name: "Recent Activity",
                 value: [
-                    `Callsign: ${state.pmcCallsign} • Banner: ${state.pmcBanner}`,
-                    `Level: ${progress.level}/${PMC_LEVEL_CAP}`,
-                    `Raid XP: ${state.pmcXP}`,
                     `Win Rate: ${winRate}%`,
                     `Recent Form: ${recentTrend}`
                 ].join("\n"),
@@ -6661,19 +6761,15 @@ function buildPmcProfilePayload(user: User, view: PmcProfileView = "overview"): 
             { name: "Raid Standing", value: `Raids ${raids} | Wins ${wins} | Boss Kills ${bossKills}`, inline: true },
             { name: "Progress Track", value: `${pmcBar(state.pmcXP)}\n${thresholdLine}`, inline: false },
             {
-                name: `${prestigeTier.badge} Prestige Protocol`,
+                name: `${prestigeTier.badge} Prestige`,
                 value: [
-                    `Current Rank: Prestige ${prestigeTier.numeral} • ${prestigeTier.label}`,
+                    `Rank: Prestige ${prestigeTier.numeral} • ${prestigeTier.label}`,
                     state.pmcPrestige >= PMC_PRESTIGE_CAP
-                        ? "Status: Maximum PMC Prestige achieved"
+                        ? "Maximum rank achieved"
                         : prestigeEligible
-                            ? `Status: Ready for Prestige ${nextPrestigeTier.numeral}`
-                            : `Eligibility: PMC Level ${PMC_PRESTIGE_LEVEL_REQUIREMENT.toLocaleString()} • ${Math.max(0, PMC_PRESTIGE_LEVEL_REQUIREMENT - progress.level).toLocaleString()} levels remaining`,
-                    `Permanent: +${(prestigeBonuses.successBonus * 100).toFixed(1)}% success • +${(prestigeBonuses.tokenBonus * 100).toFixed(1)}% tokens • +${(prestigeBonuses.defenseBonus * 100).toFixed(1)}% defense • +${(prestigeBonuses.xpBonus * 100).toFixed(1)}% raid XP`,
-                    `Perks: ${state.pmcPrestigePerks.length ? state.pmcPrestigePerks.join(", ") : "None unlocked"}`,
-                    `Milestone Rewards: ${state.pmcMilestonesClaimed.length} claimed • Post-Cap Mastery: ${getPmcMasteryLevel(state.pmcXP)}`,
-                    `Reset Scope: PMC Level and Raid XP only • Inventory, currency, map REP, trophies, and records preserved`,
-                    `Overlevel Option: Continue advancing to Level ${PMC_LEVEL_CAP.toLocaleString()} without prestiging`
+                            ? `Ready for Prestige ${nextPrestigeTier.numeral}`
+                            : `${Math.max(0, PMC_PRESTIGE_LEVEL_REQUIREMENT - progress.level).toLocaleString()} levels to eligibility`,
+                    `Bonuses: +${(prestigeBonuses.successBonus * 100).toFixed(1)}% success • +${(prestigeBonuses.tokenBonus * 100).toFixed(1)}% tokens • +${(prestigeBonuses.defenseBonus * 100).toFixed(1)}% defense • +${(prestigeBonuses.xpBonus * 100).toFixed(1)}% raid XP`
                 ].join("\n"),
                 inline: false
             },
@@ -6686,48 +6782,43 @@ function buildPmcProfilePayload(user: User, view: PmcProfileView = "overview"): 
                 inline: false
             },
             {
-                name: "Combat Buff Matrix",
+                name: "Raid Bonuses",
                 value: [
-                    `Success: +${(buffs.successBonus * 100).toFixed(2)}%`,
-                    `Token Yield: +${(buffs.tokenBonus * 100).toFixed(2)}%`,
-                    `Loss Mitigation: +${(buffs.defenseBonus * 100).toFixed(2)}%`,
-                    `Raid XP Gain: +${(buffs.xpBonus * 100).toFixed(2)}%`
-                ].join(" | "),
+                    `Success +${(buffs.successBonus * 100).toFixed(1)}%`,
+                    `Tokens +${(buffs.tokenBonus * 100).toFixed(1)}%`,
+                    `Defense +${(buffs.defenseBonus * 100).toFixed(1)}%`,
+                    `Raid XP +${(buffs.xpBonus * 100).toFixed(1)}%`
+                ].join(" • "),
                 inline: false
             },
             {
                 name: "Follower: Sir Gru",
                 value: sirGru && sirGruProgress && sirGruStats && sirGruBonuses ? [
-                    `Status: Active • ${FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru)].label} • Level ${sirGruProgress.level}/100${sirGruProgress.capped ? " • Max perk active" : ""}`,
-                    `Progress: ${sirGruProgress.capped ? "MAX" : `${sirGruProgress.intoLevel}/${Math.max(1, sirGruProgress.nextThreshold - sirGruProgress.currentThreshold)} XP • ${sirGruProgress.needForNext} to next level`}`,
-                    `Stats: Scouting ${sirGruStats.scouting} • Firepower ${sirGruStats.firepower} • Guard ${sirGruStats.guard} • Loyalty ${sirGruStats.loyalty}`,
-                    `Abilities: ${sirGruAbilities.map(ability => ability.name).join(", ") || "None"}`,
-                    `Next Ability: ${nextSirGruAbility ? `Lv ${nextSirGruAbility.level} • ${nextSirGruAbility.name}` : "All abilities unlocked"}`,
-                    `Raid Perks: +${(sirGruBonuses.successBonus * 100).toFixed(2)}% success • +${(sirGruBonuses.tokenBonus * 100).toFixed(2)}% tokens • +${(sirGruBonuses.defenseBonus * 100).toFixed(2)}% defense • +${(sirGruBonuses.xpBonus * 100).toFixed(2)}% raid XP • +${(sirGruBonuses.bossKillBonus * 100).toFixed(2)}% boss kill`,
-                    `History: ${sirGru.raids} raids • ${sirGru.bossAssists} boss assists`
+                    `Level ${sirGruProgress.level}/100 • ${FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru)].label}`,
+                    `Progress: ${sirGruProgress.capped ? "MAX" : `${sirGruProgress.needForNext} XP to next level`}`,
+                    `Next ability: ${nextSirGruAbility ? `Lv ${nextSirGruAbility.level} • ${nextSirGruAbility.name}` : "All unlocked"}`,
+                    `Raid bonus: +${(sirGruBonuses.successBonus * 100).toFixed(1)}% success • +${(sirGruBonuses.bossKillBonus * 100).toFixed(1)}% boss takedown`
                 ].join("\n") : "Unlocks automatically at PMC Prestige I.",
                 inline: false
             },
             {
                 name: "Boss Trophy Case",
                 value: [
-                    `Boss Kills: ${bossKills}`,
-                    `First-Kill Hearts: ${bossHeartsUnlocked}`,
-                    `Unlocked Hearts: ${bossHeartNames.length ? bossHeartNames.join(", ").slice(0, 850) : "None yet. Defeat a boss for your first heart trophy."}`
+                    `Boss kills: ${bossKills} • Hearts: ${bossHeartsUnlocked}`,
+                    bossHeartNames.length ? `Recent: ${bossHeartNames.slice(0, 3).join(", ")}${bossHeartNames.length > 3 ? ` • +${bossHeartNames.length - 3} more` : ""}` : "No boss hearts yet."
                 ].join("\n"),
                 inline: false
             },
             {
-                name: "Boss Progression Matrix",
-                value: bossProgressLines.join("\n") || "No encounters recorded.",
+                name: "Boss Records",
+                value: bossProgressLines.join("\n") || "No boss kills recorded yet.",
                 inline: false
             },
             {
                 name: "Collector Vault",
                 value: [
-                    `Owned: ${ownedCollectibles}/${COLLECTIBLE_ITEM_IDS.length}`,
-                    `Ultra-Rare Owned: ${ownedUltraCollectibles}/${ULTRA_RARE_COLLECTIBLE_IDS.length}`,
-                    `Vendor Value: ${collectibleValue.toLocaleString()} FN Token$`,
+                    `Owned ${ownedCollectibles}/${COLLECTIBLE_ITEM_IDS.length} • Ultra-rare ${ownedUltraCollectibles}/${ULTRA_RARE_COLLECTIBLE_IDS.length}`,
+                    `Vendor value ${collectibleValue.toLocaleString()} FN Token$`,
                     collectibleLine
                 ].join("\n"),
                 inline: false
@@ -6740,37 +6831,38 @@ function buildPmcProfilePayload(user: User, view: PmcProfileView = "overview"): 
         );
 
     const sections: Record<PmcProfileView, string[]> = {
-        overview: ["Profile Header", "Progress Track", "Raid Standing", "Combat Buff Matrix"],
+        overview: ["Recent Activity", "Progress Track", "Raid Standing", "Raid Bonuses"],
         follower: ["Follower: Sir Gru"],
-        prestige: [`${prestigeTier.badge} Prestige Protocol`],
+        prestige: [`${prestigeTier.badge} Prestige`],
         mastery: ["Territory Mastery", "Lifetime Raid Economy"],
-        collection: ["Boss Trophy Case", "Boss Progression Matrix", "Collector Vault"]
+        collection: ["Boss Trophy Case", "Boss Records", "Collector Vault"]
     };
     embed.setFields((embed.data.fields || []).filter(field => sections[view].includes(field.name)));
     if (view === "overview") {
         const weapon = getBestOwnedGear(user.id, WEAPON_IDS, "raidAttack");
         const armor = getBestOwnedGear(user.id, ARMOR_IDS, "raidDefense");
         embed.addFields({ name: "Deployment Readiness", value: [
-            `Weapon: ${weapon?.name || "None"}${weapon ? ` • ${state.gearDurability[weapon.id] ?? 100}% durability` : ""}`,
-            `Armor: ${armor?.name || "None"}${armor ? ` • ${state.gearDurability[armor.id] ?? 100}% durability` : ""}`,
+            `Weapon: ${weapon?.name || "None"} • Armor: ${armor?.name || "None"}`,
             `Med patches: ${state.inventory.med_patch || 0} • Repair kits: ${state.inventory.repair_kit || 0}`,
-            `Sir Gru: ${sirGruProgress ? `Lv ${sirGruProgress.level} • ${FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru || undefined)].label}` : "Unlock at Prestige I"}`,
             activeRaidEncounters.has(user.id) ? "Raid in progress" : "Ready to deploy"
         ].join("\n"), inline: false });
+        embed.addFields({ name: "Boss Engagement", value: latestBossEncounter?.bossName
+            ? `${latestBossEncounter.bossName} • ${latestBossEncounter.bossDefeated ? "Defeated" : "Encountered"} • ${bossKills} total kills`
+            : `${bossKills} total kills • No recent boss encounter`, inline: false });
     }
     if (view === "follower") {
-        embed.addFields({ name: "Ability Roadmap", value: SIR_GRU_ABILITIES.map(ability => `${sirGruProgress && sirGruProgress.level >= ability.level ? "Unlocked" : `Level ${ability.level}`} • **${ability.name}**\n${ability.desc}`).join("\n\n"), inline: false });
-        if (sirGru && nextSirGruAbility) embed.addFields({ name: "Next Unlock", value: `${nextSirGruAbility.name} • ${(getSirGruLevelXp(nextSirGruAbility.level) - sirGru.xp).toLocaleString()} follower XP remaining`, inline: false });
-        if (sirGru) embed.addFields({ name: "Support Assignment", value: FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru)].description, inline: false });
+        if (sirGru && sirGruStats) embed.addFields({ name: "Support", value: [
+            FOLLOWER_SUPPORT_ROLES[getFollowerSupportRole(sirGru)].description,
+            `Scouting ${sirGruStats.scouting} • Firepower ${sirGruStats.firepower} • Guard ${sirGruStats.guard}`
+        ].join("\n"), inline: false });
     }
     if (view === "prestige") {
         const preview = getPmcPrestigePreview(state.pmcXP, state.pmcPrestige);
-        embed.addFields({ name: "Next Rank Preview", value: preview.capped ? "Prestige X complete. All permanent ranks unlocked." : [
+        embed.addFields({ name: "Next Rank", value: preview.capped ? "Prestige X complete." : [
             `XP to eligibility: ${preview.xpRemaining.toLocaleString()}`,
-            `Permanent success: +${(preview.currentBonuses.successBonus * 100).toFixed(1)}% -> +${(preview.nextBonuses.successBonus * 100).toFixed(1)}%`,
-            `Permanent raid XP: +${(preview.currentBonuses.xpBonus * 100).toFixed(1)}% -> +${(preview.nextBonuses.xpBonus * 100).toFixed(1)}%`,
-            `Total success immediately after reset: +${(preview.currentBuffs.successBonus * 100).toFixed(1)}% -> +${(preview.resetBuffs.successBonus * 100).toFixed(1)}%`,
-            "Level-based bonuses rebuild as you level again. Follower XP, role, gear and currency are preserved."
+            `Success: +${(preview.currentBonuses.successBonus * 100).toFixed(1)}% → +${(preview.nextBonuses.successBonus * 100).toFixed(1)}%`,
+            `Raid XP: +${(preview.currentBonuses.xpBonus * 100).toFixed(1)}% → +${(preview.nextBonuses.xpBonus * 100).toFixed(1)}%`,
+            "Level and raid XP reset; inventory, currency, map REP, trophies, and records remain."
         ].join("\n"), inline: false });
     }
     const navigation = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
@@ -8574,6 +8666,81 @@ async function upsertSelfRoleSelectorForGuild(guild: Guild): Promise<void> {
         return;
     }
     setGuildPanelMessageId(guild.id, "roleSelector", sent.id);
+}
+
+function buildTemporaryVoicePanelPayload() {
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0x0f766e)
+        .setTitle("Create Your VC")
+        .setDescription("Create a temporary voice room and get moved in automatically. It closes when everyone leaves."),
+    "Temporary Voice Access", "Private room controls");
+    const button = new ButtonBuilder()
+        .setCustomId(TEMP_VOICE_PANEL_BUTTON_ID)
+        .setLabel("Create my VC")
+        .setEmoji("🔊")
+        .setStyle(ButtonStyle.Success);
+
+    return {
+        embeds: [embed],
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(button)],
+        allowedMentions: { parse: [] as const }
+    };
+}
+
+async function ensureTemporaryVoicePanelForGuild(guild: Guild): Promise<void> {
+    const category = guild.channels.cache.get(TEMP_VOICE_CATEGORY_ID)
+        || await guild.channels.fetch(TEMP_VOICE_CATEGORY_ID).catch(() => null);
+    if (!category || category.type !== ChannelType.GuildCategory) {
+        console.warn(`Temporary voice panel skipped for guild ${guild.id}: category ${TEMP_VOICE_CATEGORY_ID} was not found.`);
+        return;
+    }
+
+    let panelChannel = guild.channels.cache.find(channel =>
+        channel.type === ChannelType.GuildText
+        && channel.parentId === category.id
+        && channel.name === TEMP_VOICE_PANEL_CHANNEL_NAME
+    ) || null;
+    if (!panelChannel) {
+        panelChannel = await guild.channels.create({
+            name: TEMP_VOICE_PANEL_CHANNEL_NAME,
+            type: ChannelType.GuildText,
+            parent: category.id,
+            topic: "Create a temporary voice room with the button below."
+        }).catch(() => null);
+    }
+    if (!panelChannel || panelChannel.type !== ChannelType.GuildText) {
+        console.warn(`Temporary voice panel could not be created in category ${category.id}; check Manage Channels and channel permissions.`);
+        return;
+    }
+
+    const payload = buildTemporaryVoicePanelPayload();
+    const storedMessageId = getGuildPanelMessageId(guild.id, "voiceCreator");
+    if (storedMessageId) {
+        const stored = await panelChannel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit(payload).catch(() => null);
+        if (edited) return;
+        setGuildPanelMessageId(guild.id, "voiceCreator", null);
+    }
+
+    const sent = await panelChannel.send(payload).catch(() => null);
+    if (!sent) {
+        console.warn(`Temporary voice panel could not be posted in channel ${panelChannel.id}; check Send Messages and Embed Links.`);
+        return;
+    }
+    setGuildPanelMessageId(guild.id, "voiceCreator", sent.id);
+}
+
+async function cleanupEmptyTemporaryVoiceChannel(guild: Guild, channelId: string): Promise<void> {
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel
+        || channel.type !== ChannelType.GuildVoice
+        || channel.parentId !== TEMP_VOICE_CATEGORY_ID
+        || !channel.name.startsWith(TEMP_VOICE_CHANNEL_PREFIX)
+        || channel.members.size > 0) return;
+
+    await channel.delete("Temporary voice room is empty").catch(error => {
+        console.warn(`[voice] Could not delete empty temporary channel ${channelId}:`, error);
+    });
 }
 
 function buildBotFeatureBriefPayload(guildName: string) {
@@ -11314,6 +11481,7 @@ client.once("clientReady", async () => {
         console.error(`[startup] Slash command count ${slashCommands.length} exceeds Discord guild limit (100). Some commands will not register.`);
     }
     updateBotPresence();
+    seedConnectedVoiceXpSessions();
     console.log(`[startup] ${buildStartupSummary(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {
         userTag: client.user?.tag,
@@ -11340,6 +11508,7 @@ client.once("clientReady", async () => {
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
             }
+            await ensureTemporaryVoicePanelForGuild(guild);
             if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
                 await sendDeploymentSummaryIfNeeded();
             }
@@ -11362,6 +11531,7 @@ client.once("clientReady", async () => {
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
             }
+            await ensureTemporaryVoicePanelForGuild(guild);
         }
         if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
             await sendDeploymentSummaryIfNeeded();
@@ -11420,6 +11590,10 @@ setInterval(() => {
 setInterval(() => {
     updateBotPresence();
 }, 10 * 60 * 1000).unref();
+
+setInterval(() => {
+    processVoiceXpSessions();
+}, VOICE_XP_TICK_MS).unref();
 
 if (COMMAND_IDEMPOTENCY_WINDOW_MS > 0) {
     setInterval(() => {
@@ -11879,6 +12053,85 @@ client.on("interactionCreate", async interaction => {
                 : `Could not add ${configuredRole.label}. Check the bot's Manage Roles permission.`,
             flags: MessageFlags.Ephemeral
         }).catch(() => undefined);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId === TEMP_VOICE_PANEL_BUTTON_ID) {
+        const guild = interaction.guild;
+        if (!guild) {
+            await interaction.reply({ content: "Temporary voice rooms are only available in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (!await interaction.deferReply({ flags: MessageFlags.Ephemeral }).then(() => true).catch(() => false)) return;
+
+        const category = guild.channels.cache.get(TEMP_VOICE_CATEGORY_ID)
+            || await guild.channels.fetch(TEMP_VOICE_CATEGORY_ID).catch(() => null);
+        if (!category || category.type !== ChannelType.GuildCategory) {
+            await interaction.editReply("The temporary voice category is unavailable. Please notify a server administrator.").catch(() => undefined);
+            return;
+        }
+
+        const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+            await interaction.editReply("The bot needs Manage Channels permission to create your room.").catch(() => undefined);
+            return;
+        }
+
+        const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+        if (!member) {
+            await interaction.editReply("Unable to find your server member record. Please try again.").catch(() => undefined);
+            return;
+        }
+
+        const ownerPrefix = `${TEMP_VOICE_CHANNEL_PREFIX}${member.id}-`;
+        let room = guild.channels.cache.find(channel =>
+            channel.type === ChannelType.GuildVoice
+            && channel.parentId === category.id
+            && channel.name.startsWith(ownerPrefix)
+        );
+        let createdRoom = false;
+        if (!room) {
+            const safeName = member.displayName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "member";
+            const created = await guild.channels.create({
+                name: `${ownerPrefix}${safeName}`.slice(0, 100),
+                type: ChannelType.GuildVoice,
+                parent: category.id,
+                permissionOverwrites: [
+                    { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] },
+                    { id: botMember.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.MoveMembers] }
+                ],
+                reason: `Temporary voice room requested by ${member.user.tag}`
+            }).catch(error => {
+                console.warn(`[voice] Could not create temporary room for ${member.id} in guild ${guild.id}:`, error);
+                return null;
+            });
+            if (!created || created.type !== ChannelType.GuildVoice) {
+                await interaction.editReply("Could not create your voice room. Check the bot's category permissions and try again.").catch(() => undefined);
+                return;
+            }
+            room = created;
+            createdRoom = true;
+        }
+
+        if (!room.permissionsFor(botMember)?.has(PermissionFlagsBits.MoveMembers)) {
+            if (createdRoom) await room.delete("Bot cannot move the member into the temporary room").catch(() => undefined);
+            await interaction.editReply("The bot needs Move Members permission in the temporary voice category to move you into the room.").catch(() => undefined);
+            return;
+        }
+
+        if (member.voice.channelId !== room.id) {
+            const moved = await member.voice.setChannel(room.id, "Moved into a temporary voice room").then(() => true).catch(error => {
+                console.warn(`[voice] Could not move member ${member.id} to temporary room ${room!.id}:`, error);
+                return false;
+            });
+            if (!moved) {
+                if (createdRoom) await room.delete("Member could not be moved into the temporary room").catch(() => undefined);
+                await interaction.editReply("Your room was created, but Discord did not allow the bot to move you. Check Move Members permission and try again.").catch(() => undefined);
+                return;
+            }
+        }
+
+        await interaction.editReply(`Your temporary room is ready: <#${room.id}>`).catch(() => undefined);
         return;
     }
 
@@ -12533,6 +12786,25 @@ client.on("interactionCreate", async interaction => {
     }
 });
 
+client.on("voiceStateUpdate", async (oldState, newState) => {
+    if (oldState.channelId && oldState.channelId !== newState.channelId) {
+        setTimeout(() => {
+            void cleanupEmptyTemporaryVoiceChannel(oldState.guild, oldState.channelId!);
+        }, 1000).unref();
+    }
+
+    const member = newState.member || oldState.member;
+    if (!member || member.user.bot) return;
+    const key = voiceXpSessionKey(member.guild.id, member.id);
+    if (newState.channelId && !oldState.channelId) {
+        trackVoiceXpConnection(member.guild, member.id, true);
+    } else if (!newState.channelId && oldState.channelId) {
+        trackVoiceXpConnection(member.guild, member.id, false);
+    } else if (newState.channelId && !VOICE_XP_SESSIONS.has(key)) {
+        trackVoiceXpConnection(member.guild, member.id, true);
+    }
+});
+
 client.on("messageCreate", async message => {
     if (message.author.bot) return;
 
@@ -12570,8 +12842,7 @@ client.on("messageCreate", async message => {
         message.attachments.size > 0;
 
     if (isCommunicationEvent) {
-        const currentXp = ensureUser(message.author.id).xp;
-        const nextXp = addXP(message.author.id, MESSAGE_XP_GAIN);
+        const { previousXp: currentXp, totalXp: nextXp } = awardEngagementXp(message.guild, message.author.id, MESSAGE_XP_GAIN);
         appendAuditEvent("engagement_xp", {
             userId: message.author.id,
             guildId: message.guildId,
@@ -12582,14 +12853,6 @@ client.on("messageCreate", async message => {
             mentionCount: message.mentions.users.size,
             attachmentCount: message.attachments.size
         });
-        if (message.guild) {
-            const roleEntries = getEffectiveXpRoleEntries();
-            const crossedThreshold = roleEntries.some(entry => currentXp < entry.xp && nextXp >= entry.xp);
-            if (crossedThreshold) {
-                enqueueXpRoleSync(message.guild, message.author.id, nextXp);
-                void notifyXpThresholdUnlock(message.guild, message.author.id, currentXp, nextXp);
-            }
-        }
     }
 
     if (message.content.trim().toLowerCase() === `${PREFIX}ping`) {

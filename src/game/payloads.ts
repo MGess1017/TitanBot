@@ -563,36 +563,19 @@ export function buildRaidResultPayload(input: {
     })).sort((first, second) => rarityOrder.indexOf(second.def?.rarity || "common") - rarityOrder.indexOf(first.def?.rarity || "common") || getVendorSellPrice(second.id) * second.qty - getVendorSellPrice(first.id) * first.qty);
     const lootRows: string[] = [];
     let lootLength = 0;
-    for (const entry of lootEntries) {
+    for (const entry of lootEntries.slice(0, 6)) {
         const line = `[${rarityBadge(entry.def?.rarity)}] ${entry.qty}x ${entry.def?.name || entry.id}`;
-        if (lootLength + line.length + 1 > 900) break;
+        if (lootLength + line.length + 1 > 500) break;
         lootRows.push(line);
         lootLength += line.length + 1;
     }
     if (lootRows.length < lootEntries.length) lootRows.push(`+${lootEntries.length - lootRows.length} more stacks in inventory`);
-    const enhancedDrops = lootEntries.filter(entry => entry.id.startsWith("enhanced_") && entry.def);
-    const mythicDrops = lootEntries.filter(entry => String(entry.def?.rarity || "") === "mythic");
 
-    const bossResolution = !result.bossSpawned
-        ? "Boss: No boss detected"
-        : result.bossDefeated
-            ? `${result.bossName || mapCfg.bossName} neutralized${result.bossBonusXp ? ` • +${result.bossBonusXp} raid XP` : ""}`
-            : `${result.bossName || mapCfg.bossName} active • ${result.bossKillChance || 0}% kill chance`;
-
-    const heartLine = result.bossHeartUnlockedName
-        ? `Boss Heart: ${result.bossHeartUnlockedName}`
-        : result.bossDefeated
-            ? "Boss Heart: Not awarded"
-            : "Boss Heart: Not claimed";
-
-    const specialMoments = [
-        result.bossHeartUnlockedName ? `Boss Heart: ${result.bossHeartUnlockedName}` : null,
-        result.pmcTierUnlockedLabel ? `${result.pmcTierUnlockedBadge || "🏅"} ${result.pmcTierUnlockedLabel}` : null,
-        result.mapReputationTierUnlocked ? `Territory Rank: ${result.mapReputationTierUnlocked}` : null,
-        result.sirGruLevel && result.sirGruLevelBefore && result.sirGruLevel > result.sirGruLevelBefore ? `Sir Gru Level ${result.sirGruLevel}` : null,
-        result.sirGruMaxPerkUnlocked ? "Sir Gru max perk unlocked" : null,
-        enhancedDrops.length ? `Enhanced: ${enhancedDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null,
-        mythicDrops.length ? `Mythic: ${mythicDrops.map(entry => entry.def?.name || entry.id).join(", ")}` : null
+    const notableEvents = [
+        result.bossHeartUnlockedName ? `Boss heart: ${result.bossHeartUnlockedName}` : null,
+        result.pmcTierUnlockedLabel ? `${result.pmcTierUnlockedBadge || "🏅"} PMC tier: ${result.pmcTierUnlockedLabel}` : null,
+        result.mapReputationTierUnlocked ? `Map rank: ${result.mapReputationTierUnlocked}` : null,
+        result.sirGruLevel && result.sirGruLevelBefore && result.sirGruLevel > result.sirGruLevelBefore ? `Sir Gru reached level ${result.sirGruLevel}` : null
     ].filter(Boolean) as string[];
 
     const embed = new EmbedBuilder()
@@ -605,17 +588,15 @@ export function buildRaidResultPayload(input: {
         .setThumbnail(result.bossSpawned && result.bossImageUrl ? result.bossImageUrl : armyIconUrl)
         .addFields(
             {
-                name: "Summary",
+                name: "Outcome",
                 value: [
-                    `Status: ${result.success ? "Extracted" : "Failed"}`,
-                    `Success Chance: ${result.successChance || 0}%`,
-                    `Approach: ${result.approachLabel || "Balanced"}`,
-                    `Route: ${result.extractionRouteLabel ? `${result.extractionRouteLabel} • ${result.branchDecisionLabel || "Original Route"}` : result.branchDecisionLabel || "Standard extraction lanes"}`,
-                    `Map Event: ${result.mapEventLabel || "None"}`,
-                    `PMC: Prestige ${result.pmcPrestige || 0} • ${result.pmcPrestigeLabel || "Unprestiged"}`,
-                    `Loadout: ${result.selectedWeaponName || "Auto-best"} • ${result.selectedArmorName || "Auto-best"}${result.loadoutSetLabel ? ` • ${result.loadoutSetLabel} set` : ""}`,
-                    `Territory: ${result.mapReputationTier || "Unproven"} • ${result.mapReputationPoints || 0} REP`
-                ].join("\n"),
+                    `${result.success ? "Extracted" : "Failed"} • ${result.successChance || 0}% chance`,
+                    result.pmcPrestige ? `PMC Prestige ${result.pmcPrestige}` : null,
+                    result.approachLabel ? `Approach: ${result.approachLabel}` : null,
+                    result.extractionRouteLabel ? `Route: ${result.extractionRouteLabel}` : null,
+                    result.objectiveOutcome ? `Objective: ${result.objectiveOutcome.slice(0, 120)}` : null,
+                    result.mapEventLabel ? `Event: ${result.mapEventLabel}` : null
+                ].filter(Boolean).join("\n"),
                 inline: false
             },
             {
@@ -623,71 +604,36 @@ export function buildRaidResultPayload(input: {
                 value: [
                     `Net: ${signedNet} FN Token$`,
                     `Raid XP: +${result.rxpGain || 0}`,
-                    result.sirGruXpGained ? `Sir Gru XP: +${result.sirGruXpGained}${result.sirGruLevel ? ` • Lv ${result.sirGruLevel}/100` : ""}` : null,
-                    `Boss XP: +${result.bossBonusXp || 0}`,
-                    `Loot: ${lootEntries.reduce((total, entry) => total + entry.qty, 0)} items • ${lootEntries.length} stacks`,
-                    `Loot Vendor Value: ${lootEntries.reduce((total, entry) => total + getVendorSellPrice(entry.id) * entry.qty, 0).toLocaleString()} FN Token$ (unsold)`,
-                    `Map REP: +${result.mapReputationGain || 0}`
+                    result.mapReputationGain ? `Map REP: +${result.mapReputationGain}` : null,
+                    `Loot: ${lootEntries.reduce((total, entry) => total + entry.qty, 0)} items • value ${lootEntries.reduce((total, entry) => total + getVendorSellPrice(entry.id) * entry.qty, 0).toLocaleString()} FN Token$`
                 ].filter(Boolean).join("\n"),
                 inline: true
             },
             {
-                name: "Boss Encounter",
-                value: [
-                    result.bossSpawned ? `${result.bossName || mapCfg.bossName}` : "Boss: No boss detected",
-                    bossResolution,
-                    heartLine,
-                    result.bossSpawned && result.bossHpMax ? `Boss HP: ${result.bossHpRemaining ?? result.bossHpMax}/${result.bossHpMax}` : null,
+                name: "Boss Engagement",
+                value: result.bossSpawned ? [
+                    `${result.bossName || mapCfg.bossName} • ${result.bossDefeated ? "Defeated" : "Still active"}`,
+                    result.bossDefeated && result.bossBonusXp ? `Boss XP: +${result.bossBonusXp}` : null,
+                    !result.bossDefeated && result.bossKillChance ? `Takedown chance: ${result.bossKillChance}%` : null,
+                    result.bossHpMax ? `Boss HP: ${result.bossHpRemaining ?? result.bossHpMax}/${result.bossHpMax}` : null,
                     result.pmcHpMax ? `PMC HP: ${result.pmcHpRemaining ?? result.pmcHpMax}/${result.pmcHpMax}` : null,
-                    result.bossSpawned ? `Traits: ${result.bossTraitLabels?.join(" • ") || "Unknown"}` : null
-                ].filter(Boolean).join("\n"),
-                inline: true
+                    result.bossHeartUnlockedName ? `Heart unlocked: ${result.bossHeartUnlockedName}` : null
+                ].filter(Boolean).join("\n") : "No boss detected",
+                inline: false
             },
-            ...(result.bossSpawned ? [{
-                name: "Combat Sequence",
-                value: [
-                    `Phases Reached: ${result.bossPhasesReached || 0}/${result.bossPhaseNames?.length || 0}`,
-                    `Active/Final Phase: ${result.bossCurrentPhase || "Contact"}`,
-                    `Sequence: ${result.bossPhaseNames?.join(" → ") || "Contact"}`,
-                    `Counter Intel: ${result.bossCounteredTraits?.length ? result.bossCounteredTraits.join(", ") : "No trait counter matched"}`,
-                    `Threat Reward Scale: ${(result.bossCombatRewardMultiplier || 1).toFixed(2)}x`,
-                    `Streak: ${result.bossCurrentStreak || 0} current / ${result.bossBestStreak || 0} best • Intel Lv ${result.bossIntelLevel || 0}`,
-                    `Heart Upgrade: ${result.bossHeartUpgradeLevel || 0}/3 • Alternate Form: ${result.bossAlternateFormUnlocked ? "Unlocked" : "Locked"}`
-                ].join("\n"),
-                inline: false
-            }] : []),
-            ...(result.sirGruXpGained ? [{
-                name: "Follower Support",
-                value: [
-                    `Sir Gru: Level ${result.sirGruLevel || 1}/100 • +${result.sirGruXpGained} XP • ${result.sirGruSupportRole || "Balanced"}`,
-                    `Abilities: ${result.sirGruAbilities?.join(", ") || "Scout Ahead"}`,
-                    `Triggered: ${result.sirGruTriggeredAbilities?.length ? result.sirGruTriggeredAbilities.join("\n") : "Deployed with the raid team"}`
-                ].join("\n"),
-                inline: false
-            }] : []),
-            ...(result.objectiveOutcome || result.mapEventDetails ? [{
-                name: "Field Report",
-                value: [result.objectiveOutcome, result.mapEventDetails].filter(Boolean).join("\n\n").slice(0, 1024),
-                inline: false
-            }] : []),
-            ...(result.newGearNames?.length ? [{
-                name: "New Gear Discovered",
-                value: result.newGearNames.slice(0, 6).join("\n").slice(0, 1024),
-                inline: false
-            }] : []),
             {
                 name: "Recovered Loot",
                 value: lootRows.join("\n") || "No loot secured",
                 inline: false
             },
-            ...(result.mapReputationProgressPct !== undefined ? [{
-                name: "Territory Progress",
-                value: `${result.mapReputationTier || "Unproven"} • ${result.mapReputationPoints || 0} REP\n${healthBar(result.mapReputationProgressPct, 100, 10)}`,
+            ...(result.newGearNames?.length ? [{
+                name: "New Gear",
+                value: result.newGearNames.slice(0, 3).join(", ").slice(0, 300),
                 inline: false
             }] : []),
-            ...(specialMoments.length ? [{
-                name: "Premium Event Flags",
-                value: specialMoments.slice(0, 3).join("\n").slice(0, 1024),
+            ...(notableEvents.length ? [{
+                name: "Unlocks",
+                value: notableEvents.slice(0, 3).join("\n").slice(0, 500),
                 inline: false
             }] : [])
         );
@@ -726,25 +672,26 @@ export function buildBossIntelPayload(input: {
     if (!boss) throw new Error("Unknown raid boss.");
     const profile = getBossCombatProfile(boss.name);
     const progress = input.progress;
+    const traits = profile.traits.slice(0, 4).map(key => {
+        const trait = BOSS_TRAITS[key];
+        return `${trait.label}${trait.counterApproach ? ` • counter: ${RAID_APPROACHES[trait.counterApproach].label}` : ""}`;
+    });
     const embed = new EmbedBuilder()
         .setColor(0xd97706)
         .setTitle(boss.name)
-        .setDescription(`${boss.title} • ${boss.homeMapLabel}\n${ferocityLabel(boss.ferocity)} • ${boss.ferocity.toFixed(2)}x ferocity`)
+        .setDescription(`${boss.homeMapLabel} • ${ferocityLabel(boss.ferocity)} ${boss.ferocity.toFixed(2)}x`)
         .addFields(
-            { name: "Traits and Counters", value: profile.traits.map(key => {
-                const trait = BOSS_TRAITS[key];
-                return `**${trait.label}**\n${trait.description}${trait.counterApproach ? `\nCounter: ${RAID_APPROACHES[trait.counterApproach].label}` : ""}`;
-            }).join("\n\n"), inline: false },
-            { name: "Combat Phases", value: [...profile.phases].sort((first, second) => second.thresholdPct - first.thresholdPct).map(phase => `**${phase.name} • ${phase.thresholdPct}% HP**\n${phase.mechanic}`).join("\n\n"), inline: false },
-            { name: "Possible Gear Drops", value: [...new Set([...boss.weaponDrops, ...boss.armorDrops])].map(id => ITEM_DEFS[id]?.name || id).join("\n").slice(0, 1024) || "No gear listed", inline: true },
-            { name: "Base Reward Ranges", value: `${boss.bonusXpRange.join(" - ")} raid XP\n${boss.tokenRewardRange.join(" - ")} FN Token$\nRare drop roll: ${Math.round(boss.rareDropChance * 100)}%`, inline: true },
-            { name: "Your Boss Record", value: progress ? [
-                `${progress.kills} kills / ${progress.encounters} encounters`,
-                `Streak: ${progress.currentStreak} current • ${progress.bestStreak} best`,
-                `Intel: ${progress.intelLevel}/5 • Heart upgrade: ${progress.heartUpgradeLevel}/3`,
-                progress.heartUpgradeLevel < 3 ? `Next heart upgrade: ${Math.max(0, (progress.heartUpgradeLevel + 1) * 3 - progress.kills)} kills remaining` : "Heart fully upgraded",
-                progress.alternateFormUnlocked ? "Alternate form unlocked" : `Alternate form: ${Math.max(0, 5 - progress.kills)} kills remaining`
-            ].join("\n") : "No encounters recorded.", inline: false }
+            { name: "Combat", value: [
+                `Traits: ${traits.join("; ") || "Unknown"}`,
+                `Phases: ${[...profile.phases].sort((first, second) => second.thresholdPct - first.thresholdPct).map(phase => `${phase.name} (${phase.thresholdPct}%)`).join(" → ")}`
+            ].join("\n"), inline: false },
+            { name: "Rewards", value: [
+                `Raid XP: ${boss.bonusXpRange.join("–")} • Tokens: ${boss.tokenRewardRange.join("–")} • Rare drop ${Math.round(boss.rareDropChance * 100)}%`,
+                `Gear: ${[...new Set([...boss.weaponDrops, ...boss.armorDrops])].slice(0, 3).map(id => ITEM_DEFS[id]?.name || id).join(", ") || "None listed"}`
+            ].join("\n"), inline: true },
+            { name: "Your Record", value: progress
+                ? `${progress.kills}/${progress.encounters} kills • Best streak ${progress.bestStreak}\nHeart ${progress.heartUpgradeLevel}/3 • Intel ${progress.intelLevel}/5`
+                : "No boss encounters yet.", inline: true }
         );
     return JSON.stringify({ embed: embed.toJSON() });
 }
@@ -757,15 +704,16 @@ export function buildRareRouteDecisionPayload(input: {
     const embed = new EmbedBuilder()
         .setColor(0xf59e0b)
         .setTitle("Rare Extraction Route Discovered")
-        .setDescription(`${input.route.label}\n${input.route.description}`)
+        .setDescription(`${input.route.label} • ${input.mapLabel}\n${input.route.description}`.slice(0, 400))
         .addFields(
-            { name: "Access Artifact", value: `[M] ${input.requiredItemName}\nThe artifact is retained after route access.`, inline: true },
-            { name: "Operation Zone", value: input.mapLabel, inline: true },
-            { name: "Hidden Exit", value: `+${Math.round(input.route.safeSuccessBonus * 100)}% extraction chance\n-6% token multiplier`, inline: true },
-            { name: "Breach Route Cache", value: `-${Math.round(input.route.cacheSuccessPenalty * 100)}% extraction chance\n+${Math.round(input.route.cacheTokenBonus * 100)}% token multiplier\n+${input.route.cacheBonusRolls} loot rolls`, inline: true },
-            { name: "Original Route", value: "Continue without route modifiers.", inline: true }
+            { name: "Access", value: `[M] ${input.requiredItemName} • retained after use.`, inline: true },
+            { name: "Route Effects", value: [
+                `Hidden Exit: +${Math.round(input.route.safeSuccessBonus * 100)}% extract / -6% tokens`,
+                `Cache: -${Math.round(input.route.cacheSuccessPenalty * 100)}% extract / +${Math.round(input.route.cacheTokenBonus * 100)}% tokens / +${input.route.cacheBonusRolls} loot`,
+                "Stay Course: no route modifiers"
+            ].join("\n"), inline: false }
         )
-        .setFooter({ text: "Route signal expires in 20 seconds. Timeout continues on the original route." });
+        .setFooter({ text: "20 seconds • timeout keeps the original route" });
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.hiddenExit).setLabel("Take Hidden Exit").setStyle(ButtonStyle.Success),
@@ -825,16 +773,15 @@ export function buildBossBattlePayload(input: {
     const phase = input.bossCurrentPhase || phaseNames[phaseIndex];
     const finished = input.finished === true || turn >= totalTurns || bossHp <= 0 || pmcHp <= 0;
     const animationFrame = Math.max(0, Math.floor(input.animationFrame || 0)) % 4;
-    const animationLabel = ["ENTRANCE", "CHARGE", "IMPACT", "AFTERMATH"][animationFrame];
     const animationGlyph = ["◆", "◇", "✦", "◆"][animationFrame];
     const actionLabel = input.action === "defend" ? "Defend" : input.action === "heal" ? "Heal" : input.action === "scan" ? "Scan" : "Attack";
     const actionEffect = input.action === "defend"
-        ? "Damage mitigated while the PMC reads the boss counter."
+        ? "Defending"
         : input.action === "heal"
-            ? "Field treatment stabilizes the PMC's health."
+            ? "Field treatment"
             : input.action === "scan"
-                ? `Intel acquired: ${phase} phase and ${input.bossTraitLabels?.join(" / ") || "unknown traits"}.`
-                : "The PMC commits a direct strike.";
+                ? `Scanning ${phase}`
+                : "Direct strike";
     const status = finished
         ? bossHp <= 0 || input.bossDefeated
             ? `${input.bossName} was neutralized. The PMC holds the field.`
@@ -852,35 +799,36 @@ export function buildBossBattlePayload(input: {
     const embed = new EmbedBuilder()
         .setColor(finished ? (bossHp <= 0 || input.bossDefeated ? 0x16a34a : 0xdc2626) : 0xef4444)
         .setTitle(`Boss Battle • ${finished ? "Complete" : `Turn ${turn + 1}/${totalTurns}`}`)
-        .setDescription(`**${input.bossName}${input.bossTitle ? ` • ${input.bossTitle}` : ""}** challenges the PMC.`)
+        .setDescription(`**${input.bossName}** • ${phase}`)
         .addFields(
             {
-                name: `${input.bossName} • ${ferocityLabel(input.bossFerocity)}`,
+                name: `Boss • ${ferocityLabel(input.bossFerocity)} ${(input.bossFerocity || 1).toFixed(2)}x`,
                 value: [
                     `HP ${healthBar(bossHp, input.bossHpMax, 16)}`,
-                    `Phase: ${phase}${input.phaseMechanic ? `\n${input.phaseMechanic}` : ""}`,
-                    `Traits: ${input.bossTraitLabels?.join(" • ") || "Unknown"}`,
-                    input.counteredTraits?.length ? `Countered: ${input.counteredTraits.join(" • ")}` : null,
-                    `Threat: ${(input.bossFerocity || 1).toFixed(2)}x • Rage ${Math.round(input.rage || 0)}%`,
-                    `Armor Break: ${Math.round(input.armorBreak || 0)}%${input.specialAttack ? ` • ⚠ ${input.specialAttack}` : ""}`
+                    `Takedown chance ${Math.max(0, Math.min(100, Math.floor(input.bossKillChance || 0)))}%`,
+                    input.bossTraitLabels?.length ? `Traits: ${input.bossTraitLabels.slice(0, 2).join(" • ")}` : null,
+                    input.phaseMechanic ? input.phaseMechanic.slice(0, 140) : null,
+                    input.specialAttack ? `⚠ ${input.specialAttack.slice(0, 100)}` : null,
+                    input.rage ? `Rage ${Math.round(input.rage)}%` : null,
+                    input.armorBreak ? `Armor break ${Math.round(input.armorBreak)}%` : null,
+                    input.counteredTraits?.length ? `Countered: ${input.counteredTraits.slice(0, 2).join(", ")}` : null
                 ].filter(Boolean).join("\n"),
                 inline: true
             },
             {
-                name: `PMC • Level ${(input.pmcLevel || 0).toLocaleString()} • Prestige ${input.pmcPrestige || 0}`,
+                name: `PMC • Lv ${(input.pmcLevel || 0).toLocaleString()} • P${input.pmcPrestige || 0}`,
                 value: [
                     `HP ${healthBar(pmcHp, input.pmcHpMax, 16)}`,
-                    `Weapon: ${input.weaponName || "Auto-best weapon"}`,
-                    `Armor: ${input.armorName || "Auto-best armor"}`,
-                    input.medPatchCount !== undefined ? `Med Patches: ${input.medPatchCount} • Restore up to 70 HP` : null,
-                    `Boss Takedown Chance: ${input.bossKillChance || 0}%${input.scanRevealed ? " • Intel revealed" : ""}`
+                    input.weaponName || input.armorName ? `Loadout: ${[input.weaponName, input.armorName].filter(Boolean).join(" / ")}` : null,
+                    input.medPatchCount !== undefined ? `Med patches: ${input.medPatchCount}` : null,
+                    input.scanRevealed ? "Boss intel revealed" : null
                 ].filter(Boolean).join("\n"),
                 inline: true
             },
-            { name: `${animationLabel} • Battle Feed`, value: (input.battleLog?.length ? input.battleLog.slice(-3).join("\n") : status).slice(0, 1024), inline: false },
-            ...(!finished && input.decisionDeadline ? [{ name: "Next Action", value: `<t:${Math.floor(input.decisionDeadline / 1000)}:R> • Default: Attack`, inline: false }] : [])
+            { name: "Action", value: (input.battleLog?.[input.battleLog.length - 1] || `${actionLabel}: ${actionEffect}. ${status}`).slice(0, 240), inline: false },
+            ...(!finished && input.decisionDeadline ? [{ name: "Decision", value: `<t:${Math.floor(input.decisionDeadline / 1000)}:R>`, inline: false }] : [])
         )
-        .setFooter({ text: `Combat simulation • ${phaseNames.join(" -> ")}` });
+        .setFooter({ text: `${turn}/${totalTurns} turns` });
     if (input.bossImageUrl) embed.setThumbnail(input.bossImageUrl);
     const components = !finished && input.interactive !== false
         ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -897,15 +845,19 @@ export function buildBossBattlePayload(input: {
 export function buildRaidBranchDecisionPayload(input: { mapLabel: string; tension: string }): string {
     const embed = new EmbedBuilder()
         .setColor(0x0ea5e9)
-        .setTitle("Mid-Raid Tactical Fork")
-        .setDescription(`The operation on **${input.mapLabel}** has reached an unstable decision point.`)
-        .addFields(
-            { name: "Secure Perimeter", value: "+3% extraction chance\n-4% token multiplier", inline: true },
-            { name: "Push Objective", value: "-3% extraction chance\n+6% token multiplier\n+1 loot roll", inline: true },
-            ...RAID_TACTICAL_OBJECTIVES.map(objective => ({ name: objective.label, value: objective.description, inline: true })),
-            { name: "Stay Course", value: `Keep the original ${input.tension} tension plan.`, inline: true }
-        )
-        .setFooter({ text: "Decision window: 15 seconds. Timeout keeps the original plan." });
+        .setTitle("Raid Decision")
+        .setDescription(`${input.mapLabel} • ${input.tension} tension`)
+        .addFields({
+            name: "Choices",
+            value: [
+                "Secure: +3% extraction / -4% tokens",
+                "Push: -3% extraction / +6% tokens / +1 loot",
+                ...RAID_TACTICAL_OBJECTIVES.map(objective => `${objective.label}: ${objective.description}`),
+                `Stay: keep ${input.tension} plan`
+            ].join("\n").slice(0, 900),
+            inline: false
+        })
+        .setFooter({ text: "15 seconds • timeout keeps the current plan" });
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.securePerimeter).setLabel("Secure Perimeter").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.pushObjective).setLabel("Push Objective").setStyle(ButtonStyle.Danger),

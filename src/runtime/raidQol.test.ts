@@ -5,7 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { getBossBattlePhase, isBossBattleFinished, resolveBossTurn, type BossBattleState } from "../raid/combat";
 import { RAID_BOSS_ROSTER, getBossCombatProfile } from "../raid/domain";
-import { buildBossBattlePayload, buildBossIntelPayload, buildBossRosterPayload, buildRaidResultPayload, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
+import { buildBossBattlePayload, buildBossIntelPayload, buildBossRosterPayload, buildRaidBranchDecisionPayload, buildRareRouteDecisionPayload, buildRaidResultPayload, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
 import { ITEM_DEFS } from "../game/catalog";
 
 const initial: BossBattleState = { turn: 0, bossHp: 800, pmcHp: 600, rage: 0, armorBreak: 0, scanRevealed: false };
@@ -49,12 +49,14 @@ assert.equal(getBossBattlePhase("Wizard Of Chaos", 200, 1000).name, "Apocalypse 
 
 const payloadInput = { bossName: "The Grave Warden", bossHpMax: 800, bossHpFinal: 0, pmcHpMax: 600, pmcHpFinal: 100, turn: 1, totalTurns: 8, bossHpCurrent: 400, pmcHpCurrent: 500 };
 const noHeal = JSON.parse(buildBossBattlePayload({ ...payloadInput, medPatchCount: 0, bossCurrentPhase: "Enraged", phaseMechanic: "Signature attack incoming.", decisionDeadline: 20000, counteredTraits: ["Reactive Armor"] }));
+assertDiscordEmbed(noHeal.embed);
 assert.equal(noHeal.components[0].components.find((button: { custom_id: string }) => button.custom_id === RAID_ENCOUNTER_IDS.heal).disabled, true);
-assert.match(noHeal.embed.fields[0].value, /Phase: Enraged/);
+assert.match(noHeal.embed.description, /Enraged/);
 assert.match(noHeal.embed.fields[0].value, /Signature attack incoming/);
 assert.match(noHeal.embed.fields[0].value, /Countered: Reactive Armor/);
 assert.match(noHeal.embed.fields.at(-1).value, /<t:20:R>/);
 const canHeal = JSON.parse(buildBossBattlePayload({ ...payloadInput, medPatchCount: 2 }));
+assertDiscordEmbed(canHeal.embed);
 assert.equal(canHeal.components[0].components.find((button: { custom_id: string }) => button.custom_id === RAID_ENCOUNTER_IDS.heal).disabled, false);
 const fullHealth = JSON.parse(buildBossBattlePayload({ ...payloadInput, medPatchCount: 2, pmcHpCurrent: 600 }));
 assert.equal(fullHealth.components[0].components.find((button: { custom_id: string }) => button.custom_id === RAID_ENCOUNTER_IDS.heal).disabled, true);
@@ -73,18 +75,34 @@ const bossRoster = JSON.parse(buildBossRosterPayload([]));
 assertDiscordEmbed(bossRoster.embed);
 assert.equal(bossRoster.components[0].components[0].options.length, RAID_BOSS_ROSTER.length);
 assert.ok(bossRoster.components[0].components[0].options.length <= 25);
+const routeDecision = JSON.parse(buildRareRouteDecisionPayload({ route: {
+    key: "test_route",
+    label: "Test Exit",
+    description: "A concealed extraction route.",
+    mapKey: "plagued_cemetary",
+    requiredItemId: "boneway_key",
+    safeSuccessBonus: 0.12,
+    cacheSuccessPenalty: 0.06,
+    cacheTokenBonus: 0.1,
+    cacheBonusRolls: 1
+}, mapLabel: "FN Plagued Cemetery", requiredItemName: "Boneway Key" }));
+assertDiscordEmbed(routeDecision.embed);
+const branchDecision = JSON.parse(buildRaidBranchDecisionPayload({ mapLabel: "FN Plagued Cemetery", tension: "high" }));
+assertDiscordEmbed(branchDecision.embed);
 for (const boss of RAID_BOSS_ROSTER) {
     const intel = JSON.parse(buildBossIntelPayload({ bossName: boss.name }));
     assertDiscordEmbed(intel.embed);
-    assert.ok(intel.embed.fields.find((field: { name: string }) => field.name === "Traits and Counters").value.includes("Counter:"));
+    const combat = intel.embed.fields.find((field: { name: string }) => field.name === "Combat");
+    assert.ok(combat?.value.includes("Traits:"));
+    assert.ok(combat?.value.includes("Phases:"));
 }
 const progressIntel = JSON.parse(buildBossIntelPayload({ bossName: "The Grave Warden", progress: { encounters: 6, kills: 4, currentStreak: 2, bestStreak: 3, intelLevel: 1, heartUpgradeLevel: 1, alternateFormUnlocked: false } }));
-assert.match(progressIntel.embed.fields.at(-1).value, /Next heart upgrade: 2 kills remaining/);
-assert.match(progressIntel.embed.fields.at(-1).value, /Alternate form: 1 kills remaining/);
+assert.match(progressIntel.embed.fields.at(-1).value, /4\/6 kills • Best streak 3/);
+assert.match(progressIntel.embed.fields.at(-1).value, /Heart 1\/3 • Intel 1\/5/);
 const resultInput = { mapCfg: { key: "plagued_cemetary", label: "Cemetery", bossName: "The Grave Warden", lootTier: "Low" }, fallbackTension: "medium", armyIconUrl: "https://example.com/army.png" };
 const result = JSON.parse(buildRaidResultPayload({ ...resultInput, result: { loot: [{ id: "scrap", qty: 2 }, { id: "scrap", qty: 3 }, { id: "chaos_staff", qty: 1 }] } }));
 assert.match(result.embed.fields.find((field: { name: string }) => field.name === "Rewards").value, /Net: \+0 FN Token/);
-assert.match(result.embed.fields.find((field: { name: string }) => field.name === "Rewards").value, /Loot: 6 items.*2 stacks/);
+assert.match(result.embed.fields.find((field: { name: string }) => field.name === "Rewards").value, /Loot: 6 items/);
 const lootField = result.embed.fields.find((field: { name: string }) => field.name === "Recovered Loot").value;
 assert.ok(lootField.indexOf(ITEM_DEFS.chaos_staff.name) < lootField.indexOf(ITEM_DEFS.scrap.name));
 assert.match(lootField, /5x/);

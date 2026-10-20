@@ -102,8 +102,8 @@ function runTicketEnhancementTests(): void {
 
     assert.equal(raidPayload.embed.title, "✅ Raid Extraction Complete");
     assert.match(raidPayload.embed.description, /FN Plagued Cemetery/);
-    assert.match(raidPayload.embed.fields[0].value, /Status: Extracted/);
-    assert.match(raidPayload.embed.fields[2].value, /Boss: No boss detected/);
+    assert.match(raidPayload.embed.fields[0].value, /Extracted •/);
+    assert.match(raidPayload.embed.fields.find((field: { name: string }) => field.name === "Boss Engagement").value, /No boss detected/);
 }
 
 runTicketEnhancementTests();
