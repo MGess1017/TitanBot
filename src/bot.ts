@@ -119,7 +119,7 @@ import { ARMOR_IDS, BOSS_HEART_DEFS, BOSS_HEART_IDS, COLLECTIBLE_ITEM_IDS, getVe
 import { awardBossHeartAchievement, getUnlockedBossHeartNames } from "./game/bossHearts";
 import { getBossPortraitUrl } from "./game/bossPortraits";
 import { CRAFT_RECIPES, craftItem, dismantleGear, getDynamicVendorPrice, insureGear, repairGear, resolveGearLoss, saveLoadout, upgradeGear } from "./game/gearEconomy";
-import { buildBossBattlePayload, buildBossIntelPayload, buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildSellPickerPayload, buildShopPayload, buildTradeActionPayload, getSellableInventoryOptions, GEAR_UI_IDS, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS, rarityBadge } from "./game/payloads";
+import { buildBossBattlePayload, buildBossIntelPayload, buildBossRosterPayload as buildBossRosterEmbedPayload, buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildSellPickerPayload, buildShopPayload, buildTradeActionPayload, getSellableInventoryOptions, GEAR_UI_IDS, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS, rarityBadge } from "./game/payloads";
 import { getRaidOutcome, getRaidRewards } from "./game/raid";
 import * as RaidDomain from "./raid/domain";
 import * as RaidRuntime from "./raid/runtime";
@@ -6533,52 +6533,7 @@ function buildBossRosterPayload(): string {
             bestStreak: Math.max(0, ...progress.map(entry => entry?.bestStreak || 0))
         };
     }).sort((a, b) => b.totalKills - a.totalKills).slice(0, 5);
-    const embed = new EmbedBuilder()
-        .setColor(0xd97706)
-        .setTitle("👑 Raid Boss Roster")
-        .setDescription(`${RaidDomain.RAID_BOSS_ROSTER.length} bosses • Home territories and threat ratings`)
-        .addFields(
-            {
-                name: "Rotation Key",
-                value: Object.values(RaidDomain.RAID_MAPS).map(map => `${RaidDomain.RAID_MAP_SHORT_LABELS[map.key]} = ${map.label}`).join("\n"),
-                inline: false
-            },
-            {
-                name: "Roster Summary",
-                value: [
-                    `Total Bosses: ${RaidDomain.RAID_BOSS_ROSTER.length}`,
-                    `Maps Covered: ${Object.keys(RaidDomain.RAID_MAPS).length}`,
-                    `Highest Threat: ${Math.max(...RaidDomain.RAID_BOSS_ROSTER.map(boss => boss.ferocity)).toFixed(2)} ferocity`
-                ].join("\n"),
-                inline: false
-            },
-            {
-                name: "Boss Leaderboard",
-                value: bossLeaderboard.map((boss, index) => `#${index + 1} ${boss.name} • ${boss.totalKills} kills • Best streak ${boss.bestStreak}`).join("\n") || "No boss kills recorded yet.",
-                inline: false
-            }
-        );
-
-    const bossRows = RaidDomain.RAID_BOSS_ROSTER.map(boss => {
-        const threat = boss.ferocity >= 2 ? "CAT" : boss.ferocity >= 1.7 ? "APX" : boss.ferocity >= 1.35 ? "BRT" : boss.ferocity >= 1 ? "ELT" : "VET";
-        return `**${boss.name}** • ${threat} ${boss.ferocity.toFixed(2)}x\n${boss.homeMapLabel}`;
-    });
-
-    chunkDetailLines(bossRows, 7).forEach((chunk, index) => {
-        embed.addFields({
-            name: `Boss Index ${index + 1}`,
-            value: chunk.slice(0, 1024),
-            inline: false
-        });
-    });
-
-    const selector = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-        new StringSelectMenuBuilder()
-            .setCustomId(RAID_RESULT_ACTION_IDS.bossIntel)
-            .setPlaceholder("Boss intel and personal progress")
-            .addOptions(RaidDomain.RAID_BOSS_ROSTER.map(boss => ({ label: boss.name, value: boss.name, description: `${boss.homeMapLabel} • ${boss.ferocity.toFixed(2)}x ferocity` })))
-    );
-    return JSON.stringify({ embed: embed.toJSON(), components: [selector.toJSON()] });
+    return buildBossRosterEmbedPayload(bossLeaderboard);
 }
 
 function buildLeaderboardPayload(): string {
@@ -11219,9 +11174,21 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         const target = interaction.options.getUser("user", true);
         const timeoutDedupeError = rejectIfDuplicateCommand(interaction, `timeout:user:${target.id}`);
         if (timeoutDedupeError) return timeoutDedupeError;
-        const member = interaction.guild ? await interaction.guild.members.fetch(target.id).catch(() => null) : null;
+        const guild = interaction.guild;
+        const member = guild ? await guild.members.fetch(target.id).catch(() => null) : null;
         if (!member) return "Unable to find that member in this server.";
-        await member.timeout(5 * 60 * 1000, "Timeout by administrator action");
+        const botMember = guild?.members.me ?? (guild ? await guild.members.fetchMe().catch(() => null) : null);
+        if (!botMember?.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+            return "The bot is missing the Moderate Members permission required to apply a timeout.";
+        }
+        if (!member.moderatable) {
+            return "The bot cannot timeout this member. Check that the target is below the bot's highest role and is not the server owner.";
+        }
+        const timedOut = await member.timeout(5 * 60 * 1000, "Timeout by administrator action").then(() => true).catch(error => {
+            console.warn(`[moderation] Timeout failed for ${target.id} in guild ${guild?.id || "unknown"}:`, error);
+            return false;
+        });
+        if (!timedOut) return "Discord rejected the timeout. Check the bot's Moderate Members permission and role hierarchy.";
         await sendModLog(interaction.guildId!, "Timeout", [
             { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
             { name: "Target", value: `<@${target.id}>`, inline: true },

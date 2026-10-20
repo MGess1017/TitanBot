@@ -5,7 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { getBossBattlePhase, isBossBattleFinished, resolveBossTurn, type BossBattleState } from "../raid/combat";
 import { RAID_BOSS_ROSTER, getBossCombatProfile } from "../raid/domain";
-import { buildBossBattlePayload, buildBossIntelPayload, buildRaidResultPayload, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
+import { buildBossBattlePayload, buildBossIntelPayload, buildBossRosterPayload, buildRaidResultPayload, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
 import { ITEM_DEFS } from "../game/catalog";
 
 const initial: BossBattleState = { turn: 0, bossHp: 800, pmcHp: 600, rage: 0, armorBreak: 0, scanRevealed: false };
@@ -69,6 +69,10 @@ function assertDiscordEmbed(embed: { title: string; description?: string; fields
     assert.ok(embed.fields.every(field => field.name.length <= 256 && field.value.length > 0 && field.value.length <= 1024));
     assert.ok(embed.title.length + (embed.description?.length || 0) + embed.fields.reduce((total, field) => total + field.name.length + field.value.length, 0) <= 6000);
 }
+const bossRoster = JSON.parse(buildBossRosterPayload([]));
+assertDiscordEmbed(bossRoster.embed);
+assert.equal(bossRoster.components[0].components[0].options.length, RAID_BOSS_ROSTER.length);
+assert.ok(bossRoster.components[0].components[0].options.length <= 25);
 for (const boss of RAID_BOSS_ROSTER) {
     const intel = JSON.parse(buildBossIntelPayload({ bossName: boss.name }));
     assertDiscordEmbed(intel.embed);

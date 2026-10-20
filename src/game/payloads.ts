@@ -1,6 +1,6 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } from "discord.js";
 import { getVendorSellPrice, ITEM_DEFS, type ItemDef } from "./catalog";
-import { BOSS_TRAITS, RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_TACTICAL_OBJECTIVES, getBossCombatProfile, type RareExtractionRoute } from "../raid/domain";
+import { BOSS_TRAITS, RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_MAPS, RAID_MAP_SHORT_LABELS, RAID_TACTICAL_OBJECTIVES, getBossCombatProfile, type RareExtractionRoute } from "../raid/domain";
 
 export const RAID_RESULT_ACTION_IDS = {
     inventory: "raid_result_inventory",
@@ -10,6 +10,42 @@ export const RAID_RESULT_ACTION_IDS = {
     supplies: "raid_result_supplies",
     bossIntel: "raid_boss_intel"
 } as const;
+
+export function buildBossRosterPayload(bossLeaderboard: Array<{ name: string; totalKills: number; bestStreak: number }>): string {
+    const embed = new EmbedBuilder()
+        .setColor(0xd97706)
+        .setTitle("👑 Raid Boss Roster")
+        .setDescription(`${RAID_BOSS_ROSTER.length} bosses • Home territories and threat ratings\nSelect a boss below for detailed intel.`)
+        .addFields(
+            {
+                name: "Rotation Key",
+                value: Object.values(RAID_MAPS).map(map => `${RAID_MAP_SHORT_LABELS[map.key]} = ${map.label}`).join("\n"),
+                inline: false
+            },
+            {
+                name: "Roster Summary",
+                value: [
+                    `Total Bosses: ${RAID_BOSS_ROSTER.length}`,
+                    `Maps Covered: ${Object.keys(RAID_MAPS).length}`,
+                    `Highest Threat: ${Math.max(...RAID_BOSS_ROSTER.map(boss => boss.ferocity)).toFixed(2)} ferocity`
+                ].join("\n"),
+                inline: false
+            },
+            {
+                name: "Boss Leaderboard",
+                value: bossLeaderboard.slice(0, 5).map((boss, index) => `#${index + 1} ${boss.name} • ${boss.totalKills} kills • Best streak ${boss.bestStreak}`).join("\n") || "No boss kills recorded.",
+                inline: false
+            }
+        );
+
+    const selector = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId(RAID_RESULT_ACTION_IDS.bossIntel)
+            .setPlaceholder("Boss intel and personal progress")
+            .addOptions(RAID_BOSS_ROSTER.map(boss => ({ label: boss.name, value: boss.name, description: `${boss.homeMapLabel} • ${boss.ferocity.toFixed(2)}x ferocity` })))
+    );
+    return JSON.stringify({ embed: embed.toJSON(), components: [selector.toJSON()] });
+}
 
 export const RAID_ENCOUNTER_IDS = {
     hiddenExit: "raid_route_hidden_exit",
