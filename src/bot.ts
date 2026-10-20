@@ -183,7 +183,7 @@ const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
 const STRICT_ENV_REQUIRED = readEnvFlag("STRICT_ENV_REQUIRED", false);
 const ENABLE_STARTUP_AUTOPANELS = readEnvFlag("ENABLE_STARTUP_AUTOPANELS", true);
 const ENABLE_STARTUP_DEPLOYMENT_SUMMARY = readEnvFlag("ENABLE_STARTUP_DEPLOYMENT_SUMMARY", true);
-const MESSAGE_XP_GAIN = 3;
+const MESSAGE_XP_GAIN = 25;
 const XP_COOLDOWN_MS = 0;
 const RAID_COOLDOWN_MS = 5 * 1000;
 const DAILY_HEALTH_REPORT_MS = 24 * 60 * 60 * 1000;
@@ -217,6 +217,12 @@ const DEFAULT_REPORT_ADMIN_PANEL_CHANNEL_ID = "1535132577059307583";
 const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "";
+const ROLE_SELECTOR_CHANNEL_ID = "1554389202085482566";
+const SELF_ROLE_SELECTOR_ROLES = [
+    { id: "1523420005708861632", label: "Role ID number 1" },
+    { id: "1491494698798551192", label: "Role ID number 2" }
+] as const;
+const SELF_ROLE_SELECTOR_MENU_ID = "self_role_selector";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
 const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
@@ -2022,6 +2028,7 @@ type GuildModerationState = {
         report?: string | null;
         reportAdmin?: string | null;
         featureBrief?: string | null;
+        roleSelector?: string | null;
     };
 };
 
@@ -3119,13 +3126,13 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     return moderationStore.guilds[guildId];
 }
 
-function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief"): string | null {
+function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector"): string | null {
     const cfg = ensureGuildModeration(guildId);
     const value = cfg.panelMessageIds?.[panel];
     return value ? String(value) : null;
 }
 
-function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief", messageId: string | null): void {
+function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector", messageId: string | null): void {
     const cfg = ensureGuildModeration(guildId);
     if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
     cfg.panelMessageIds[panel] = messageId;
@@ -8564,6 +8571,59 @@ async function ensureWelcomePanelForGuild(guild: Guild): Promise<void> {
     }
 }
 
+function buildSelfRoleSelectorPayload() {
+    const embed = brandLiveEmbed(new EmbedBuilder()
+        .setColor(0x0ea5e9)
+        .setTitle("Choose Your Roles")
+        .setDescription("Select one or more roles below to toggle them on or off.")
+        .addFields(SELF_ROLE_SELECTOR_ROLES.map(role => ({
+            name: role.label,
+            value: `<@&${role.id}>`,
+            inline: true
+        }))), "Role Selector");
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId(SELF_ROLE_SELECTOR_MENU_ID)
+        .setPlaceholder("Select roles to add or remove")
+        .setMinValues(1)
+        .setMaxValues(SELF_ROLE_SELECTOR_ROLES.length)
+        .addOptions(SELF_ROLE_SELECTOR_ROLES.map(role => ({
+            label: role.label,
+            value: role.id,
+            description: `Toggle ${role.label}.`
+        })));
+
+    return {
+        embeds: [embed],
+        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+        allowedMentions: { parse: [] as const }
+    };
+}
+
+async function upsertSelfRoleSelectorForGuild(guild: Guild): Promise<void> {
+    const channel = guild.channels.cache.get(ROLE_SELECTOR_CHANNEL_ID)
+        || await guild.channels.fetch(ROLE_SELECTOR_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+        console.warn(`Role selector skipped for guild ${guild.id}: configured channel is missing or is not a text channel.`);
+        return;
+    }
+
+    const payload = buildSelfRoleSelectorPayload();
+    const storedMessageId = getGuildPanelMessageId(guild.id, "roleSelector");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit(payload).catch(() => null);
+        if (edited) return;
+        setGuildPanelMessageId(guild.id, "roleSelector", null);
+    }
+
+    const sent = await channel.send(payload).catch(() => null);
+    if (!sent) {
+        console.warn(`Role selector could not be posted in channel ${ROLE_SELECTOR_CHANNEL_ID}; check bot permissions.`);
+        return;
+    }
+    setGuildPanelMessageId(guild.id, "roleSelector", sent.id);
+}
+
 function buildBotFeatureBriefPayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x0891b2)
@@ -11314,6 +11374,7 @@ client.once("clientReady", async () => {
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
+                await upsertSelfRoleSelectorForGuild(guild);
             }
             if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
                 await sendDeploymentSummaryIfNeeded();
@@ -11335,6 +11396,7 @@ client.once("clientReady", async () => {
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
+                await upsertSelfRoleSelectorForGuild(guild);
             }
         }
         if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
@@ -11813,6 +11875,48 @@ client.on("interactionCreate", async interaction => {
                 console.error("Help menu interaction failed:", error);
             }
         }
+        return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === SELF_ROLE_SELECTOR_MENU_ID) {
+        const guild = interaction.guild;
+        const selectedRoleIds = interaction.values;
+        const allowedRoleIds = new Set<string>(SELF_ROLE_SELECTOR_ROLES.map(role => role.id));
+        if (!guild || !selectedRoleIds.length || selectedRoleIds.some(roleId => !allowedRoleIds.has(roleId))) {
+            await interaction.reply({ content: "This role selector is unavailable.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+        const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        if (!member || !botMember) {
+            await interaction.reply({ content: "Unable to verify your member roles right now. Please try again.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const outcomes: string[] = [];
+        for (const roleId of selectedRoleIds) {
+            const configuredRole = SELF_ROLE_SELECTOR_ROLES.find(role => role.id === roleId);
+            const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
+            if (!configuredRole || !role) {
+                outcomes.push(`${configuredRole?.label || "Selected role"}: role not found.`);
+                continue;
+            }
+            if (role.managed || role.comparePositionTo(botMember.roles.highest) >= 0) {
+                outcomes.push(`${configuredRole.label}: the bot cannot manage this role. Move its role above the selected role and grant Manage Roles.`);
+                continue;
+            }
+
+            const currentlyHasRole = member.roles.cache.has(roleId);
+            const succeeded = await (currentlyHasRole
+                ? member.roles.remove(roleId)
+                : member.roles.add(roleId)).then(() => true).catch(() => false);
+            outcomes.push(succeeded
+                ? `${configuredRole.label}: ${currentlyHasRole ? "removed" : "added"}.`
+                : `${configuredRole.label}: update failed. Check the bot's Manage Roles permission.`);
+        }
+
+        await interaction.reply({ content: outcomes.join("\n"), flags: MessageFlags.Ephemeral }).catch(() => undefined);
         return;
     }
 

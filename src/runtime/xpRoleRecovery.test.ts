@@ -31,7 +31,7 @@ function runXpRoleRecoveryTests(): void {
     assert.match(botSource, /Dry-Run Member Diff/, "rolesanity must show member-level dry-run diffs");
     assert.match(botSource, /formatXpRoleUnlocks\(interaction\.user\.id, 5\)/, "xpstats must show recent XP role unlocks");
 
-    assert.match(botSource, /const MESSAGE_XP_GAIN = 3;/, "message XP gain must be increased to 3");
+    assert.match(botSource, /const MESSAGE_XP_GAIN = 25;/, "each message must award 25 XP");
 
     const tierMatches = Array.from(botSource.matchAll(/\{ xp: (\d+), roleId: "(\d+)", name: "([^"]+)" \}/g));
     assert.equal(tierMatches.length, 31, "expected 31 configured XP role tiers");
