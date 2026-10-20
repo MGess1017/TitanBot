@@ -219,10 +219,9 @@ const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "";
 const ROLE_SELECTOR_CHANNEL_ID = "1554389202085482566";
 const SELF_ROLE_SELECTOR_ROLES = [
-    { id: "1523420005708861632", label: "Role ID number 1" },
-    { id: "1491494698798551192", label: "Role ID number 2" }
+    { id: "1523420005708861632", label: "Role ID number 1", buttonId: "self_role_selector:role_one", style: ButtonStyle.Success },
+    { id: "1491494698798551192", label: "Role ID number 2", buttonId: "self_role_selector:role_two", style: ButtonStyle.Secondary, emoji: "🟨" }
 ] as const;
-const SELF_ROLE_SELECTOR_MENU_ID = "self_role_selector";
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
 const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;
@@ -8575,26 +8574,24 @@ function buildSelfRoleSelectorPayload() {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x0ea5e9)
         .setTitle("Choose Your Roles")
-        .setDescription("Select one or more roles below to toggle them on or off.")
+        .setDescription("FNT Auto Role")
         .addFields(SELF_ROLE_SELECTOR_ROLES.map(role => ({
             name: role.label,
             value: `<@&${role.id}>`,
             inline: true
         }))), "Role Selector");
-    const menu = new StringSelectMenuBuilder()
-        .setCustomId(SELF_ROLE_SELECTOR_MENU_ID)
-        .setPlaceholder("Select roles to add or remove")
-        .setMinValues(1)
-        .setMaxValues(SELF_ROLE_SELECTOR_ROLES.length)
-        .addOptions(SELF_ROLE_SELECTOR_ROLES.map(role => ({
-            label: role.label,
-            value: role.id,
-            description: `Toggle ${role.label}.`
-        })));
+    const buttons = SELF_ROLE_SELECTOR_ROLES.map(role => {
+        const button = new ButtonBuilder()
+            .setCustomId(role.buttonId)
+            .setLabel(role.label)
+            .setStyle(role.style);
+        if ("emoji" in role) button.setEmoji(role.emoji);
+        return button;
+    });
 
     return {
         embeds: [embed],
-        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)],
         allowedMentions: { parse: [] as const }
     };
 }
@@ -11878,11 +11875,10 @@ client.on("interactionCreate", async interaction => {
         return;
     }
 
-    if (interaction.isStringSelectMenu() && interaction.customId === SELF_ROLE_SELECTOR_MENU_ID) {
+    if (interaction.isButton() && SELF_ROLE_SELECTOR_ROLES.some(role => role.buttonId === interaction.customId)) {
         const guild = interaction.guild;
-        const selectedRoleIds = interaction.values;
-        const allowedRoleIds = new Set<string>(SELF_ROLE_SELECTOR_ROLES.map(role => role.id));
-        if (!guild || !selectedRoleIds.length || selectedRoleIds.some(roleId => !allowedRoleIds.has(roleId))) {
+        const configuredRole = SELF_ROLE_SELECTOR_ROLES.find(role => role.buttonId === interaction.customId);
+        if (!guild || !configuredRole) {
             await interaction.reply({ content: "This role selector is unavailable.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
             return;
         }
@@ -11894,29 +11890,28 @@ client.on("interactionCreate", async interaction => {
             return;
         }
 
-        const outcomes: string[] = [];
-        for (const roleId of selectedRoleIds) {
-            const configuredRole = SELF_ROLE_SELECTOR_ROLES.find(role => role.id === roleId);
-            const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
-            if (!configuredRole || !role) {
-                outcomes.push(`${configuredRole?.label || "Selected role"}: role not found.`);
-                continue;
-            }
-            if (role.managed || role.comparePositionTo(botMember.roles.highest) >= 0) {
-                outcomes.push(`${configuredRole.label}: the bot cannot manage this role. Move its role above the selected role and grant Manage Roles.`);
-                continue;
-            }
-
-            const currentlyHasRole = member.roles.cache.has(roleId);
-            const succeeded = await (currentlyHasRole
-                ? member.roles.remove(roleId)
-                : member.roles.add(roleId)).then(() => true).catch(() => false);
-            outcomes.push(succeeded
-                ? `${configuredRole.label}: ${currentlyHasRole ? "removed" : "added"}.`
-                : `${configuredRole.label}: update failed. Check the bot's Manage Roles permission.`);
+        if (member.roles.cache.has(configuredRole.id)) {
+            await interaction.reply({ content: `You already have ${configuredRole.label}.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
         }
 
-        await interaction.reply({ content: outcomes.join("\n"), flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        const role = guild.roles.cache.get(configuredRole.id) || await guild.roles.fetch(configuredRole.id).catch(() => null);
+        if (!role) {
+            await interaction.reply({ content: `${configuredRole.label} could not be found.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (role.managed || role.comparePositionTo(botMember.roles.highest) >= 0) {
+            await interaction.reply({ content: `The bot cannot manage ${configuredRole.label}. Move its role above the selected role and grant Manage Roles.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+
+        const succeeded = await member.roles.add(role).then(() => true).catch(() => false);
+        await interaction.reply({
+            content: succeeded
+                ? `${configuredRole.label} added.`
+                : `Could not add ${configuredRole.label}. Check the bot's Manage Roles permission.`,
+            flags: MessageFlags.Ephemeral
+        }).catch(() => undefined);
         return;
     }
 
