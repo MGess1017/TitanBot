@@ -1,22 +1,29 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.KENO_PAYOUTS = exports.HILO_PAYOUTS = exports.BACCARAT_PAYOUTS = exports.COINFLIP_PAYOUT = exports.BLACKJACK_PAYOUTS = exports.ROULETTE_PAYOUTS = exports.DICE_PAYOUTS = exports.STANDARD_WIN_BONUS_CHANCE = exports.CASINO_PROFILES = exports.CASINO_BASE_RTP = exports.STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER = exports.CASINO_TARGET_RTP = void 0;
+exports.KENO_PAYOUTS = exports.HILO_PAYOUTS = exports.BACCARAT_PAYOUTS = exports.COINFLIP_PAYOUT = exports.BLACKJACK_PAYOUTS = exports.ROULETTE_PAYOUTS = exports.AMERICAN_ROULETTE_RED_NUMBERS = exports.AMERICAN_ROULETTE_WHEEL = exports.DICE_PAYOUTS = exports.STANDARD_WIN_BONUS_CHANCE = exports.CASINO_PROFILES = exports.CASINO_BASE_RTP = exports.STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER = exports.CASINO_TARGET_RTP = void 0;
 exports.rollWinBonus = rollWinBonus;
+exports.rollAmericanRoulettePocket = rollAmericanRoulettePocket;
+exports.getAmericanRouletteColor = getAmericanRouletteColor;
+exports.getAmericanRoulettePayout = getAmericanRoulettePayout;
+exports.buildAmericanRouletteSnapshot = buildAmericanRouletteSnapshot;
+exports.buildCasinoBoardSnapshot = buildCasinoBoardSnapshot;
+exports.dealBaccaratRound = dealBaccaratRound;
+exports.settleBaccaratBet = settleBaccaratBet;
 exports.getCasinoProfileLine = getCasinoProfileLine;
 exports.resolveFairCrash = resolveFairCrash;
 exports.CASINO_TARGET_RTP = 0.95;
 exports.STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER = 1.00925;
 exports.CASINO_BASE_RTP = exports.CASINO_TARGET_RTP / exports.STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER;
 exports.CASINO_PROFILES = {
-    dice: { rtp: "~95%", bonus: "6% win boost", volatility: "Choice-based" },
-    roulette: { rtp: "~95%", bonus: "6% win boost", volatility: "Choice-based" },
-    blackjack: { rtp: "~95%", bonus: "6% win boost", volatility: "Medium" },
-    crash: { rtp: "95%", bonus: "6% win boost", volatility: "Target-based" },
+    dice: { rtp: "94.2% exact / 94.9% bands incl. promo", bonus: "6% win boost on standard wins", volatility: "Choice-based" },
+    roulette: { rtp: "94.7% base / ~95.6% incl. promo", bonus: "6% win boost on standard wins", volatility: "American double-zero" },
+    blackjack: { rtp: "~98% simulated auto-play incl. promo", bonus: "6% win boost on standard wins", volatility: "Medium" },
+    crash: { rtp: "95%", bonus: "Built into crash odds", volatility: "Target-based" },
     magicslots: { rtp: "~94% simulated", bonus: "Scatter 0.47% | Ultra 0.16%", volatility: "Very high" },
-    coinflip: { rtp: "~96%", bonus: "6% win boost", volatility: "Medium" },
-    baccarat: { rtp: "~95%", bonus: "6% win boost", volatility: "Medium" },
-    hilo: { rtp: "~95%", bonus: "6% win boost", volatility: "Medium" },
-    keno: { rtp: "~95%", bonus: "6% win boost", volatility: "High" }
+    coinflip: { rtp: "~95.9% incl. promo", bonus: "6% win boost on standard wins", volatility: "Medium" },
+    baccarat: { rtp: "~99.6% player | ~99.7% banker | ~85.7% tie incl. promo", bonus: "6% win boost on standard wins", volatility: "Medium" },
+    hilo: { rtp: "~95% simulated incl. promo", bonus: "6% win boost on standard wins", volatility: "Medium" },
+    keno: { rtp: "94.6-96.0% by spot count incl. promo", bonus: "6% win boost on standard wins", volatility: "High" }
 };
 exports.STANDARD_WIN_BONUS_CHANCE = 0.06;
 function rollWinBonus(random = Math.random()) {
@@ -29,11 +36,161 @@ function rollWinBonus(random = Math.random()) {
     return { multiplier: 1, label: "No bonus", triggered: false };
 }
 exports.DICE_PAYOUTS = { exact: 5.6, band: 1.88 };
-exports.ROULETTE_PAYOUTS = { straight: 35.2, evenMoney: 1.93 };
-exports.BLACKJACK_PAYOUTS = { safe: 2.04, aggressive: 2.14 };
+exports.AMERICAN_ROULETTE_WHEEL = [
+    "0", "28", "9", "26", "30", "11", "7", "20", "32", "17", "5", "22", "34", "15", "3", "24", "36", "13", "1",
+    "00", "27", "10", "25", "29", "12", "8", "19", "31", "18", "6", "21", "33", "16", "4", "23", "35", "14", "2"
+];
+exports.AMERICAN_ROULETTE_RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+exports.ROULETTE_PAYOUTS = { straight: 36, evenMoney: 2, green: 18 };
+function rollAmericanRoulettePocket(random = Math.random) {
+    const sample = random();
+    const normalized = Number.isFinite(sample) ? Math.max(0, Math.min(0.999999999999, sample)) : 0;
+    return exports.AMERICAN_ROULETTE_WHEEL[Math.floor(normalized * exports.AMERICAN_ROULETTE_WHEEL.length)];
+}
+function getAmericanRouletteColor(pocket) {
+    if (pocket === "0" || pocket === "00")
+        return "green";
+    return exports.AMERICAN_ROULETTE_RED_NUMBERS.has(Number(pocket)) ? "red" : "black";
+}
+function getAmericanRoulettePayout(choice, pocket) {
+    const normalizedChoice = choice.toLowerCase();
+    const color = getAmericanRouletteColor(pocket);
+    if (normalizedChoice === pocket)
+        return exports.ROULETTE_PAYOUTS.straight;
+    if (normalizedChoice === "green" && color === "green")
+        return exports.ROULETTE_PAYOUTS.green;
+    if (normalizedChoice === color && color !== "green")
+        return exports.ROULETTE_PAYOUTS.evenMoney;
+    if (color !== "green" && normalizedChoice === "odd" && Number(pocket) % 2 === 1)
+        return exports.ROULETTE_PAYOUTS.evenMoney;
+    if (color !== "green" && normalizedChoice === "even" && Number(pocket) % 2 === 0)
+        return exports.ROULETTE_PAYOUTS.evenMoney;
+    return 0;
+}
+function buildAmericanRouletteSnapshot(landedPocket, choice) {
+    const rouletteRows = [1, 2, 3].map(row => Array.from({ length: 12 }, (_, column) => {
+        const pocket = String((column * 3) + row);
+        return pocket === landedPocket ? `[${pocket}]` : ` ${pocket} `;
+    }).join(" "));
+    const zeroCells = ["0", "00"].map(pocket => pocket === landedPocket ? `[${pocket}]` : ` ${pocket} `).join("  ");
+    return [
+        `GREEN ${zeroCells}`,
+        ...rouletteRows,
+        `Bet: ${choice} • Result: ${landedPocket} (${getAmericanRouletteColor(landedPocket)})`
+    ].join("\n");
+}
+function buildCasinoBoardSnapshot(gameKey, details) {
+    const detail = (label) => details.find(item => item.label === label)?.value || "-";
+    if (gameKey === "dice")
+        return `DICE\nCall: ${detail("Your Call")}\nRoll: [ ${detail("Roll")} ]`;
+    if (gameKey === "roulette") {
+        const pocket = detail("Landed").split(" ")[0];
+        return buildAmericanRouletteSnapshot(pocket, detail("Your Call"));
+    }
+    if (gameKey === "blackjack")
+        return [
+            "BLACKJACK TABLE",
+            `PLAYER  ${detail("Player")}`,
+            `DEALER  ${detail("Dealer")}`
+        ].join("\n");
+    if (gameKey === "coinflip")
+        return `COIN FLIP\n${detail("Your Pick").toUpperCase()}  vs  ${detail("Landed").toUpperCase()}`;
+    if (gameKey === "baccarat")
+        return [
+            "BACCARAT TABLE",
+            `PLAYER  ${detail("Player Hand")}`,
+            `BANKER  ${detail("Banker Hand")}`,
+            `RESULT  ${detail("Outcome").toUpperCase()}`
+        ].join("\n");
+    if (gameKey === "hilo")
+        return `HIGH-LOW\n${detail("First Card")}  →  ${detail("Second Card")}\nCALL  ${detail("Your Call").toUpperCase()}`;
+    if (gameKey === "crash")
+        return `CRASH\nTARGET  ${detail("Target")}\nPOINT  ${detail("Crash Point")}`;
+    if (gameKey === "keno") {
+        const pickedNumbers = details.find(item => item.label.startsWith("Your Picks"))?.value || "";
+        const picks = new Set((pickedNumbers.match(/\d+/g) || []).map(Number));
+        const drawn = new Set((detail("Drawn Numbers").match(/\d+/g) || []).map(Number));
+        if (!picks.size || !drawn.size)
+            return null;
+        const cells = Array.from({ length: 40 }, (_, index) => {
+            const number = index + 1;
+            const label = String(number).padStart(2, "0");
+            const marker = picks.has(number) && drawn.has(number) ? "✓" : picks.has(number) ? "•" : drawn.has(number) ? "x" : " ";
+            return `${marker}${label}`;
+        });
+        return [
+            "KENO • ✓ HIT • • PICK • x DRAW",
+            ...Array.from({ length: 8 }, (_, row) => cells.slice(row * 5, (row + 1) * 5).join(" "))
+        ].join("\n");
+    }
+    return null;
+}
+exports.BLACKJACK_PAYOUTS = { safe: 2.11, aggressive: 2.21 };
 exports.COINFLIP_PAYOUT = 1.9;
-exports.BACCARAT_PAYOUTS = { player: 2.08, banker: 2.08, tie: 9.18 };
+exports.BACCARAT_PAYOUTS = { player: 2, banker: 1.95, tie: 9 };
 exports.HILO_PAYOUTS = { standard: 1.72, strong: 1.96, extreme: 2.24 };
+function dealBaccaratRound(random = Math.random) {
+    const draw = () => {
+        const sample = random();
+        const rank = Math.floor(Math.max(0, Math.min(0.999999999999, sample)) * 13) + 1;
+        const label = rank === 1 ? "A" : rank === 11 ? "J" : rank === 12 ? "Q" : rank === 13 ? "K" : String(rank);
+        return { label, value: rank >= 10 ? 0 : rank };
+    };
+    const total = (cards) => cards.reduce((sum, card) => sum + card.value, 0) % 10;
+    const playerCards = [draw(), draw()];
+    const bankerCards = [draw(), draw()];
+    const initialPlayerTotal = total(playerCards);
+    const initialBankerTotal = total(bankerCards);
+    const natural = initialPlayerTotal >= 8 || initialBankerTotal >= 8;
+    let playerThird = null;
+    if (!natural && initialPlayerTotal <= 5) {
+        const thirdCard = draw();
+        playerThird = thirdCard.value;
+        playerCards.push(thirdCard);
+    }
+    if (!natural) {
+        let bankerDraws = false;
+        if (playerThird === null) {
+            bankerDraws = initialBankerTotal <= 5;
+        }
+        else if (initialBankerTotal <= 2) {
+            bankerDraws = true;
+        }
+        else if (initialBankerTotal === 3) {
+            bankerDraws = playerThird !== 8;
+        }
+        else if (initialBankerTotal === 4) {
+            bankerDraws = playerThird >= 2 && playerThird <= 7;
+        }
+        else if (initialBankerTotal === 5) {
+            bankerDraws = playerThird >= 4 && playerThird <= 7;
+        }
+        else if (initialBankerTotal === 6) {
+            bankerDraws = playerThird === 6 || playerThird === 7;
+        }
+        if (bankerDraws)
+            bankerCards.push(draw());
+    }
+    const playerTotal = total(playerCards);
+    const bankerTotal = total(bankerCards);
+    return {
+        playerCards: playerCards.map(card => card.label),
+        bankerCards: bankerCards.map(card => card.label),
+        playerTotal,
+        bankerTotal,
+        outcome: playerTotal === bankerTotal ? "tie" : playerTotal > bankerTotal ? "player" : "banker"
+    };
+}
+function settleBaccaratBet(pick, outcome, bet, winBonusMultiplier = 1) {
+    if (outcome === "tie" && pick !== "tie")
+        return { outcome: "push", payout: bet };
+    if (pick !== outcome)
+        return { outcome: "loss", payout: 0 };
+    return {
+        outcome: "win",
+        payout: Math.max(1, Math.floor(bet * exports.BACCARAT_PAYOUTS[pick] * winBonusMultiplier))
+    };
+}
 exports.KENO_PAYOUTS = {
     2: [0, 1.03, 9.62],
     3: [0, 0.6, 3.59, 15.57],

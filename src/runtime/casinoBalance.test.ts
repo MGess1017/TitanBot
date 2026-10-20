@@ -2,17 +2,25 @@ import assert from "node:assert/strict";
 import {
     BACCARAT_PAYOUTS,
     BLACKJACK_PAYOUTS,
+    AMERICAN_ROULETTE_WHEEL,
     CASINO_BASE_RTP,
     CASINO_PROFILES,
     COINFLIP_PAYOUT,
     DICE_PAYOUTS,
+    buildAmericanRouletteSnapshot,
+    dealBaccaratRound,
+    getAmericanRouletteColor,
+    getAmericanRoulettePayout,
+    rollAmericanRoulettePocket,
     HILO_PAYOUTS,
     KENO_PAYOUTS,
     ROULETTE_PAYOUTS,
     resolveFairCrash,
     rollWinBonus,
+    settleBaccaratBet,
     STANDARD_WIN_BONUS_CHANCE,
-    STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER
+    STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER,
+    buildCasinoBoardSnapshot
 } from "../game/casinoBalance";
 import { claimCasinoDaily, ensureUser, getCasinoVipTier, points, recordGameResult } from "../utils";
 
@@ -58,14 +66,70 @@ function runCasinoBalanceTests(): void {
     assert.equal(rollWinBonus(0.001).multiplier, 1.75);
     assertFairRtp("Dice exact", DICE_PAYOUTS.exact / 6 * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
     assertFairRtp("Dice band", DICE_PAYOUTS.band / 2 * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
-    assertFairRtp("Roulette straight", ROULETTE_PAYOUTS.straight / 37 * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
-    assertFairRtp("Roulette even money", 18 / 37 * ROULETTE_PAYOUTS.evenMoney * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
+    assert.equal(AMERICAN_ROULETTE_WHEEL.length, 38);
+    assert.equal(rollAmericanRoulettePocket(() => 0), "0");
+    assert.equal(rollAmericanRoulettePocket(() => 0.5), "00");
+    assert.equal(rollAmericanRoulettePocket(() => 1), "2");
+    assert.equal(AMERICAN_ROULETTE_WHEEL.filter(pocket => getAmericanRouletteColor(pocket) === "red").length, 18);
+    assert.equal(AMERICAN_ROULETTE_WHEEL.filter(pocket => getAmericanRouletteColor(pocket) === "black").length, 18);
+    assert.equal(AMERICAN_ROULETTE_WHEEL.filter(pocket => getAmericanRouletteColor(pocket) === "green").length, 2);
+    assertFairRtp("American roulette straight", ROULETTE_PAYOUTS.straight / 38 * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
+    assertFairRtp("American roulette even money", 18 / 38 * ROULETTE_PAYOUTS.evenMoney * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
+    assertFairRtp("American roulette green", 2 / 38 * ROULETTE_PAYOUTS.green * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
+    assert.equal(getAmericanRoulettePayout("red", "1"), ROULETTE_PAYOUTS.evenMoney);
+    assert.equal(getAmericanRoulettePayout("red", "2"), 0);
+    assert.equal(getAmericanRoulettePayout("odd", "0"), 0);
+    assert.equal(getAmericanRoulettePayout("green", "00"), ROULETTE_PAYOUTS.green);
+    assert.equal(getAmericanRoulettePayout("00", "00"), ROULETTE_PAYOUTS.straight);
+    assert.match(buildAmericanRouletteSnapshot("00", "00"), /\[00\]/);
+    assert.match(buildCasinoBoardSnapshot("dice", [{ label: "Your Call", value: "high" }, { label: "Roll", value: "6" }]) || "", /\[ 6 \]/);
+    assert.match(buildCasinoBoardSnapshot("blackjack", [{ label: "Player", value: "A 10 (21)" }, { label: "Dealer", value: "9 7 (16)" }]) || "", /PLAYER  A 10/);
+    assert.match(buildCasinoBoardSnapshot("baccarat", [{ label: "Player Hand", value: "2+7 => 9" }, { label: "Banker Hand", value: "5+3 => 8" }, { label: "Outcome", value: "player" }]) || "", /RESULT  PLAYER/);
+    assert.match(buildCasinoBoardSnapshot("coinflip", [{ label: "Your Pick", value: "heads" }, { label: "Landed", value: "tails" }]) || "", /HEADS  vs  TAILS/);
+    assert.match(buildCasinoBoardSnapshot("hilo", [{ label: "Your Call", value: "higher" }, { label: "First Card", value: "7" }, { label: "Second Card", value: "K" }]) || "", /7  →  K/);
+    assert.match(buildCasinoBoardSnapshot("crash", [{ label: "Target", value: "2.00x" }, { label: "Crash Point", value: "1.86x" }]) || "", /POINT  1.86x/);
+    assert.ok((buildCasinoBoardSnapshot("roulette", [{ label: "Your Call", value: "red" }, { label: "Landed", value: "18 (red)" }]) || "").length <= 850);
+    const kenoBoard = buildCasinoBoardSnapshot("keno", [{ label: "Your Picks (3)", value: "1, 8, 11" }, { label: "Drawn Numbers", value: "1, 2, 3, 4, 5, 6, 7, 8, 9, 10" }]) || "";
+    assert.equal(kenoBoard.split("\n").length, 9);
+    assert.match(kenoBoard, /✓01/);
+    assert.match(kenoBoard, /✓08/);
+    assert.ok(kenoBoard.length <= 850, "casino board snapshots must remain compact embed fields");
     assertFairRtp("Coinflip", COINFLIP_PAYOUT / 2 * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
     assertFairRtp("Blackjack safe", (0.416126 * BLACKJACK_PAYOUTS.safe * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER) + 0.093358);
     assertFairRtp("Blackjack aggressive", (0.399414 * BLACKJACK_PAYOUTS.aggressive * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER) + 0.088072);
-    assertFairRtp("Baccarat player", 0.44872 * BACCARAT_PAYOUTS.player * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
-    assertFairRtp("Baccarat banker", 0.44872 * BACCARAT_PAYOUTS.banker * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
-    assertFairRtp("Baccarat tie", 0.10255 * BACCARAT_PAYOUTS.tie * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER);
+    let baccaratSeed = 81337;
+    const baccaratRandom = () => ((baccaratSeed = (baccaratSeed * 48271) % 2147483647) / 2147483647);
+    const baccaratCounts = { player: 0, banker: 0, tie: 0 };
+    const baccaratTrials = 120_000;
+    for (let trial = 0; trial < baccaratTrials; trial++) {
+        const round = dealBaccaratRound(baccaratRandom);
+        assert.ok(round.playerCards.length >= 2 && round.playerCards.length <= 3);
+        assert.ok(round.bankerCards.length >= 2 && round.bankerCards.length <= 3);
+        baccaratCounts[round.outcome] += 1;
+    }
+    const playerProbability = baccaratCounts.player / baccaratTrials;
+    const bankerProbability = baccaratCounts.banker / baccaratTrials;
+    const tieProbability = baccaratCounts.tie / baccaratTrials;
+    assert.ok(Math.abs(playerProbability - 0.446) < 0.005, `unexpected baccarat player probability ${playerProbability}`);
+    assert.ok(Math.abs(bankerProbability - 0.459) < 0.005, `unexpected baccarat banker probability ${bankerProbability}`);
+    assert.ok(Math.abs(tieProbability - 0.095) < 0.005, `unexpected baccarat tie probability ${tieProbability}`);
+    assertFairRtp("Baccarat player", playerProbability * BACCARAT_PAYOUTS.player * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER + tieProbability, 0.985, 1.005);
+    assertFairRtp("Baccarat banker", bankerProbability * BACCARAT_PAYOUTS.banker * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER + tieProbability, 0.985, 1.005);
+    assertFairRtp("Baccarat tie", tieProbability * BACCARAT_PAYOUTS.tie * STANDARD_WIN_BONUS_EXPECTED_MULTIPLIER, 0.83, 0.89);
+    const naturalSamples = [7 / 13, 0, 4 / 13, 1 / 13];
+    const naturalRound = dealBaccaratRound(() => naturalSamples.shift() ?? 0);
+    assert.equal(naturalRound.playerTotal, 9);
+    assert.equal(naturalRound.playerCards.length, 2, "a natural 8 or 9 must stop baccarat draws");
+    assert.equal(naturalRound.bankerCards.length, 2);
+    const thirdCardSamples = [1 / 13, 2 / 13, 1 / 13, 1 / 13, 2 / 13, 1 / 13];
+    const thirdCardRound = dealBaccaratRound(() => thirdCardSamples.shift() ?? 0);
+    assert.equal(thirdCardRound.playerCards.length, 3);
+    assert.equal(thirdCardRound.bankerCards.length, 3, "banker third-card rule must be applied after a player draw");
+    assert.deepEqual(settleBaccaratBet("player", "tie", 100), { outcome: "push", payout: 100 });
+    assert.deepEqual(settleBaccaratBet("banker", "tie", 100), { outcome: "push", payout: 100 });
+    assert.deepEqual(settleBaccaratBet("player", "banker", 100), { outcome: "loss", payout: 0 });
+    assert.deepEqual(settleBaccaratBet("banker", "banker", 100), { outcome: "win", payout: 195 });
+    assert.deepEqual(settleBaccaratBet("tie", "tie", 100), { outcome: "win", payout: 900 });
 
     let hiloRtp = 13 / 169;
     for (let first = 1; first <= 13; first++) {

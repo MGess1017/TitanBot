@@ -5873,7 +5873,7 @@ function formatNetAmount(value) {
 }
 function getCasinoOddsSnapshot(gameKey) {
     const strategy = gameKey === "dice" ? `Exact: ${casinoBalance_1.DICE_PAYOUTS.exact.toFixed(2)}x | Band/parity: ${casinoBalance_1.DICE_PAYOUTS.band.toFixed(2)}x`
-        : gameKey === "roulette" ? `Straight/green: ${casinoBalance_1.ROULETTE_PAYOUTS.straight.toFixed(2)}x | Color/parity: ${casinoBalance_1.ROULETTE_PAYOUTS.evenMoney.toFixed(2)}x`
+        : gameKey === "roulette" ? `American double-zero (38 pockets) | straight 35:1 profit | outside 1:1 | green 17:1`
             : gameKey === "blackjack" ? "Safe lowers bust risk; aggressive increases volatility."
                 : gameKey === "crash" ? "Hit chance is 95% divided by your selected target."
                     : gameKey === "magicslots" ? "Scatter and ultra-bonus events are included in the slot return profile."
@@ -6020,7 +6020,7 @@ function buildCasinoLobbyPayload(userId, bet) {
         .setColor(0xd4af37)
         .setTitle("🎰 FN Casino Floor")
         .setDescription("Choose a table below. Results include the outcome, payout, net change, wallet balance, odds, and replay controls.")
-        .addFields({ name: "Your Stake", value: `${formatTokenAmount(stake)}\nWallet: ${formatTokenAmount((0, utils_1.getTokens)(userId))}`, inline: true }, { name: "Win Bonus", value: `${(casinoBalance_1.STANDARD_WIN_BONUS_CHANCE * 100).toFixed(0)}% chance on standard-game wins\nBonuses only increase payouts.`, inline: true }, { name: "VIP Status", value: `VIP ${vip.level} • ${vip.label}\n${vip.xpToNext ? `${vip.xpToNext} Casino XP to next tier` : "Maximum VIP tier"}\nWager freely within your available wallet.`, inline: true }, { name: "Jackpot Pool", value: "Progressive pool funded by 1% of casino wagers. Jackpot wins are rare and server-wide.", inline: true }, { name: "Game Profiles", value: profileLines.join("\n"), inline: false })
+        .addFields({ name: "Your Stake", value: `${formatTokenAmount(stake)}\nWallet: ${formatTokenAmount((0, utils_1.getTokens)(userId))}`, inline: true }, { name: "Win Bonus", value: `${(casinoBalance_1.STANDARD_WIN_BONUS_CHANCE * 100).toFixed(0)}% chance on standard-game wins\nBonuses only increase payouts.`, inline: true }, { name: "VIP Status", value: `VIP ${vip.level} • ${vip.label}\n${vip.xpToNext ? `${vip.xpToNext} Casino XP to next tier` : "Maximum VIP tier"}\nWager freely within your available wallet.`, inline: true }, { name: "Token Play", value: "Wagers use in-game FN Tokens only. RTP estimates are long-run averages, not a promise for any session.", inline: true }, { name: "Game Profiles", value: profileLines.join("\n"), inline: false })
         .setFooter({ text: "Long-run return is not a guarantee for any session. Play within your wallet." });
     rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(dailyId).setLabel("Claim Daily Reward").setEmoji("🎁").setStyle(discord_js_1.ButtonStyle.Success)).toJSON());
     return JSON.stringify({ embed: embed.toJSON(), components: rows });
@@ -6032,6 +6032,7 @@ function formatCasinoResult(options) {
     const oddsSnapshot = getCasinoOddsSnapshot(options.gameKey);
     const detailLines = (options.details || []).map(detail => `• ${detail.label}: ${detail.value}`);
     const notes = options.notes || [];
+    const boardSnapshot = options.boardSnapshot || (0, casinoBalance_1.buildCasinoBoardSnapshot)(options.gameKey, options.details || []);
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(outcomePayload.color)
         .setTitle(`${options.gameIcon} ${options.gameName} • ${outcomePayload.label}`)
@@ -6054,6 +6055,21 @@ function formatCasinoResult(options) {
         ].join("\n"),
         inline: true
     });
+    if (options.boardSnapshot) {
+        embed.addFields({
+            name: "Table Snapshot",
+            value: `\`\`\`text\n${options.boardSnapshot.slice(0, 850)}\n\`\`\``,
+            inline: false
+        });
+    }
+    const hasCrashMeter = options.sections?.some(section => section.title === "Crash Meter") || false;
+    if (boardSnapshot && !hasCrashMeter) {
+        embed.addFields({
+            name: "Table Snapshot",
+            value: `\`\`\`text\n${boardSnapshot.slice(0, 850)}\n\`\`\``,
+            inline: false
+        });
+    }
     if (detailLines.length) {
         const chunks = chunkLines(detailLines, 950).slice(0, 2);
         for (let i = 0; i < chunks.length; i++) {
@@ -6231,22 +6247,16 @@ function playRoulette(userId, bet, choice) {
     const c = choice.toLowerCase();
     const straightNumber = Number.parseInt(c, 10);
     const validChoice = ["red", "black", "green", "odd", "even"].includes(c)
+        || c === "00"
         || (/^\d{1,2}$/.test(c) && straightNumber >= 0 && straightNumber <= 36);
     if (!validChoice)
-        return "Choose red, black, green, odd, even, or a number from 0-36.";
+        return "Choose red, black, green, odd, even, 0, 00, or a number from 1-36.";
     const walletBefore = (0, utils_1.getTokens)(userId);
     (0, utils_1.removeTokens)(userId, bet);
-    const number = Math.floor(Math.random() * 37);
-    const color = number === 0 ? "green" : number % 2 === 0 ? "black" : "red";
-    let payoutMultiplier = 0;
-    if (c === color)
-        payoutMultiplier = color === "green" ? casinoBalance_1.ROULETTE_PAYOUTS.straight : casinoBalance_1.ROULETTE_PAYOUTS.evenMoney;
-    else if (c === "odd" && number % 2 === 1)
-        payoutMultiplier = casinoBalance_1.ROULETTE_PAYOUTS.evenMoney;
-    else if (c === "even" && number % 2 === 0 && number !== 0)
-        payoutMultiplier = casinoBalance_1.ROULETTE_PAYOUTS.evenMoney;
-    else if (!Number.isNaN(Number.parseInt(c, 10)) && Number.parseInt(c, 10) === number)
-        payoutMultiplier = casinoBalance_1.ROULETTE_PAYOUTS.straight;
+    const number = (0, casinoBalance_1.rollAmericanRoulettePocket)();
+    const color = (0, casinoBalance_1.getAmericanRouletteColor)(number);
+    const payoutMultiplier = (0, casinoBalance_1.getAmericanRoulettePayout)(c, number);
+    const boardSnapshot = (0, casinoBalance_1.buildAmericanRouletteSnapshot)(number, c);
     if (payoutMultiplier <= 0) {
         (0, utils_1.recordGameResult)(userId, "roulette", "loss", bet, 0);
         return formatCasinoResult({
@@ -6263,6 +6273,7 @@ function playRoulette(userId, bet, choice) {
                 { label: "Your Call", value: c },
                 { label: "Landed", value: `${number} (${color})` }
             ],
+            boardSnapshot,
             notes: ["Color/parity calls have lower variance than exact number calls."],
             actionMeta: { bet, arg: c }
         });
@@ -6287,6 +6298,7 @@ function playRoulette(userId, bet, choice) {
             { label: "Landed", value: `${number} (${color})` },
             { label: "Base Multiplier", value: `${payoutMultiplier.toFixed(2)}x` }
         ],
+        boardSnapshot,
         actionMeta: { bet, arg: c }
     });
 }
@@ -6762,12 +6774,6 @@ function playCoinflip(userId, bet, side) {
         actionMeta: { bet, arg: pick }
     });
 }
-function drawCardValue() {
-    const rank = Math.floor(Math.random() * 13) + 1;
-    if (rank >= 10)
-        return 0;
-    return rank;
-}
 function playBaccarat(userId, bet, side) {
     const betError = validateCasinoBet(userId, bet);
     if (betError)
@@ -6777,12 +6783,36 @@ function playBaccarat(userId, bet, side) {
         return "Choose a valid side: player, banker, or tie.";
     const walletBefore = (0, utils_1.getTokens)(userId);
     (0, utils_1.removeTokens)(userId, bet);
-    const playerCards = [drawCardValue(), drawCardValue()];
-    const bankerCards = [drawCardValue(), drawCardValue()];
-    const playerTotal = (playerCards[0] + playerCards[1]) % 10;
-    const bankerTotal = (bankerCards[0] + bankerCards[1]) % 10;
-    const outcome = playerTotal === bankerTotal ? "tie" : playerTotal > bankerTotal ? "player" : "banker";
-    if (pick !== outcome) {
+    const round = (0, casinoBalance_1.dealBaccaratRound)();
+    const outcome = round.outcome;
+    const playerHand = `${round.playerCards.join("+")} => ${round.playerTotal}`;
+    const bankerHand = `${round.bankerCards.join("+")} => ${round.bankerTotal}`;
+    const lucky = outcome === pick ? (0, casinoBalance_1.rollWinBonus)() : { multiplier: 1, label: "No bonus", triggered: false };
+    const settlement = (0, casinoBalance_1.settleBaccaratBet)(pick, outcome, bet, lucky.multiplier);
+    if (settlement.outcome === "push") {
+        (0, utils_1.addTokens)(userId, bet);
+        (0, utils_1.recordGameResult)(userId, "baccarat", "push", bet, bet);
+        return formatCasinoResult({
+            userId,
+            gameKey: "baccarat",
+            gameIcon: "🂡",
+            gameName: "Baccarat",
+            outcome: "push",
+            bet,
+            payout: bet,
+            walletBefore,
+            walletAfter: (0, utils_1.getTokens)(userId),
+            details: [
+                { label: "Your Pick", value: pick },
+                { label: "Player Hand", value: playerHand },
+                { label: "Banker Hand", value: bankerHand },
+                { label: "Outcome", value: "tie" }
+            ],
+            notes: ["Player and Banker bets push on a tie; the stake is returned."],
+            actionMeta: { bet, arg: pick }
+        });
+    }
+    if (settlement.outcome === "loss") {
         (0, utils_1.recordGameResult)(userId, "baccarat", "loss", bet, 0);
         return formatCasinoResult({
             userId,
@@ -6796,16 +6826,15 @@ function playBaccarat(userId, bet, side) {
             walletAfter: (0, utils_1.getTokens)(userId),
             details: [
                 { label: "Your Pick", value: pick },
-                { label: "Player Hand", value: `${playerCards.join("+")} => ${playerTotal}` },
-                { label: "Banker Hand", value: `${bankerCards.join("+")} => ${bankerTotal}` },
+                { label: "Player Hand", value: playerHand },
+                { label: "Banker Hand", value: bankerHand },
                 { label: "Outcome", value: outcome }
             ],
             actionMeta: { bet, arg: pick }
         });
     }
-    const lucky = (0, casinoBalance_1.rollWinBonus)();
-    const base = casinoBalance_1.BACCARAT_PAYOUTS[outcome];
-    const payout = Math.max(1, Math.floor(bet * base * lucky.multiplier));
+    const base = casinoBalance_1.BACCARAT_PAYOUTS[pick];
+    const payout = settlement.payout;
     (0, utils_1.addTokens)(userId, payout);
     (0, utils_1.recordGameResult)(userId, "baccarat", "win", bet, payout);
     return formatCasinoResult({
@@ -6821,10 +6850,10 @@ function playBaccarat(userId, bet, side) {
         luckyLabel: lucky.label,
         details: [
             { label: "Your Pick", value: pick },
-            { label: "Player Hand", value: `${playerCards.join("+")} => ${playerTotal}` },
-            { label: "Banker Hand", value: `${bankerCards.join("+")} => ${bankerTotal}` },
+            { label: "Player Hand", value: playerHand },
+            { label: "Banker Hand", value: bankerHand },
             { label: "Outcome", value: outcome },
-            { label: "Base Multiplier", value: `${base.toFixed(2)}x` }
+            { label: "Gross Return", value: `${base.toFixed(2)}x${pick === "banker" ? " (includes 5% commission)" : ""}` }
         ],
         actionMeta: { bet, arg: pick }
     });
