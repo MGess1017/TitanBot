@@ -8672,7 +8672,7 @@ function buildTemporaryVoicePanelPayload() {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x0f766e)
         .setTitle("Create Your VC")
-        .setDescription("Create a temporary voice room and get moved in automatically. It closes when everyone leaves."),
+        .setDescription("Join any voice channel, then create a private room and get moved in automatically. It closes when everyone leaves."),
     "Temporary Voice Access", "Private room controls");
     const button = new ButtonBuilder()
         .setCustomId(TEMP_VOICE_PANEL_BUTTON_ID)
@@ -8732,10 +8732,14 @@ async function ensureTemporaryVoicePanelForGuild(guild: Guild): Promise<void> {
 
 async function cleanupEmptyTemporaryVoiceChannel(guild: Guild, channelId: string): Promise<void> {
     const channel = await guild.channels.fetch(channelId).catch(() => null);
+    const hasOwnerMarker = Boolean(channel && (
+        /^temp-vc-[a-z0-9-]+-\d{17,20}$/.test(channel.name)
+        || /^temp-vc-\d{17,20}-[a-z0-9-]+$/.test(channel.name)
+    ));
     if (!channel
         || channel.type !== ChannelType.GuildVoice
         || channel.parentId !== TEMP_VOICE_CATEGORY_ID
-        || !channel.name.startsWith(TEMP_VOICE_CHANNEL_PREFIX)
+        || !hasOwnerMarker
         || channel.members.size > 0) return;
 
     await channel.delete("Temporary voice room is empty").catch(error => {
@@ -12082,18 +12086,28 @@ client.on("interactionCreate", async interaction => {
             await interaction.editReply("Unable to find your server member record. Please try again.").catch(() => undefined);
             return;
         }
+        if (!member.voice.channelId) {
+            await interaction.editReply("Join any voice channel first, then click Create my VC. Discord can move members only when they are already connected to voice.").catch(() => undefined);
+            return;
+        }
+        const sourceChannel = member.voice.channel;
+        if (sourceChannel && !sourceChannel.permissionsFor(botMember)?.has(PermissionFlagsBits.MoveMembers)) {
+            await interaction.editReply("The bot needs Move Members permission in your current voice channel and the temporary room.").catch(() => undefined);
+            return;
+        }
 
-        const ownerPrefix = `${TEMP_VOICE_CHANNEL_PREFIX}${member.id}-`;
+        const safeName = member.displayName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "member";
+        const roomName = `${TEMP_VOICE_CHANNEL_PREFIX}${safeName}-${member.id}`.slice(0, 100);
         let room = guild.channels.cache.find(channel =>
             channel.type === ChannelType.GuildVoice
             && channel.parentId === category.id
-            && channel.name.startsWith(ownerPrefix)
+            && channel.name.startsWith(TEMP_VOICE_CHANNEL_PREFIX)
+            && channel.name.endsWith(`-${member.id}`)
         );
         let createdRoom = false;
         if (!room) {
-            const safeName = member.displayName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "member";
             const created = await guild.channels.create({
-                name: `${ownerPrefix}${safeName}`.slice(0, 100),
+                name: roomName,
                 type: ChannelType.GuildVoice,
                 parent: category.id,
                 permissionOverwrites: [
@@ -12118,15 +12132,23 @@ client.on("interactionCreate", async interaction => {
             await interaction.editReply("The bot needs Move Members permission in the temporary voice category to move you into the room.").catch(() => undefined);
             return;
         }
-
+        if (!room.permissionsFor(member)?.has(PermissionFlagsBits.Connect)) {
+            if (createdRoom) await room.delete("Member cannot connect to the temporary room").catch(() => undefined);
+            await interaction.editReply("You do not have Connect permission for the temporary room. Check the category's voice permissions.").catch(() => undefined);
+            return;
+        }
         if (member.voice.channelId !== room.id) {
             const moved = await member.voice.setChannel(room.id, "Moved into a temporary voice room").then(() => true).catch(error => {
-                console.warn(`[voice] Could not move member ${member.id} to temporary room ${room!.id}:`, error);
+                const code = error && typeof error === "object" && "code" in error ? String(error.code) : "unknown";
+                console.warn(`[voice] Could not move member ${member.id} to temporary room ${room!.id} (Discord ${code}):`, error);
                 return false;
             });
             if (!moved) {
                 if (createdRoom) await room.delete("Member could not be moved into the temporary room").catch(() => undefined);
-                await interaction.editReply("Your room was created, but Discord did not allow the bot to move you. Check Move Members permission and try again.").catch(() => undefined);
+                const errorText = !member.voice.channelId
+                    ? "Join any voice channel first, then click Create my VC. Discord cannot move a disconnected member."
+                    : "Discord rejected the move. Check Move Members in your current channel, Connect in the new room, and role hierarchy.";
+                await interaction.editReply(errorText).catch(() => undefined);
                 return;
             }
         }

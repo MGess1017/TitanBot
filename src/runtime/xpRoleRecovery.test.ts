@@ -125,6 +125,11 @@ async function runXpRoleRecoveryTests(): Promise<void> {
     assert.match(botSource, /GatewayIntentBits\.GuildVoiceStates/, "voice XP tracking requires the voice-state gateway intent");
     assert.match(botSource, /const TEMP_VOICE_CATEGORY_ID = "1523417152441421888";/, "temporary voice rooms must use the configured category");
     assert.match(botSource, /setCustomId\(TEMP_VOICE_PANEL_BUTTON_ID\)/, "the VC panel must expose its create button");
+    assert.match(botSource, /if \(!member\.voice\.channelId\)/, "the panel must explain Discord's connected-member move requirement before creating a room");
+    assert.match(botSource, /Join any voice channel first, then click Create my VC/, "the VC panel response must explain the connected-member requirement");
+    assert.match(botSource, /const roomName = `\$\{TEMP_VOICE_CHANNEL_PREFIX\}\$\{safeName\}-\$\{member\.id\}`/, "temporary voice channels must put the username before the unique owner ID");
+    assert.match(botSource, /channel\.name\.endsWith\(`-\$\{member\.id\}`\)/, "room reuse must remain tied to its owner if their display name changes");
+    assert.match(botSource, /sourceChannel\.permissionsFor\(botMember\).*PermissionFlagsBits\.MoveMembers/, "source-channel move permission must be checked");
     assert.match(botSource, /member\.voice\.setChannel\(room\.id/, "the creator must be moved into their room");
     assert.match(botSource, /channel\.members\.size > 0\) return/, "non-empty temporary rooms must remain open");
     assert.match(botSource, /channel\.delete\("Temporary voice room is empty"\)/, "empty temporary rooms must be deleted");
