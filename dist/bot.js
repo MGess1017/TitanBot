@@ -126,6 +126,7 @@ const DEFAULT_REPORT_ADMIN_PANEL_CHANNEL_ID = "1535132577059307583";
 const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "";
+const JOIN_WELCOME_CHANNEL_ID = "1562377046389166121";
 const ROLE_SELECTOR_CHANNEL_ID = "1554389202085482566";
 const TEMP_VOICE_CATEGORY_ID = "1523417152441421888";
 const TEMP_VOICE_PANEL_CHANNEL_NAME = "create-your-vc";
@@ -10200,6 +10201,36 @@ client.on("guildBanAdd", async (ban) => {
         { name: "Target", value: `<@${userId}>`, inline: true },
         { name: "Reason", value: reason }
     ]);
+});
+client.on("guildMemberAdd", async (member) => {
+    const channel = await member.guild.channels.fetch(JOIN_WELCOME_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+        console.warn(`[welcome] Join channel ${JOIN_WELCOME_CHANNEL_ID} is missing or is not a text channel.`);
+        return;
+    }
+    const joinedAt = member.joinedTimestamp || Date.now();
+    const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
+        .setColor(0x16a34a)
+        .setTitle("Welcome to FNT")
+        .setDescription(`Welcome, <@${member.id}>!`)
+        .setThumbnail(member.user.displayAvatarURL({ extension: "png", size: 256 }))
+        .addFields({ name: "Member", value: `${member.user.username}${member.user.bot ? " • Bot" : " • Player"}`, inline: true }, { name: "Joined", value: `<t:${Math.floor(joinedAt / 1000)}:F>`, inline: true }, { name: "Account Created", value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true }, { name: "Player ID", value: `\`${member.id}\``, inline: false }), "FNT Player Tracking", "New member joined");
+    const sent = await channel.send({
+        content: `<@${member.id}>`,
+        embeds: [embed],
+        allowedMentions: { parse: [], users: [member.id] }
+    }).catch(error => {
+        console.warn(`[welcome] Could not post join message for ${member.id}:`, error);
+        return null;
+    });
+    if (sent)
+        appendAuditEvent("guild_member_welcomed", {
+            guildId: member.guild.id,
+            userId: member.id,
+            channelId: channel.id,
+            messageId: sent.id,
+            isBot: member.user.bot
+        });
 });
 client.on("guildMemberRemove", async (member) => {
     const guildId = member.guild.id;
