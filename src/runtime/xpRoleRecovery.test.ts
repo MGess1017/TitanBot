@@ -129,8 +129,10 @@ async function runXpRoleRecoveryTests(): Promise<void> {
     assert.match(botSource, /GatewayIntentBits\.GuildVoiceStates/, "voice XP tracking requires the voice-state gateway intent");
     assert.match(botSource, /const TEMP_VOICE_CATEGORY_ID = "1523417152441421888";/, "temporary voice rooms must use the configured category");
     assert.match(botSource, /setCustomId\(TEMP_VOICE_PANEL_BUTTON_ID\)/, "the VC panel must expose its create button");
-    assert.match(botSource, /if \(!member\.voice\.channelId\)/, "the panel must explain Discord's connected-member move requirement before creating a room");
-    assert.match(botSource, /Join any voice channel first, then click Create my VC/, "the VC panel response must explain the connected-member requirement");
+    assert.match(botSource, /Create a private room\. If you are not in voice yet, join any voice channel and click again to move in\./, "the panel must allow room creation before joining voice");
+    assert.match(botSource, /const currentSourceChannelId = guild\.voiceStates\.cache\.get\(member\.id\)/, "voice presence must be checked after the room exists");
+    assert.match(botSource, /Your room is ready: <#\$\{room\.id\}>\. Join any voice channel, then click Create my VC again to move in\./, "disconnected users must retain their new room and receive next steps");
+    assert.match(botSource, /if \(code === "40032"\)/, "disconnect races must be handled without an unhandled move failure");
     assert.match(botSource, /const roomName = `\$\{TEMP_VOICE_CHANNEL_PREFIX\}\$\{safeName\}-\$\{member\.id\}`/, "temporary voice channels must put the username before the unique owner ID");
     assert.match(botSource, /channel\.name\.endsWith\(`-\$\{member\.id\}`\)/, "room reuse must remain tied to its owner if their display name changes");
     assert.match(botSource, /sourceChannel\.permissionsFor\(botMember\).*PermissionFlagsBits\.MoveMembers/, "source-channel move permission must be checked");
