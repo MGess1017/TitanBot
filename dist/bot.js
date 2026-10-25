@@ -64,6 +64,7 @@ const moderationCommands_1 = require("./commands/moderationCommands");
 const coreCommands_1 = require("./commands/coreCommands");
 const slashCatalog_1 = require("./commands/slashCatalog");
 const health_1 = require("./runtime/health");
+const playerCounts_1 = require("./runtime/playerCounts");
 const rateLimit_1 = require("./runtime/rateLimit");
 const voiceXp_1 = require("./runtime/voiceXp");
 const ticketText_1 = require("./services/ticketText");
@@ -103,6 +104,8 @@ const PREFIX = "$";
 const MIN_BET = 1;
 const MIN_RAID_BET = 10;
 const VOICE_XP_SESSIONS = new Map();
+const PLAYER_COUNTS_BY_GUILD = new Map();
+const PLAYER_COUNT_UPDATE_TIMERS = new Map();
 const MOD_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/moderation.json");
 const TRADE_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/trades.json");
 const GIVEAWAY_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/giveaways.json");
@@ -127,6 +130,7 @@ const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "";
 const JOIN_WELCOME_CHANNEL_ID = "1562377046389166121";
+const PLAYER_COUNT_CHANNEL_ID = "1527571592320651285";
 const ROLE_SELECTOR_CHANNEL_ID = "1554389202085482566";
 const TEMP_VOICE_CATEGORY_ID = "1523417152441421888";
 const TEMP_VOICE_PANEL_CHANNEL_NAME = "create-your-vc";
@@ -7390,6 +7394,79 @@ async function ensureWelcomePanelForGuild(guild) {
         console.warn(`Welcome panel upsert skipped for guild ${guild.id}: ${result.error}`);
     }
 }
+async function upsertPlayerCountPanelForGuild(guild, counts) {
+    const channel = guild.channels.cache.get(PLAYER_COUNT_CHANNEL_ID)
+        || await guild.channels.fetch(PLAYER_COUNT_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+        console.warn(`[players] Count panel channel ${PLAYER_COUNT_CHANNEL_ID} is missing or is not a text channel.`);
+        return;
+    }
+    const embed = (0, playerCounts_1.buildPlayerCountEmbed)(counts);
+    const storedMessageId = getGuildPanelMessageId(guild.id, "playerCount");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited)
+            return;
+        setGuildPanelMessageId(guild.id, "playerCount", null);
+    }
+    const recentMessages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    const existing = recentMessages?.find(message => message.author.id === (client.user?.id || "")
+        && message.embeds[0]?.title === "FNT • Live Player Count");
+    if (existing) {
+        const edited = await existing.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) {
+            setGuildPanelMessageId(guild.id, "playerCount", existing.id);
+            return;
+        }
+    }
+    const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(error => {
+        console.warn(`[players] Could not post the live player-count panel in ${channel.id}:`, error);
+        return null;
+    });
+    if (sent)
+        setGuildPanelMessageId(guild.id, "playerCount", sent.id);
+}
+async function ensurePlayerCountPanelForGuild(guild) {
+    const members = await guild.members.fetch().catch(error => {
+        console.warn(`[players] Could not fetch the full member list for ${guild.id}:`, error);
+        return null;
+    });
+    if (!members)
+        return;
+    const counts = (0, playerCounts_1.countPlayers)(Array.from(members.values(), member => member.user.bot));
+    PLAYER_COUNTS_BY_GUILD.set(guild.id, counts);
+    await upsertPlayerCountPanelForGuild(guild, counts);
+}
+function schedulePlayerCountPanelUpdate(guild) {
+    const existingTimer = PLAYER_COUNT_UPDATE_TIMERS.get(guild.id);
+    if (existingTimer)
+        clearTimeout(existingTimer);
+    const timer = setTimeout(() => {
+        PLAYER_COUNT_UPDATE_TIMERS.delete(guild.id);
+        const counts = PLAYER_COUNTS_BY_GUILD.get(guild.id);
+        if (counts)
+            void upsertPlayerCountPanelForGuild(guild, counts);
+    }, 750);
+    PLAYER_COUNT_UPDATE_TIMERS.set(guild.id, timer);
+    timer.unref();
+}
+function trackGuildMemberChange(member, direction) {
+    const eventType = direction > 0 ? "guild_member_joined" : "guild_member_left";
+    appendAuditEvent(eventType, {
+        guildId: member.guild.id,
+        userId: member.id,
+        username: member.user.username,
+        isBot: member.user.bot
+    });
+    const current = PLAYER_COUNTS_BY_GUILD.get(member.guild.id);
+    if (!current) {
+        void ensurePlayerCountPanelForGuild(member.guild);
+        return;
+    }
+    PLAYER_COUNTS_BY_GUILD.set(member.guild.id, (0, playerCounts_1.adjustPlayerCounts)(current, member.user.bot, direction));
+    schedulePlayerCountPanelUpdate(member.guild);
+}
 function buildSelfRoleSelectorPayload() {
     const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
         .setColor(0x0ea5e9)
@@ -10152,6 +10229,7 @@ client.once("clientReady", async () => {
                 await upsertSelfRoleSelectorForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
+            await ensurePlayerCountPanelForGuild(guild);
             if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
                 await sendDeploymentSummaryIfNeeded();
             }
@@ -10175,6 +10253,7 @@ client.once("clientReady", async () => {
                 await upsertSelfRoleSelectorForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
+            await ensurePlayerCountPanelForGuild(guild);
         }
         if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
             await sendDeploymentSummaryIfNeeded();
@@ -10203,6 +10282,7 @@ client.on("guildBanAdd", async (ban) => {
     ]);
 });
 client.on("guildMemberAdd", async (member) => {
+    trackGuildMemberChange(member, 1);
     const channel = await member.guild.channels.fetch(JOIN_WELCOME_CHANNEL_ID).catch(() => null);
     if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
         console.warn(`[welcome] Join channel ${JOIN_WELCOME_CHANNEL_ID} is missing or is not a text channel.`);
@@ -10233,6 +10313,7 @@ client.on("guildMemberAdd", async (member) => {
         });
 });
 client.on("guildMemberRemove", async (member) => {
+    trackGuildMemberChange(member, -1);
     const guildId = member.guild.id;
     const userId = member.id;
     const audit = await member.guild.fetchAuditLogs({ type: discord_js_1.AuditLogEvent.MemberKick, limit: 6 }).catch(() => null);

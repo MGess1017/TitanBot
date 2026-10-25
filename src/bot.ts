@@ -135,6 +135,7 @@ import { buildModerationCommandHandlers } from "./commands/moderationCommands";
 import { handleCoreCommand } from "./commands/coreCommands";
 import { buildSlashCommands } from "./commands/slashCatalog";
 import { buildStartupSummary, buildStatusLines } from "./runtime/health";
+import { adjustPlayerCounts, buildPlayerCountEmbed, countPlayers, type PlayerCounts } from "./runtime/playerCounts";
 import { rejectIfRateLimited } from "./runtime/rateLimit";
 import { accrueVoiceXp, type VoiceXpAccrualState } from "./runtime/voiceXp";
 import { sanitizeTranscriptLine } from "./services/ticketText";
@@ -206,6 +207,8 @@ type VoiceXpSession = VoiceXpAccrualState & {
     updatedAt: number;
 };
 const VOICE_XP_SESSIONS = new Map<string, VoiceXpSession>();
+const PLAYER_COUNTS_BY_GUILD = new Map<string, PlayerCounts>();
+const PLAYER_COUNT_UPDATE_TIMERS = new Map<string, ReturnType<typeof setTimeout>>();
 const MOD_DATA_FILE = path.resolve(__dirname, "../src/data/moderation.json");
 const TRADE_DATA_FILE = path.resolve(__dirname, "../src/data/trades.json");
 const GIVEAWAY_DATA_FILE = path.resolve(__dirname, "../src/data/giveaways.json");
@@ -230,6 +233,7 @@ const DEFAULT_REPORT_LOG_CHANNEL_ID = "1535135958788341770";
 const DEFAULT_BOT_FEATURE_BRIEF_CHANNEL_ID = "1528998695624773714";
 const DEFAULT_WELCOME_PANEL_CHANNEL_ID = "";
 const JOIN_WELCOME_CHANNEL_ID = "1562377046389166121";
+const PLAYER_COUNT_CHANNEL_ID = "1527571592320651285";
 const ROLE_SELECTOR_CHANNEL_ID = "1554389202085482566";
 const TEMP_VOICE_CATEGORY_ID = "1523417152441421888";
 const TEMP_VOICE_PANEL_CHANNEL_NAME = "create-your-vc";
@@ -2048,6 +2052,7 @@ type GuildModerationState = {
         featureBrief?: string | null;
         roleSelector?: string | null;
         voiceCreator?: string | null;
+        playerCount?: string | null;
     };
 };
 
@@ -3145,13 +3150,13 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     return moderationStore.guilds[guildId];
 }
 
-function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator"): string | null {
+function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount"): string | null {
     const cfg = ensureGuildModeration(guildId);
     const value = cfg.panelMessageIds?.[panel];
     return value ? String(value) : null;
 }
 
-function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator", messageId: string | null): void {
+function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount", messageId: string | null): void {
     const cfg = ensureGuildModeration(guildId);
     if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
     cfg.panelMessageIds[panel] = messageId;
@@ -8662,6 +8667,86 @@ async function ensureWelcomePanelForGuild(guild: Guild): Promise<void> {
     }
 }
 
+async function upsertPlayerCountPanelForGuild(guild: Guild, counts: PlayerCounts): Promise<void> {
+    const channel = guild.channels.cache.get(PLAYER_COUNT_CHANNEL_ID)
+        || await guild.channels.fetch(PLAYER_COUNT_CHANNEL_ID).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+        console.warn(`[players] Count panel channel ${PLAYER_COUNT_CHANNEL_ID} is missing or is not a text channel.`);
+        return;
+    }
+
+    const embed = buildPlayerCountEmbed(counts);
+    const storedMessageId = getGuildPanelMessageId(guild.id, "playerCount");
+    if (storedMessageId) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
+        const edited = await stored?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) return;
+        setGuildPanelMessageId(guild.id, "playerCount", null);
+    }
+
+    const recentMessages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    const existing = recentMessages?.find(message =>
+        message.author.id === (client.user?.id || "")
+        && message.embeds[0]?.title === "FNT • Live Player Count"
+    );
+    if (existing) {
+        const edited = await existing.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
+        if (edited) {
+            setGuildPanelMessageId(guild.id, "playerCount", existing.id);
+            return;
+        }
+    }
+
+    const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(error => {
+        console.warn(`[players] Could not post the live player-count panel in ${channel.id}:`, error);
+        return null;
+    });
+    if (sent) setGuildPanelMessageId(guild.id, "playerCount", sent.id);
+}
+
+async function ensurePlayerCountPanelForGuild(guild: Guild): Promise<void> {
+    const members = await guild.members.fetch().catch(error => {
+        console.warn(`[players] Could not fetch the full member list for ${guild.id}:`, error);
+        return null;
+    });
+    if (!members) return;
+
+    const counts = countPlayers(Array.from(members.values(), member => member.user.bot));
+    PLAYER_COUNTS_BY_GUILD.set(guild.id, counts);
+    await upsertPlayerCountPanelForGuild(guild, counts);
+}
+
+function schedulePlayerCountPanelUpdate(guild: Guild): void {
+    const existingTimer = PLAYER_COUNT_UPDATE_TIMERS.get(guild.id);
+    if (existingTimer) clearTimeout(existingTimer);
+
+    const timer = setTimeout(() => {
+        PLAYER_COUNT_UPDATE_TIMERS.delete(guild.id);
+        const counts = PLAYER_COUNTS_BY_GUILD.get(guild.id);
+        if (counts) void upsertPlayerCountPanelForGuild(guild, counts);
+    }, 750);
+    PLAYER_COUNT_UPDATE_TIMERS.set(guild.id, timer);
+    timer.unref();
+}
+
+function trackGuildMemberChange(member: Pick<GuildMember, "guild" | "id" | "user">, direction: 1 | -1): void {
+    const eventType = direction > 0 ? "guild_member_joined" : "guild_member_left";
+    appendAuditEvent(eventType, {
+        guildId: member.guild.id,
+        userId: member.id,
+        username: member.user.username,
+        isBot: member.user.bot
+    });
+
+    const current = PLAYER_COUNTS_BY_GUILD.get(member.guild.id);
+    if (!current) {
+        void ensurePlayerCountPanelForGuild(member.guild);
+        return;
+    }
+    PLAYER_COUNTS_BY_GUILD.set(member.guild.id, adjustPlayerCounts(current, member.user.bot, direction));
+    schedulePlayerCountPanelUpdate(member.guild);
+}
+
 function buildSelfRoleSelectorPayload() {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x0ea5e9)
@@ -11558,6 +11643,7 @@ client.once("clientReady", async () => {
                 await upsertSelfRoleSelectorForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
+            await ensurePlayerCountPanelForGuild(guild);
             if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
                 await sendDeploymentSummaryIfNeeded();
             }
@@ -11581,6 +11667,7 @@ client.once("clientReady", async () => {
                 await upsertSelfRoleSelectorForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
+            await ensurePlayerCountPanelForGuild(guild);
         }
         if (ENABLE_STARTUP_DEPLOYMENT_SUMMARY) {
             await sendDeploymentSummaryIfNeeded();
@@ -11613,6 +11700,7 @@ client.on("guildBanAdd", async ban => {
 });
 
 client.on("guildMemberAdd", async member => {
+    trackGuildMemberChange(member, 1);
     const channel = await member.guild.channels.fetch(JOIN_WELCOME_CHANNEL_ID).catch(() => null);
     if (!channel || channel.type !== ChannelType.GuildText) {
         console.warn(`[welcome] Join channel ${JOIN_WELCOME_CHANNEL_ID} is missing or is not a text channel.`);
@@ -11650,6 +11738,7 @@ client.on("guildMemberAdd", async member => {
 });
 
 client.on("guildMemberRemove", async member => {
+    trackGuildMemberChange(member, -1);
     const guildId = member.guild.id;
     const userId = member.id;
     const audit = await member.guild.fetchAuditLogs({ type: AuditLogEvent.MemberKick, limit: 6 }).catch(() => null);
