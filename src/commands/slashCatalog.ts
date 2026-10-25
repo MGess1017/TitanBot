@@ -31,7 +31,7 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addBooleanOption(o => o.setName("pause").setDescription("Pause or resume automatic role synchronization").setRequired(false))
             .addBooleanOption(o => o.setName("retry").setDescription("Retry persisted failed sync jobs").setRequired(false))
-            .addIntegerOption(o => o.setName("config_xp").setDescription("XP threshold to create or update").setRequired(false).setMinValue(1))
+            .addIntegerOption(o => o.setName("config_xp").setDescription("XP threshold to create or update (max 50M)").setRequired(false).setMinValue(1).setMaxValue(50000000))
             .addRoleOption(o => o.setName("config_role").setDescription("Role to grant at the configured XP threshold").setRequired(false))
             .addStringOption(o => o.setName("config_name").setDescription("Optional display name for this XP tier").setRequired(false).setMaxLength(80)),
         new SlashCommandBuilder()

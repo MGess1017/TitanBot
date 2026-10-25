@@ -64,6 +64,7 @@ const moderationCommands_1 = require("./commands/moderationCommands");
 const coreCommands_1 = require("./commands/coreCommands");
 const slashCatalog_1 = require("./commands/slashCatalog");
 const health_1 = require("./runtime/health");
+const achievements_1 = require("./game/achievements");
 const playerCounts_1 = require("./runtime/playerCounts");
 const rateLimit_1 = require("./runtime/rateLimit");
 const voiceXp_1 = require("./runtime/voiceXp");
@@ -112,6 +113,7 @@ const GIVEAWAY_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/giveaw
 const XP_ROLE_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/xp-roles.json");
 const XP_ROLE_DEAD_LETTER_FILE = path_1.default.resolve(__dirname, "../src/data/xp-role-dead-letter.json");
 const XP_ROLE_METRICS_FILE = path_1.default.resolve(__dirname, "../src/data/xp-role-metrics.json");
+const MAX_XP_ROLE_THRESHOLD = 50000000;
 const POINTS_DATA_FILE = path_1.default.resolve(__dirname, "../src/data/points.json");
 const POINTS_BACKUP_FILE = `${POINTS_DATA_FILE}.bak`;
 const EVENT_LOG_FILE = path_1.default.resolve(__dirname, "../src/data/events.jsonl");
@@ -2913,7 +2915,19 @@ const XP_ROLE_TIERS = [
     { xp: 2250000, roleId: "1528237554090905861", name: "Elite I" },
     { xp: 2340000, roleId: "1528237554795810967", name: "Elite II" },
     { xp: 2430000, roleId: "1528237555428884591", name: "Elite III" },
-    { xp: 2520000, roleId: "1528237556406161521", name: "Titan Commander" }
+    { xp: 2520000, roleId: "1528237556406161521", name: "Titan Commander" },
+    { xp: 3000000, roleId: "9999999999999900001", name: "FNT Vanguard" },
+    { xp: 7000000, roleId: "9999999999999900002", name: "Void Marshal" },
+    { xp: 11000000, roleId: "9999999999999900003", name: "Apex Reclaimer" },
+    { xp: 15000000, roleId: "9999999999999900004", name: "Astral Legionnaire" },
+    { xp: 19000000, roleId: "9999999999999900005", name: "Eclipse Warden" },
+    { xp: 23000000, roleId: "9999999999999900006", name: "Mythic Paragon" },
+    { xp: 27000000, roleId: "9999999999999900007", name: "Ascendant Hunter" },
+    { xp: 31000000, roleId: "9999999999999900008", name: "Infinite Sovereign" },
+    { xp: 35000000, roleId: "9999999999999900009", name: "Aether Commander" },
+    { xp: 39000000, roleId: "9999999999999900010", name: "Celestial Titan" },
+    { xp: 44000000, roleId: "9999999999999900011", name: "Omniversal Champion" },
+    { xp: 50000000, roleId: "9999999999999900012", name: "FNT Immortal" }
 ];
 function readXpRoleDeadLetters() {
     if (!fs_extra_1.default.existsSync(XP_ROLE_DEAD_LETTER_FILE))
@@ -2969,6 +2983,9 @@ function saveXpRoleEntries(entries) {
     fs_extra_1.default.writeJsonSync(XP_ROLE_DATA_FILE, { entries }, { spaces: 2 });
 }
 function upsertXpRoleEntry(entry) {
+    if (!Number.isFinite(entry.xp) || entry.xp <= 0 || entry.xp > MAX_XP_ROLE_THRESHOLD) {
+        throw new Error(`XP role thresholds must be between 1 and ${MAX_XP_ROLE_THRESHOLD.toLocaleString()}.`);
+    }
     const entries = getEffectiveXpRoleEntries().filter(item => item.xp !== entry.xp);
     entries.push(entry);
     entries.sort((a, b) => a.xp - b.xp);
@@ -2982,16 +2999,21 @@ function getPersistedXpRoleMap() {
     }
     return map;
 }
-function getEffectiveXpRoleEntries() {
-    const persisted = readXpRoleEntries()
-        .filter(entry => Number.isFinite(entry.xp) && entry.xp > 0 && Boolean(entry.roleId))
-        .sort((a, b) => a.xp - b.xp);
-    if (persisted.length) {
-        return persisted;
+function mergeXpRoleEntries(persisted) {
+    const entries = new Map();
+    for (const entry of persisted) {
+        if (Number.isFinite(entry.xp) && entry.xp > 0 && entry.xp <= MAX_XP_ROLE_THRESHOLD && Boolean(entry.roleId) && Boolean(entry.name)) {
+            entries.set(entry.xp, entry);
+        }
     }
-    return XP_ROLE_TIERS
-        .map(entry => ({ xp: entry.xp, roleId: entry.roleId, name: entry.name }))
-        .sort((a, b) => a.xp - b.xp);
+    for (const entry of XP_ROLE_TIERS) {
+        if (!entries.has(entry.xp))
+            entries.set(entry.xp, { ...entry });
+    }
+    return Array.from(entries.values()).sort((first, second) => first.xp - second.xp);
+}
+function getEffectiveXpRoleEntries() {
+    return mergeXpRoleEntries(readXpRoleEntries());
 }
 function getXpRoleProgress(xp) {
     const roleEntries = getEffectiveXpRoleEntries();
@@ -3033,14 +3055,7 @@ function describeXpRoleDiff(member, xp, roleEntries, botHighestPosition) {
     };
 }
 async function getEffectiveXpRoleEntriesForGuild(guild) {
-    const persisted = readXpRoleEntries()
-        .filter(entry => Number.isFinite(entry.xp) && entry.xp > 0 && Boolean(entry.roleId) && Boolean(entry.name));
-    if (persisted.length) {
-        return persisted.sort((a, b) => a.xp - b.xp);
-    }
-    return XP_ROLE_TIERS
-        .map(entry => ({ xp: entry.xp, roleId: entry.roleId, name: entry.name }))
-        .sort((a, b) => a.xp - b.xp);
+    return mergeXpRoleEntries(readXpRoleEntries());
 }
 const XP_ROLE_COLORS = [0x64748b, 0x38bdf8, 0x22c55e, 0xeab308, 0xf97316, 0xef4444, 0xa855f7, 0x14b8a6];
 function formatXpTierDisplayName(entry) {
@@ -3345,14 +3360,37 @@ function enqueueXpRoleSync(guild, userId, xp) {
     }
     void drainXpRoleSyncQueue();
 }
-function awardEngagementXp(guild, userId, xpDelta) {
-    const previousXp = (0, utils_1.ensureUser)(userId).xp;
+function awardEngagementXp(guild, userId, xpDelta, voiceMinutesDelta = 0) {
+    const user = (0, utils_1.ensureUser)(userId);
+    if (voiceMinutesDelta > 0)
+        user.voiceMinutes += voiceMinutesDelta;
+    const previousXp = user.xp;
     const totalXp = (0, utils_1.addXP)(userId, xpDelta);
     if (guild && getEffectiveXpRoleEntries().some(entry => previousXp < entry.xp && totalXp >= entry.xp)) {
         enqueueXpRoleSync(guild, userId, totalXp);
         void notifyXpThresholdUnlock(guild, userId, previousXp, totalXp);
     }
     return { previousXp, totalXp };
+}
+function getLiveVoiceTimeMs(userId) {
+    const user = (0, utils_1.ensureUser)(userId);
+    let totalMs = user.voiceMinutes * 60000;
+    const now = Date.now();
+    for (const session of VOICE_XP_SESSIONS.values()) {
+        if (session.userId !== userId)
+            continue;
+        totalMs += session.remainderMs;
+        if (session.connected)
+            totalMs += Math.max(0, now - session.lastAccruedAt);
+    }
+    return totalMs;
+}
+function formatVoiceDuration(totalMs) {
+    const totalSeconds = Math.max(0, Math.floor(totalMs / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return `${hours}h ${minutes}m ${seconds}s`;
 }
 function voiceXpSessionKey(guildId, userId) {
     return `${guildId}:${userId}`;
@@ -3395,7 +3433,7 @@ function awardConnectedVoiceXp(session, now = Date.now()) {
     session.updatedAt = now;
     if (accrued.xp <= 0)
         return;
-    const award = awardEngagementXp(session.guild, session.userId, accrued.xp);
+    const award = awardEngagementXp(session.guild, session.userId, accrued.xp, accrued.minutes);
     appendAuditEvent("voice_engagement_xp", {
         guildId: session.guild.id,
         userId: session.userId,
@@ -3970,19 +4008,20 @@ function chunkRoleLines(lines, maxLen = 1000) {
 }
 function buildThemedRoleSections(lines) {
     const sectionNames = [
-        "Comms Cadet (Levels 1-5)",
-        "Pathfinder Wing (Levels 6-10)",
-        "Strike Division (Levels 11-15)",
-        "Warden Command (Levels 16-20)",
-        "Elite Vanguard (Levels 21-25)"
+        "Comms Cadet (Role Tiers 1-5)",
+        "Pathfinder Wing (Role Tiers 6-10)",
+        "Strike Division (Role Tiers 11-15)",
+        "Warden Command (Role Tiers 16-20)",
+        "Elite Vanguard (Role Tiers 21-25)"
     ];
     const sections = [];
-    for (let i = 0; i < sectionNames.length; i++) {
+    for (let i = 0; i * 5 < lines.length; i++) {
         const start = i * 5;
         const group = lines.slice(start, start + 5);
         if (!group.length)
             continue;
-        sections.push({ name: sectionNames[i], value: group.join("\n") });
+        const name = sectionNames[i] || `Ascendant Command (Role Tiers ${start + 1}-${start + group.length})`;
+        sections.push({ name, value: group.join("\n") });
     }
     return sections;
 }
@@ -4052,7 +4091,7 @@ async function helpPageXP(guild) {
         value: "• `/xp` — compact level and progress bar\n\n• `/xpstats` — detailed engagement + PMC progression\n\n• `/xproles` — view 5 themed role sections\n\n• `/xprolesync` — admin force-sync rank roles now\n\n• `/leaderboard` — server-wide engagement XP ranking\n\n• `/daily` — claim streak bonus"
     }, {
         name: "🪖 Progression Rules",
-        value: "• Each eligible non-bot message grants 100 engagement XP (text, replies, mentions, or attachments).\n\n• Raid XP is tracked separately in your PMC profile."
+        value: `• Each eligible non-bot message grants ${MESSAGE_XP_GAIN} engagement XP.\n\n• XP role progression ends at 50,000,000 XP.\n\n• Voice time and achievements are tracked in /xpstats.\n\n• Raid XP is tracked separately in your PMC profile.`
     });
     if (!rankChunks.length) {
         embed.addFields({ name: "🎖️ Rank Unlock Directory", value: "No rank directory entries available." });
@@ -5537,7 +5576,7 @@ function buildMapMasteryPayload(userId, focusMapKey) {
         .addFields({
         name: "Network Status",
         value: [
-            `Total Reputation: ${totalReputation.toLocaleString()} REP`,
+            `Network REP: ${totalReputation.toLocaleString()}`,
             `Mastered Territories: ${masteredMaps}/${maps.length}`,
             `Highest Rank: ${maps[0]?.progress.tier.label || "Unproven"}`
         ].join("\n"),
@@ -8236,8 +8275,8 @@ const commandHandlers = {
         const configRole = interaction.options.getRole("config_role");
         const configName = interaction.options.getString("config_name")?.trim();
         if (configXp !== null || configRole || configName) {
-            if (!configXp || configXp <= 0 || !configRole) {
-                return "To configure an XP role tier, provide config_xp and config_role. config_name is optional.";
+            if (!configXp || configXp <= 0 || configXp > MAX_XP_ROLE_THRESHOLD || !configRole) {
+                return `To configure an XP role tier, provide config_xp from 1 to ${MAX_XP_ROLE_THRESHOLD.toLocaleString()} and config_role. config_name is optional.`;
             }
             const configured = upsertXpRoleEntry({ xp: configXp, roleId: configRole.id, name: configName || configRole.name });
             appendAuditEvent("xp_role_config_updated", {
@@ -8531,6 +8570,7 @@ const commandHandlers = {
     pmc: async (interaction) => buildPmcProfilePayload(interaction.user),
     xpstats: async (interaction) => {
         const user = (0, utils_1.ensureUser)(interaction.user.id);
+        (0, utils_1.syncProgressAchievements)(interaction.user.id);
         const gameStats = (0, utils_1.getGameStatsSummary)(interaction.user.id);
         const prestigeBadge = getPrestigeBadge(user.prestige);
         const engagementLevel = (0, utils_1.getXPLevel)(user.xp);
@@ -8547,8 +8587,14 @@ const commandHandlers = {
             : "100%";
         const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
         const achievements = user.achievements.length > 0
-            ? user.achievements.slice(0, 6).join("\n")
+            ? user.achievements.slice(-6).reverse().join("\n")
             : "No achievements yet";
+        const voiceTimeMs = getLiveVoiceTimeMs(interaction.user.id);
+        const voiceMinutes = Math.floor(voiceTimeMs / 60000);
+        const earnedXpAchievements = achievements_1.XP_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).length;
+        const earnedVoiceAchievements = achievements_1.VOICE_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).length;
+        const nextXpAchievement = achievements_1.XP_ACHIEVEMENTS.find(achievement => user.xp < achievement.threshold);
+        const nextVoiceAchievement = achievements_1.VOICE_ACHIEVEMENTS.find(achievement => voiceMinutes < achievement.threshold);
         const pmcProgress = (0, utils_1.getPmcProgress)(user.pmcXP);
         const roleProgress = getXpRoleProgress(user.xp);
         const embed = new discord_js_1.EmbedBuilder()
@@ -8610,6 +8656,14 @@ const commandHandlers = {
                 `PMC Tier: **${tierVisual.label}**`
             ].join("\n"),
             inline: true
+        }, {
+            name: "🏆 Achievement Track",
+            value: [
+                `XP: ${earnedXpAchievements}/${achievements_1.XP_ACHIEVEMENTS.length}${nextXpAchievement ? ` • Next ${nextXpAchievement.threshold.toLocaleString()} XP` : " • Capstone earned"}`,
+                `Voice: ${earnedVoiceAchievements}/${achievements_1.VOICE_ACHIEVEMENTS.length} • ${formatVoiceDuration(voiceTimeMs)}`,
+                nextVoiceAchievement ? `Next voice award: ${nextVoiceAchievement.title} at ${nextVoiceAchievement.threshold.toLocaleString()} minutes` : "All voice awards earned"
+            ].join("\n"),
+            inline: false
         }, {
             name: "🎰 Game Record",
             value: [

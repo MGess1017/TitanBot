@@ -4,8 +4,10 @@ import path from "node:path";
 import vm from "node:vm";
 import ts from "typescript";
 import { buildSlashCommands } from "../commands/slashCatalog";
+import { getNewProgressAchievements, VOICE_ACHIEVEMENTS, XP_ACHIEVEMENTS } from "../game/achievements";
 import { RAID_CONDITIONS, RAID_MAP_CHOICES } from "../raid/domain";
 import { accrueVoiceXp } from "./voiceXp";
+import { addXP, ensureUser, points, syncProgressAchievements } from "../utils";
 
 async function verifyThresholdRoleApplication(botSource: string): Promise<void> {
     const source = ts.createSourceFile("bot.ts", botSource, ts.ScriptTarget.ES2020, true);
@@ -104,6 +106,8 @@ async function runXpRoleRecoveryTests(): Promise<void> {
     const xprolesync = commands.find(command => command.name === "xprolesync");
     assert.ok(xprolesync, "xprolesync command must exist");
     const optionNames = new Set((xprolesync.options || []).map(option => option.name));
+    const configXpOption = (xprolesync.options || []).find(option => option.name === "config_xp");
+    assert.equal(configXpOption?.max_value, 50_000_000, "admin role configuration must be capped at 50M XP");
     for (const name of ["pause", "retry", "config_xp", "config_role", "config_name"]) {
         assert.ok(optionNames.has(name), `xprolesync must expose ${name}`);
     }
@@ -144,17 +148,83 @@ async function runXpRoleRecoveryTests(): Promise<void> {
     assert.equal(longVoiceSession.xp, 300, "voice accrual must award every complete minute");
 
     const tierMatches = Array.from(botSource.matchAll(/\{ xp: (\d+), roleId: "(\d+)", name: "([^"]+)" \}/g));
-    assert.equal(tierMatches.length, 31, "expected 31 configured XP role tiers");
+    assert.equal(tierMatches.length, 43, "expected 31 existing and 12 new XP role tiers");
     const tiers = tierMatches.map(match => ({ xp: Number(match[1]), roleId: match[2], name: match[3] }));
     for (let i = 1; i < tiers.length; i++) {
         assert.ok(tiers[i].xp > tiers[i - 1].xp, `tier thresholds must strictly increase (${tiers[i - 1].name} -> ${tiers[i].name})`);
     }
+    const roleDirectoryFunction = ts.createSourceFile("bot.ts", botSource, ts.ScriptTarget.ES2020, true).statements.find(statement =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === "buildThemedRoleSections"
+    );
+    assert.ok(roleDirectoryFunction, "XP role directory grouping helper must exist");
+    const roleDirectoryContext = vm.createContext({});
+    vm.runInContext(ts.transpileModule(roleDirectoryFunction.getText(), { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, roleDirectoryContext);
+    const roleSections = (roleDirectoryContext as unknown as { buildThemedRoleSections: (lines: string[]) => Array<{ value: string }> })
+        .buildThemedRoleSections(tiers.map(tier => `${tier.xp} XP -> ${tier.name}`));
+    assert.equal(roleSections.length, 9, "all 43 XP roles must appear in the role directory");
+    assert.equal(roleSections.flatMap(section => section.value.split("\n")).length, 43, "role directory must not hide upper tiers");
     const recruitOne = tiers.find(tier => tier.name === "Recruit I");
     const titanCommander = tiers.find(tier => tier.name === "Titan Commander");
     assert.equal(recruitOne?.xp, 360000, "Recruit I must require 360,000 XP (3x the prior threshold)");
     assert.equal(titanCommander?.xp, 2520000, "Titan Commander must require 2,520,000 XP (3x the prior threshold)");
     const roleIds = new Set(tiers.map(tier => tier.roleId));
-    assert.equal(roleIds.size, 31, "tier role IDs must remain unique so existing Discord roles are reused, not duplicated");
+    assert.equal(roleIds.size, 43, "tier role IDs must remain unique so existing Discord roles are reused, not duplicated");
+    const newTierThresholds = tiers.filter(tier => tier.xp > 2520000).map(tier => tier.xp);
+    assert.deepEqual(newTierThresholds, [3000000, 7000000, 11000000, 15000000, 19000000, 23000000, 27000000, 31000000, 35000000, 39000000, 44000000, 50000000]);
+    const parsedBotSource = ts.createSourceFile("bot.ts", botSource, ts.ScriptTarget.ES2020, true);
+    const buildRoleSections = parsedBotSource.statements.find(statement =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === "buildThemedRoleSections"
+    );
+    assert.ok(buildRoleSections, "XP role directory section builder must exist");
+    const roleSectionContext = vm.createContext({});
+    vm.runInContext(ts.transpileModule(buildRoleSections.getText(), { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, roleSectionContext);
+    const sections = (roleSectionContext as unknown as { buildThemedRoleSections: (lines: string[]) => Array<{ value: string }> })
+        .buildThemedRoleSections(tiers.map(tier => `${tier.xp} XP -> ${tier.name}`));
+    assert.equal(sections.length, 9, "all 43 XP roles must be displayed in the role directory");
+    assert.equal(sections.flatMap(section => section.value.split("\n")).length, tiers.length, "no XP role tiers may be hidden");
+    assert.match(botSource, /const MAX_XP_ROLE_THRESHOLD = 50_000_000;/);
+    assert.match(botSource, /entry\.xp <= MAX_XP_ROLE_THRESHOLD/);
+    assert.equal(XP_ACHIEVEMENTS.length, 30, "exactly 30 engagement XP achievements must be defined");
+    assert.equal(VOICE_ACHIEVEMENTS.length, 10, "exactly 10 voice-time achievements must be defined");
+    assert.equal(new Set(XP_ACHIEVEMENTS.map(achievement => achievement.id)).size, 30);
+    assert.equal(new Set(VOICE_ACHIEVEMENTS.map(achievement => achievement.id)).size, 10);
+    for (const achievementSet of [XP_ACHIEVEMENTS, VOICE_ACHIEVEMENTS]) {
+        for (let index = 1; index < achievementSet.length; index++) {
+            assert.ok(achievementSet[index].threshold > achievementSet[index - 1].threshold, "achievement thresholds must increase strictly");
+        }
+    }
+    assert.equal(XP_ACHIEVEMENTS.at(-1)?.threshold, 50000000, "the final XP achievement must cap progression at 50M");
+    assert.equal(getNewProgressAchievements(49999999, 0, []).some(achievement => achievement.id === "xp_50000000"), false);
+    assert.equal(getNewProgressAchievements(50000000, 0, []).some(achievement => achievement.id === "xp_50000000"), true);
+    assert.equal(getNewProgressAchievements(0, 24999, []).some(achievement => achievement.id === "voice_25000m"), false);
+    assert.equal(getNewProgressAchievements(0, 25000, []).some(achievement => achievement.id === "voice_25000m"), true);
+    assert.match(botSource, /function mergeXpRoleEntries\(/, "new defaults must merge into already persisted XP role tiers");
+
+    const achievementTestUserId = "__progress_achievement_test__";
+    const previousUser = points[achievementTestUserId];
+    const previousNoSave = process.env.RUNTIME_TEST_NO_POINTS_SAVE;
+    process.env.RUNTIME_TEST_NO_POINTS_SAVE = "1";
+    delete points[achievementTestUserId];
+    try {
+        const user = ensureUser(achievementTestUserId);
+        user.xp = 99;
+        user.voiceMinutes = 14;
+        addXP(achievementTestUserId, 1);
+        assert.ok(user.achievementIds.includes("xp_100"), "shared XP awards must unlock XP achievements");
+        user.voiceMinutes = 15;
+        syncProgressAchievements(achievementTestUserId);
+        assert.ok(user.achievementIds.includes("voice_15m"), "voice duration must unlock voice achievements");
+        const earnedCount = user.achievementIds.length;
+        syncProgressAchievements(achievementTestUserId);
+        assert.equal(user.achievementIds.length, earnedCount, "achievement unlocks must be one-time");
+        addXP(achievementTestUserId, 50_000_000);
+        assert.ok(user.achievementIds.includes("xp_50000000"), "50M XP must award the capstone achievement");
+    } finally {
+        if (previousUser) points[achievementTestUserId] = previousUser;
+        else delete points[achievementTestUserId];
+        if (previousNoSave === undefined) delete process.env.RUNTIME_TEST_NO_POINTS_SAVE;
+        else process.env.RUNTIME_TEST_NO_POINTS_SAVE = previousNoSave;
+    }
 
     await verifyThresholdRoleApplication(botSource);
 

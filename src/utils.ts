@@ -1,5 +1,6 @@
 import fs from "fs-extra";
 import path from "path";
+import { getNewProgressAchievements, type ProgressAchievement } from "./game/achievements";
 
 export type UserState = {
     modPoints: number;
@@ -21,6 +22,8 @@ export type UserState = {
     lastDaily: number;
     dailyStreak: number;
     achievements: string[];
+    achievementIds: string[];
+    voiceMinutes: number;
     bossHeartClaims: string[];
     fnTokens: number;
     bankTokens: number;
@@ -342,6 +345,8 @@ function defaultUserState(): UserState {
         lastDaily: 0,
         dailyStreak: 0,
         achievements: [],
+        achievementIds: [],
+        voiceMinutes: 0,
         bossHeartClaims: [],
         fnTokens: 50,
         bankTokens: 0,
@@ -552,6 +557,10 @@ export function ensureUser(userId: string): UserState {
     if (user.lastDaily === undefined) user.lastDaily = 0;
     if (user.dailyStreak === undefined) user.dailyStreak = 0;
     if (!Array.isArray(user.achievements)) user.achievements = [];
+    if (!Array.isArray(user.achievementIds)) user.achievementIds = [];
+    else user.achievementIds = user.achievementIds.filter(id => typeof id === "string");
+    if (typeof user.voiceMinutes !== "number" || !Number.isFinite(user.voiceMinutes)) user.voiceMinutes = 0;
+    user.voiceMinutes = Math.max(0, Math.floor(user.voiceMinutes));
     if (!Array.isArray(user.bossHeartClaims)) user.bossHeartClaims = [];
     if (user.fnTokens === undefined) user.fnTokens = 50;
     if (user.bankTokens === undefined) user.bankTokens = 0;
@@ -636,6 +645,23 @@ export function recordMapReputation(input: {
 
 export function getPoints(userId: string): number {
     return ensureUser(userId).modPoints;
+}
+
+function grantProgressAchievements(user: UserState): ProgressAchievement[] {
+    const unlocked = getNewProgressAchievements(user.xp, user.voiceMinutes, user.achievementIds);
+    for (const achievement of unlocked) {
+        user.achievementIds.push(achievement.id);
+        const badge = achievement.id.startsWith("voice_") ? "🎧" : "🏆";
+        user.achievements.push(`${badge} ${achievement.title}`);
+    }
+    return unlocked;
+}
+
+export function syncProgressAchievements(userId: string): ProgressAchievement[] {
+    const user = ensureUser(userId);
+    const unlocked = grantProgressAchievements(user);
+    if (unlocked.length) savePoints();
+    return unlocked;
 }
 
 export function addPoints(userId: string, amount: number): number {
@@ -755,6 +781,7 @@ export function addXP(userId: string, amount: number): number {
     // Keep in-memory user XP monotonic in case another caller still holds an older object reference.
     points[userId].xp = Math.max(points[userId].xp, user.xp);
     points[userId].lastXP = Math.max(points[userId].lastXP, user.lastXP);
+    grantProgressAchievements(user);
 
     savePoints();
     return user.xp;

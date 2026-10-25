@@ -20,6 +20,7 @@ exports.ensureUser = ensureUser;
 exports.getMapReputationEntry = getMapReputationEntry;
 exports.recordMapReputation = recordMapReputation;
 exports.getPoints = getPoints;
+exports.syncProgressAchievements = syncProgressAchievements;
 exports.addPoints = addPoints;
 exports.getTokens = getTokens;
 exports.getBankTokens = getBankTokens;
@@ -59,6 +60,7 @@ exports.getSirGruUnlockedAbilities = getSirGruUnlockedAbilities;
 exports.rollSirGruRaidAssist = rollSirGruRaidAssist;
 const fs_extra_1 = __importDefault(require("fs-extra"));
 const path_1 = __importDefault(require("path"));
+const achievements_1 = require("./game/achievements");
 exports.FOLLOWER_SUPPORT_ROLES = {
     balanced: { label: "Balanced", description: "Standard support across all raid bonuses." },
     scout: { label: "Scout", description: "25% stronger follower extraction bonus; 25% less follower token bonus." },
@@ -257,6 +259,8 @@ function defaultUserState() {
         lastDaily: 0,
         dailyStreak: 0,
         achievements: [],
+        achievementIds: [],
+        voiceMinutes: 0,
         bossHeartClaims: [],
         fnTokens: 50,
         bankTokens: 0,
@@ -455,6 +459,13 @@ function ensureUser(userId) {
         user.dailyStreak = 0;
     if (!Array.isArray(user.achievements))
         user.achievements = [];
+    if (!Array.isArray(user.achievementIds))
+        user.achievementIds = [];
+    else
+        user.achievementIds = user.achievementIds.filter(id => typeof id === "string");
+    if (typeof user.voiceMinutes !== "number" || !Number.isFinite(user.voiceMinutes))
+        user.voiceMinutes = 0;
+    user.voiceMinutes = Math.max(0, Math.floor(user.voiceMinutes));
     if (!Array.isArray(user.bossHeartClaims))
         user.bossHeartClaims = [];
     if (user.fnTokens === undefined)
@@ -563,6 +574,22 @@ function recordMapReputation(input) {
 function getPoints(userId) {
     return ensureUser(userId).modPoints;
 }
+function grantProgressAchievements(user) {
+    const unlocked = (0, achievements_1.getNewProgressAchievements)(user.xp, user.voiceMinutes, user.achievementIds);
+    for (const achievement of unlocked) {
+        user.achievementIds.push(achievement.id);
+        const badge = achievement.id.startsWith("voice_") ? "🎧" : "🏆";
+        user.achievements.push(`${badge} ${achievement.title}`);
+    }
+    return unlocked;
+}
+function syncProgressAchievements(userId) {
+    const user = ensureUser(userId);
+    const unlocked = grantProgressAchievements(user);
+    if (unlocked.length)
+        savePoints();
+    return unlocked;
+}
 function addPoints(userId, amount) {
     const user = ensureUser(userId);
     user.modPoints += Math.max(0, Math.floor(amount));
@@ -663,6 +690,7 @@ function addXP(userId, amount) {
     // Keep in-memory user XP monotonic in case another caller still holds an older object reference.
     exports.points[userId].xp = Math.max(exports.points[userId].xp, user.xp);
     exports.points[userId].lastXP = Math.max(exports.points[userId].lastXP, user.lastXP);
+    grantProgressAchievements(user);
     savePoints();
     return user.xp;
 }
