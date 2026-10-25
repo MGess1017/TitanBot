@@ -21,7 +21,6 @@ function parseArg(name: string, fallback: number): number {
 
 function simulateMap(mapCfg: RaidMapConfig, tension: Tension, approach: (typeof RAID_APPROACHES)[keyof typeof RAID_APPROACHES], iterations: number, bet: number) {
     const projection = mapProjection(mapCfg, tension);
-    const successProb = projection.successPct / 100;
     const bossRotation = getBossRotationTable(mapCfg);
     let successes = 0;
     let bossSpawns = 0;

@@ -61,6 +61,7 @@ async function verifyThresholdRoleApplication(botSource: string): Promise<void> 
         },
         getEffectiveXpRoleEntries: () => roleEntries,
         enqueueXpRoleSync: (targetGuild: unknown, userId: string, xp: number) => queued.push({ guild: targetGuild, userId, xp }),
+        runAsyncWithBoundary: (_context: string, task: () => Promise<unknown>) => { void task().catch(() => undefined); },
         notifyXpThresholdUnlock: async () => undefined,
         accrueVoiceXp,
         appendAuditEvent: () => undefined,

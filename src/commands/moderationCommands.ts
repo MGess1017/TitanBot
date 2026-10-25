@@ -1,8 +1,6 @@
 import {
     ChatInputCommandInteraction,
     EmbedBuilder,
-    Guild,
-    PermissionFlagsBits,
     User
 } from "discord.js";
 

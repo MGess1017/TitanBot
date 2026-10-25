@@ -878,30 +878,36 @@ function appendAuditEvent(eventType, payload) {
         // Never crash runtime due to audit logging.
     }
 }
-function readGitOutput(command) {
-    try {
-        const output = (0, node_child_process_1.execSync)(command, {
-            cwd: path_1.default.resolve(__dirname, ".."),
-            stdio: ["ignore", "pipe", "ignore"]
-        }).toString("utf8").trim();
-        return output || null;
-    }
-    catch {
-        return null;
-    }
+function runAsyncWithBoundary(context, task) {
+    void Promise.resolve().then(task).catch(error => {
+        const reason = clampText(toSafeString(error), 240);
+        console.error(`[async:${context}] ${reason}`);
+        appendAuditEvent("async_task_failed", { context, reason });
+    });
 }
-function getGitDeploymentInfo() {
-    return {
-        commit: readGitOutput("git rev-parse HEAD"),
-        shortCommit: readGitOutput("git rev-parse --short HEAD"),
-        branch: readGitOutput("git rev-parse --abbrev-ref HEAD"),
-        subject: readGitOutput("git log -1 --pretty=%s")
-    };
+function readGitOutput(args) {
+    return new Promise(resolve => {
+        (0, node_child_process_1.execFile)("git", args, {
+            cwd: path_1.default.resolve(__dirname, ".."),
+            encoding: "utf8",
+            timeout: 5000,
+            windowsHide: true
+        }, (error, stdout) => resolve(error ? null : stdout.trim() || null));
+    });
+}
+async function getGitDeploymentInfo() {
+    const [commit, shortCommit, branch, subject] = await Promise.all([
+        readGitOutput(["rev-parse", "HEAD"]),
+        readGitOutput(["rev-parse", "--short", "HEAD"]),
+        readGitOutput(["rev-parse", "--abbrev-ref", "HEAD"]),
+        readGitOutput(["log", "-1", "--pretty=%s"])
+    ]);
+    return { commit, shortCommit, branch, subject };
 }
 async function sendDeploymentSummaryIfNeeded() {
     if (!DEPLOYMENT_SUMMARY_CHANNEL_ID)
         return;
-    const gitInfo = getGitDeploymentInfo();
+    const gitInfo = await getGitDeploymentInfo();
     if (gitInfo.commit
         && runtimeMetrics.deployment.lastAnnouncedCommit === gitInfo.commit
         && runtimeMetrics.deployment.lastAnnouncedChannelId === DEPLOYMENT_SUMMARY_CHANNEL_ID) {
@@ -1434,17 +1440,6 @@ function saveGiveawayStore() {
 function getGiveawayById(id) {
     return giveawayStore.giveaways.find(entry => entry.id === id) || null;
 }
-function formatGiveawayDuration(ms) {
-    const seconds = Math.max(0, Math.floor(ms / 1000));
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    if (days > 0)
-        return `${days}d ${hours}h ${minutes}m`;
-    if (hours > 0)
-        return `${hours}h ${minutes}m`;
-    return `${minutes}m ${seconds % 60}s`;
-}
 function shuffleUserIds(ids) {
     const values = [...ids];
     for (let i = values.length - 1; i > 0; i--) {
@@ -1456,8 +1451,7 @@ function shuffleUserIds(ids) {
 function pickGiveawayWinners(giveaway) {
     return shuffleUserIds(giveaway.entries).slice(0, Math.max(1, giveaway.winnerCount));
 }
-function buildGiveawayEmbed(giveaway, now = Date.now()) {
-    const remainingMs = Math.max(0, giveaway.endAt - now);
+function buildGiveawayEmbed(giveaway) {
     const winnersText = giveaway.winners.length ? giveaway.winners.map(id => `<@${id}>`).join(", ") : "Pending draw";
     const rewardDetail = giveaway.rewardKind === "item" && giveaway.rewardItemId
         ? `${catalog_1.ITEM_DEFS[giveaway.rewardItemId]?.name || giveaway.rewardItemId} x${giveaway.rewardQty}`
@@ -1775,7 +1769,7 @@ const TICKET_TEMPLATE_IDS = {
 function recordTicketEvent(ticket, actorId, type, detail) {
     const event = { at: Date.now(), actorId, type: type.slice(0, 40), detail: detail.slice(0, 300) };
     ticket.events = [...(ticket.events || []), event].slice(-100);
-    void notifyTicketWatchers(ticket, event);
+    runAsyncWithBoundary("ticketWatcherNotification", () => notifyTicketWatchers(ticket, event));
 }
 async function notifyTicketWatchers(ticket, event) {
     for (const watcherId of ticket.watchers || []) {
@@ -1852,9 +1846,6 @@ function ensureTicketConfig(guildId) {
     if (cfg.exportWebhookUrl === undefined)
         cfg.exportWebhookUrl = null;
     return cfg;
-}
-function findOpenTicketByOwner(guildId, ownerId) {
-    return (0, ticketState_1.findOpenTicketByOwner)(ticketStore.tickets, guildId, ownerId);
 }
 function getTicketCaseBucket(categoryOrReason) {
     return (0, ticketEnhancements_1.classifyTicketCategory)(categoryOrReason || "general") === "report" ? "report" : "support";
@@ -2848,6 +2839,7 @@ const CASINO_GAME_ORDER = [
     "hilo",
     "keno"
 ];
+const PRIVATE_SLASH_COMMANDS = new Set(["reportintake", "reportprofile", "reportresolve", "reportanalytics"]);
 const XP_ROLE_SYNC_RUNNING_GUILDS = new Set();
 const XP_ROLE_SYNC_RUNNING_MEMBERS = new Set();
 const XP_ROLE_SYNC_QUEUE = [];
@@ -3054,7 +3046,7 @@ function describeXpRoleDiff(member, xp, roleEntries, botHighestPosition) {
         line: `<@${member.id}> ${xp.toLocaleString()} XP | has: ${currentNames} | expected: ${unlockedPair?.entry.name || "none"} | add: ${missingExpected ? unlockedPair?.entry.name : "none"} | remove: ${removable.map(pair => pair.entry.name).join(", ") || "none"}${hierarchyBlocked ? " | blocked: hierarchy" : ""}`
     };
 }
-async function getEffectiveXpRoleEntriesForGuild(guild) {
+async function getEffectiveXpRoleEntriesForGuild(_guild) {
     return mergeXpRoleEntries(readXpRoleEntries());
 }
 const XP_ROLE_COLORS = [0x64748b, 0x38bdf8, 0x22c55e, 0xeab308, 0xf97316, 0xef4444, 0xa855f7, 0x14b8a6];
@@ -3075,7 +3067,9 @@ async function ensureXpTierRoles(guild) {
         if (!role) {
             role = await guild.roles.create({
                 name: displayName,
-                color: XP_ROLE_COLORS[Math.min(index, XP_ROLE_COLORS.length - 1)],
+                colors: {
+                    primaryColor: XP_ROLE_COLORS[Math.min(index, XP_ROLE_COLORS.length - 1)]
+                },
                 reason: `Create missing XP tier role for ${entry.xp} XP`
             }).catch(() => null);
             if (!role) {
@@ -3358,7 +3352,7 @@ function enqueueXpRoleSync(guild, userId, xp) {
         }
         XP_ROLE_SYNC_QUEUE.push({ guild, userId, xp });
     }
-    void drainXpRoleSyncQueue();
+    runAsyncWithBoundary("xpRoleSyncQueue", drainXpRoleSyncQueue);
 }
 function awardEngagementXp(guild, userId, xpDelta, voiceMinutesDelta = 0) {
     const user = (0, utils_1.ensureUser)(userId);
@@ -3368,7 +3362,7 @@ function awardEngagementXp(guild, userId, xpDelta, voiceMinutesDelta = 0) {
     const totalXp = (0, utils_1.addXP)(userId, xpDelta);
     if (guild && getEffectiveXpRoleEntries().some(entry => previousXp < entry.xp && totalXp >= entry.xp)) {
         enqueueXpRoleSync(guild, userId, totalXp);
-        void notifyXpThresholdUnlock(guild, userId, previousXp, totalXp);
+        runAsyncWithBoundary("xpRoleThresholdNotification", () => notifyXpThresholdUnlock(guild, userId, previousXp, totalXp));
     }
     return { previousXp, totalXp };
 }
@@ -4050,35 +4044,6 @@ function helpPageGeneral() {
     })
         .setFooter({ text: "Tip: use /ticket for direct FN support and /quickstart for the fastest onboarding route." });
 }
-function buildQuickstartEmbed(user) {
-    return new discord_js_1.EmbedBuilder()
-        .setColor(0x22c55e)
-        .setTitle("🚀 Quickstart Mission")
-        .setDescription("Fast launch path for new or returning operators. Follow these in order for the smoothest start.")
-        .addFields({
-        name: "1️⃣ Setup Economy",
-        value: "Run `/balance` then `/daily` to initialize and claim your streak reward.",
-        inline: false
-    }, {
-        name: "2️⃣ Gear Up",
-        value: "Use `/shop` to browse items, `/buy` to purchase gear, and `/inventory` to confirm your loadout.",
-        inline: false
-    }, {
-        name: "3️⃣ Raid Preparation",
-        value: "Run `/loadout` to preview auto-applied gear bonuses, then `/raidintel` for map and trigger projections.",
-        inline: false
-    }, {
-        name: "4️⃣ Run Missions",
-        value: "Start with `/raid bet:10 tension:low`, then scale risk to `medium`/`high` as your inventory and PMC level improve.",
-        inline: false
-    }, {
-        name: "5️⃣ Loop Rewards",
-        value: "Open crates with `/opencrate`, consume support items with `/useitem`, and track consistency via `/raidhistory` + `/pmc`.",
-        inline: false
-    })
-        .setFooter({ text: `Requested by ${user.tag} • Stay consistent and scale risk gradually.` })
-        .setTimestamp(new Date());
-}
 async function helpPageXP(guild) {
     const rankLines = await resolveXpRoleLines(guild);
     const rankChunks = chunkRoleLines(rankLines, 900);
@@ -4410,16 +4375,6 @@ function embedFromPayload(commandName, raw, user) {
         embed.setTitle(`${theme.icon} /${commandName} • ${theme.label}`);
     return brandEmbedForUser(embed, user, `/${commandName}`).toJSON();
 }
-function getShopItems() {
-    return catalog_1.SHOP_ITEMS.map(id => catalog_1.ITEM_DEFS[id]);
-}
-function formatInventory(userId) {
-    const inv = (0, utils_1.ensureUser)(userId).inventory;
-    const entries = Object.entries(inv);
-    if (!entries.length)
-        return "Empty";
-    return entries.map(([id, qty]) => `${qty}x ${catalog_1.ITEM_DEFS[id]?.name || id}`).join("\n");
-}
 function getInventoryAutocompleteOptions(input) {
     const focused = input.focusedRaw.trim().toLowerCase();
     const entries = Object.entries(catalog_1.ITEM_DEFS)
@@ -4711,15 +4666,6 @@ function weightedPick(table) {
             return entry.id;
     }
     return positive[positive.length - 1].id;
-}
-function pushLootStack(loot, id, qty) {
-    const amount = Math.max(1, Math.floor(qty));
-    const existing = loot.find(entry => entry.id === id);
-    if (existing) {
-        existing.qty += amount;
-        return;
-    }
-    loot.push({ id, qty: amount });
 }
 function buyItem(userId, itemId, qty) {
     const item = catalog_1.ITEM_DEFS[itemId];
@@ -5478,27 +5424,6 @@ function reconcileBossBattleOutcomeUnbatched(userId, mapCfg, result, battle) {
         result.bossHeartUnlockedName = heart.heartName;
     (0, utils_1.recordGameResult)(userId, "raid", "win", 0, bonusTokens);
     (0, utils_1.savePoints)();
-}
-function formatRaidHistory(userId) {
-    const history = (0, utils_1.ensureUser)(userId).raidHistory.slice(0, 8);
-    if (!history.length)
-        return "No raids yet.";
-    return history.map(entry => {
-        const time = new Date(entry.timestamp).toLocaleString();
-        const status = entry.success ? "Success" : "Fail";
-        const map = entry.map ? ` | Map ${entry.map}` : "";
-        const condition = entry.condition ? ` | Cond ${entry.condition}` : "";
-        const approach = entry.approach ? ` | ${entry.approach}` : "";
-        const route = entry.extractionRoute
-            ? ` | Route ${entry.extractionRoute} (${entry.branchDecision || "Original Route"})`
-            : entry.branchDecision && entry.branchDecision !== "Original Route"
-                ? ` | Decision ${entry.branchDecision}`
-                : "";
-        const boss = entry.bossSpawned
-            ? ` | Boss ${entry.bossName || "Unknown"} ${entry.bossDefeated ? "defeated" : "engaged"}${entry.bossBonusXp ? ` (+${entry.bossBonusXp} XP)` : ""}`
-            : "";
-        return `* [${time}] ${status} ${entry.tension}${map}${condition}${approach}${route}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
-    }).join("\n");
 }
 function buildRaidHistoryPayload(userId) {
     const state = (0, utils_1.ensureUser)(userId);
@@ -7500,7 +7425,7 @@ function trackGuildMemberChange(member, direction) {
     });
     const current = PLAYER_COUNTS_BY_GUILD.get(member.guild.id);
     if (!current) {
-        void ensurePlayerCountPanelForGuild(member.guild);
+        runAsyncWithBoundary("playerCountPanelInit", () => ensurePlayerCountPanelForGuild(member.guild));
         return;
     }
     PLAYER_COUNTS_BY_GUILD.set(member.guild.id, (0, playerCounts_1.adjustPlayerCounts)(current, member.user.bot, direction));
@@ -8242,7 +8167,7 @@ const moderationCommandHandlers = (0, moderationCommands_1.buildModerationComman
     getAvatar
 });
 const commandHandlers = {
-    ping: async (interaction) => {
+    ping: async () => {
         return "Pong.";
     },
     help: async (interaction) => {
@@ -8294,10 +8219,10 @@ const commandHandlers = {
             XP_ROLE_SYNC_PAUSED = pause;
             appendAuditEvent("xp_role_sync_pause_changed", { guildId: guild.id, paused: pause, actorId: interaction.user.id });
             if (!pause)
-                void drainXpRoleSyncQueue();
+                runAsyncWithBoundary("xpRoleSyncResume", drainXpRoleSyncQueue);
         }
         if (retry)
-            void retryXpRoleDeadLetters();
+            runAsyncWithBoundary("xpRoleDeadLetterRetry", retryXpRoleDeadLetters);
         if (XP_ROLE_SYNC_PAUSED)
             return "XP role synchronization is paused for maintenance.";
         if (XP_ROLE_SYNC_RUNNING_GUILDS.has(guild.id)) {
@@ -8321,7 +8246,7 @@ const commandHandlers = {
     },
     status: async () => {
         const memory = process.memoryUsage();
-        const deployment = getGitDeploymentInfo();
+        const deployment = await getGitDeploymentInfo();
         return [
             ...(0, health_1.buildStatusLines)(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())),
             `Deployment: ${deployment.shortCommit || "unknown"} • ${deployment.branch || "unknown"}`,
@@ -8777,7 +8702,7 @@ const commandHandlers = {
         });
         if (restartAfter) {
             setTimeout(() => {
-                requestManagedRestart("incident_command", interaction.user.id);
+                runAsyncWithBoundary("incidentRestart", () => requestManagedRestart("incident_command", interaction.user.id));
             }, 2500).unref();
         }
         return JSON.stringify({ embed: embed.toJSON() });
@@ -9080,8 +9005,7 @@ const commandHandlers = {
                 .setTitle("🚨 Formal User Report Filed")
                 .addFields({ name: "Report ID", value: `#${result.entry.id}`, inline: true }, { name: "Target", value: `<@${target.id}>`, inline: true }, { name: "Reporter", value: `<@${interaction.user.id}>`, inline: true }, { name: "Summary", value: result.entry.summary, inline: false }, { name: "Evidence", value: evidence || "Not provided", inline: false }, { name: "Total Reports On User", value: `${result.totalReportsForTarget}${result.flagged ? " 🚩" : ""}`, inline: true }, { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true })
                 .setTimestamp(new Date())
-                .toJSON(),
-            ephemeral: true
+                .toJSON()
         });
     },
     reportprofile: async (interaction) => {
@@ -9115,8 +9039,7 @@ const commandHandlers = {
                 .addFields({ name: "Discord User", value: `<@${target.id}>`, inline: true }, { name: "User ID", value: target.id, inline: true }, { name: "Account Created", value: `<t:${Math.floor(target.createdTimestamp / 1000)}:F>`, inline: true }, { name: "Joined Server", value: member?.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:F>` : "Unknown", inline: true }, { name: "Reports Filed Against User", value: `${reports.length}`, inline: true }, { name: "Risk Flag", value: flagged ? "🚩 Flagged (10+ reports)" : "No flag", inline: true }, { name: "Recent Reports", value: recent.length ? recent.join("\n") : "No reports filed against this user.", inline: false })
                 .setFooter({ text: `Report logs channel: ${REPORT_LOG_CHANNEL_ID}` })
                 .setTimestamp(new Date())
-                .toJSON(),
-            ephemeral: true
+                .toJSON()
         });
     },
     ticketintake: async () => {
@@ -9216,8 +9139,7 @@ const commandHandlers = {
                 .setTitle("✅ Report Closed")
                 .addFields({ name: "Report ID", value: `#${resolved.entry.id}`, inline: true }, { name: "Target", value: `<@${target.id}>`, inline: true }, { name: "Resolved By", value: `<@${interaction.user.id}>`, inline: true }, { name: "Disposition", value: action, inline: true }, { name: "Reason", value: reason, inline: false }, { name: "Remaining Open Reports On User", value: `${resolved.remainingOpenForTarget}`, inline: true }, { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true })
                 .setTimestamp(new Date())
-                .toJSON(),
-            ephemeral: true
+                .toJSON()
         });
     },
     reportanalytics: async (interaction) => {
@@ -9866,7 +9788,7 @@ const commandHandlers = {
                 ? buildRaidUnlockBroadcastEmbed({ user: interaction.user, result })
                 : null;
             if (interaction.guild && raidBroadcast) {
-                void sendOpsBroadcastEmbed(interaction.guild, raidBroadcast);
+                runAsyncWithBoundary("raidUnlockBroadcast", () => sendOpsBroadcastEmbed(interaction.guild, raidBroadcast));
                 appendAuditEvent("raid_unlock_broadcast", {
                     guildId: interaction.guild.id,
                     userId: interaction.user.id,
@@ -10250,7 +10172,7 @@ const commandHandlers = {
         return await moderationCommandHandlers.announce(interaction);
     }
 };
-client.once("clientReady", async () => {
+client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () => {
     console.log(`Logged in as ${client.user?.tag ?? "unknown-user"}`);
     console.log(`[startup] Preparing to register ${slashCommands.length} guild slash commands.`);
     if (slashCommands.length > 100) {
@@ -10316,8 +10238,8 @@ client.once("clientReady", async () => {
     }
     console.log("Global slash commands cleared to prevent duplicate command entries.");
     console.log("Guild-only slash commands are active.");
-});
-client.on("guildBanAdd", async (ban) => {
+}));
+client.on("guildBanAdd", ban => runAsyncWithBoundary("guildBanAdd", async () => {
     const guildId = ban.guild.id;
     const userId = ban.user.id;
     if (shouldSkipRecentModerationLog("ban", guildId, userId))
@@ -10334,8 +10256,8 @@ client.on("guildBanAdd", async (ban) => {
         { name: "Target", value: `<@${userId}>`, inline: true },
         { name: "Reason", value: reason }
     ]);
-});
-client.on("guildMemberAdd", async (member) => {
+}));
+client.on("guildMemberAdd", member => runAsyncWithBoundary("guildMemberAdd", async () => {
     trackGuildMemberChange(member, 1);
     const channel = await member.guild.channels.fetch(JOIN_WELCOME_CHANNEL_ID).catch(() => null);
     if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
@@ -10365,8 +10287,8 @@ client.on("guildMemberAdd", async (member) => {
             messageId: sent.id,
             isBot: member.user.bot
         });
-});
-client.on("guildMemberRemove", async (member) => {
+}));
+client.on("guildMemberRemove", member => runAsyncWithBoundary("guildMemberRemove", async () => {
     trackGuildMemberChange(member, -1);
     const guildId = member.guild.id;
     const userId = member.id;
@@ -10386,7 +10308,7 @@ client.on("guildMemberRemove", async (member) => {
         { name: "Target", value: `<@${userId}>`, inline: true },
         { name: "Reason", value: reason }
     ]);
-});
+}));
 setInterval(() => {
     checkpointState("interval_30s");
 }, 30000).unref();
@@ -10405,30 +10327,30 @@ setInterval(() => {
     pruneInMemoryRuntimeState();
 }, IN_MEMORY_STATE_PRUNE_INTERVAL_MS).unref();
 setInterval(() => {
-    void sendAutomatedHealthReport("interval_24h");
+    runAsyncWithBoundary("healthReportInterval", () => sendAutomatedHealthReport("interval_24h"));
 }, DAILY_HEALTH_REPORT_MS).unref();
 setInterval(() => {
-    void runHealthWatchdog("interval_10m");
+    runAsyncWithBoundary("healthWatchdogInterval", () => runHealthWatchdog("interval_10m"));
 }, HEALTH_WATCHDOG_INTERVAL_MS).unref();
 setInterval(() => {
-    void sendAutomatedBalanceReport("interval_7d");
+    runAsyncWithBoundary("balanceReportInterval", () => sendAutomatedBalanceReport("interval_7d"));
 }, WEEKLY_BALANCE_REPORT_MS).unref();
 setInterval(() => {
-    void processDueGiveaways();
+    runAsyncWithBoundary("giveawayExpiryInterval", processDueGiveaways);
 }, 15000).unref();
 setInterval(() => {
-    void refreshActiveGiveawayEmbeds();
+    runAsyncWithBoundary("giveawayRefreshInterval", refreshActiveGiveawayEmbeds);
 }, 60000).unref();
 setTimeout(() => {
-    void sendAutomatedHealthReport("startup_warmup");
+    runAsyncWithBoundary("startupHealthReport", () => sendAutomatedHealthReport("startup_warmup"));
 }, 90000).unref();
 setTimeout(() => {
-    void runHealthWatchdog("startup_warmup");
+    runAsyncWithBoundary("startupHealthWatchdog", () => runHealthWatchdog("startup_warmup"));
 }, 45000).unref();
 setTimeout(() => {
-    void sendAutomatedBalanceReport("startup_warmup");
+    runAsyncWithBoundary("startupBalanceReport", () => sendAutomatedBalanceReport("startup_warmup"));
 }, 120000).unref();
-function requestManagedRestart(trigger, requestedByUserId = null) {
+async function requestManagedRestart(trigger, requestedByUserId = null) {
     const pm2IdRaw = String(process.env.pm_id || "").trim();
     const pm2Name = String(process.env.name || process.env.PM2_PROCESS_NAME || "").trim();
     const restartTargets = [];
@@ -10440,7 +10362,14 @@ function requestManagedRestart(trigger, requestedByUserId = null) {
     }
     for (const target of restartTargets) {
         try {
-            (0, node_child_process_1.execSync)(`pm2 restart ${target}`, { stdio: "ignore" });
+            await new Promise((resolve, reject) => {
+                (0, node_child_process_1.execFile)("pm2", ["restart", target], { timeout: 15000, windowsHide: true }, error => {
+                    if (error)
+                        reject(error);
+                    else
+                        resolve();
+                });
+            });
             appendAuditEvent("process_restart_requested", {
                 trigger,
                 requestedByUserId,
@@ -10486,7 +10415,7 @@ process.on("beforeExit", () => {
     checkpointState("before_exit");
     releaseInstanceLock();
 });
-client.on("interactionCreate", async (interaction) => {
+client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
     if (interaction.isAutocomplete()) {
         const focused = interaction.options.getFocused(true);
         let options = [];
@@ -11407,7 +11336,9 @@ client.on("interactionCreate", async (interaction) => {
     }
     try {
         const startedAt = Date.now();
-        await interaction.deferReply();
+        await interaction.deferReply({
+            flags: PRIVATE_SLASH_COMMANDS.has(interaction.commandName) ? discord_js_1.MessageFlags.Ephemeral : undefined
+        });
         const rawResult = await handler(interaction);
         const result = typeof rawResult === "string"
             ? rawResult
@@ -11491,11 +11422,11 @@ client.on("interactionCreate", async (interaction) => {
             // Ignore secondary response errors (e.g. interaction expired)
         }
     }
-});
-client.on("voiceStateUpdate", async (oldState, newState) => {
+}));
+client.on("voiceStateUpdate", (oldState, newState) => {
     if (oldState.channelId && oldState.channelId !== newState.channelId) {
         setTimeout(() => {
-            void cleanupEmptyTemporaryVoiceChannel(oldState.guild, oldState.channelId);
+            runAsyncWithBoundary("temporaryVoiceCleanup", () => cleanupEmptyTemporaryVoiceChannel(oldState.guild, oldState.channelId));
         }, 1000).unref();
     }
     const member = newState.member || oldState.member;
@@ -11512,7 +11443,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
         trackVoiceXpConnection(member.guild, member.id, true);
     }
 });
-client.on("messageCreate", async (message) => {
+client.on("messageCreate", message => runAsyncWithBoundary("messageCreate", async () => {
     if (message.author.bot)
         return;
     if (message.guildId) {
@@ -11546,7 +11477,7 @@ client.on("messageCreate", async (message) => {
         Boolean(message.reference) ||
         message.attachments.size > 0;
     if (isCommunicationEvent) {
-        const { previousXp: currentXp, totalXp: nextXp } = awardEngagementXp(message.guild, message.author.id, MESSAGE_XP_GAIN);
+        const { totalXp: nextXp } = awardEngagementXp(message.guild, message.author.id, MESSAGE_XP_GAIN);
         appendAuditEvent("engagement_xp", {
             userId: message.author.id,
             guildId: message.guildId,
@@ -11559,9 +11490,9 @@ client.on("messageCreate", async (message) => {
         });
     }
     if (message.content.trim().toLowerCase() === `${PREFIX}ping`) {
-        void message.reply("Pong.");
+        await message.reply("Pong.");
     }
-});
+}));
 process.on("unhandledRejection", reason => {
     console.error("Unhandled promise rejection:", reason);
     recordRuntimeShutdown("unhandled_rejection_late_handler");

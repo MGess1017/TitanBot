@@ -10,7 +10,6 @@ function parseArg(name, fallback) {
 }
 function simulateMap(mapCfg, tension, approach, iterations, bet) {
     const projection = (0, domain_1.mapProjection)(mapCfg, tension);
-    const successProb = projection.successPct / 100;
     const bossRotation = (0, domain_1.getBossRotationTable)(mapCfg);
     let successes = 0;
     let bossSpawns = 0;

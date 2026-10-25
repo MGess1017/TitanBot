@@ -26,7 +26,7 @@ import {
 } from "discord.js";
 import fs from "fs-extra";
 import crypto from "node:crypto";
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import https from "node:https";
 import os from "node:os";
 import path from "path";
@@ -89,7 +89,6 @@ import {
 } from "./utils";
 import {
     buildTicketIntakeReason,
-    canReopenTicket,
     classifyTicketCategory,
     findPotentialDuplicateTickets,
     getKbSuggestions,
@@ -117,10 +116,9 @@ import {
     HILO_PAYOUTS,
     KENO_PAYOUTS,
     rollWinBonus,
-    ROULETTE_PAYOUTS,
     STANDARD_WIN_BONUS_CHANCE
 } from "./game/casinoBalance";
-import { ARMOR_IDS, BOSS_HEART_DEFS, BOSS_HEART_IDS, COLLECTIBLE_ITEM_IDS, getVendorSellPrice, ITEM_DEFS, SHOP_ITEMS, ULTRA_RARE_COLLECTIBLE_IDS, type ItemDef, WEAPON_IDS } from "./game/catalog";
+import { ARMOR_IDS, COLLECTIBLE_ITEM_IDS, getVendorSellPrice, ITEM_DEFS, SHOP_ITEMS, ULTRA_RARE_COLLECTIBLE_IDS, type ItemDef, WEAPON_IDS } from "./game/catalog";
 import { awardBossHeartAchievement, getUnlockedBossHeartNames } from "./game/bossHearts";
 import { getBossPortraitUrl } from "./game/bossPortraits";
 import { CRAFT_RECIPES, craftItem, dismantleGear, getDynamicVendorPrice, insureGear, repairGear, resolveGearLoss, saveLoadout, upgradeGear } from "./game/gearEconomy";
@@ -136,7 +134,7 @@ import { buildModerationCommandHandlers } from "./commands/moderationCommands";
 import { handleCoreCommand } from "./commands/coreCommands";
 import { buildSlashCommands } from "./commands/slashCatalog";
 import { buildStartupSummary, buildStatusLines } from "./runtime/health";
-import { getNewProgressAchievements, VOICE_ACHIEVEMENTS, XP_ACHIEVEMENTS } from "./game/achievements";
+import { VOICE_ACHIEVEMENTS, XP_ACHIEVEMENTS } from "./game/achievements";
 import { adjustPlayerCounts, buildPlayerCountEmbed, countPlayers, type PlayerCounts } from "./runtime/playerCounts";
 import { rejectIfRateLimited } from "./runtime/rateLimit";
 import { accrueVoiceXp, type VoiceXpAccrualState } from "./runtime/voiceXp";
@@ -149,7 +147,6 @@ import {
     createTicketEntry as stateCreateTicketEntry,
     findArchivedTicketByChannel as stateFindArchivedTicketByChannel,
     findOpenTicketByChannel as stateFindOpenTicketByChannel,
-    findOpenTicketByOwner as stateFindOpenTicketByOwner,
     findTicketByChannel as stateFindTicketByChannel,
     getTicketSlaState as stateGetTicketSlaState,
     normalizeTicketPriority as stateNormalizeTicketPriority,
@@ -1163,31 +1160,39 @@ function appendAuditEvent(eventType: string, payload: Record<string, unknown>): 
     }
 }
 
-function readGitOutput(command: string): string | null {
-    try {
-        const output = execSync(command, {
-            cwd: path.resolve(__dirname, ".."),
-            stdio: ["ignore", "pipe", "ignore"]
-        }).toString("utf8").trim();
-        return output || null;
-    } catch {
-        return null;
-    }
+function runAsyncWithBoundary(context: string, task: () => Promise<unknown>): void {
+    void Promise.resolve().then(task).catch(error => {
+        const reason = clampText(toSafeString(error), 240);
+        console.error(`[async:${context}] ${reason}`);
+        appendAuditEvent("async_task_failed", { context, reason });
+    });
 }
 
-function getGitDeploymentInfo(): GitDeploymentInfo {
-    return {
-        commit: readGitOutput("git rev-parse HEAD"),
-        shortCommit: readGitOutput("git rev-parse --short HEAD"),
-        branch: readGitOutput("git rev-parse --abbrev-ref HEAD"),
-        subject: readGitOutput("git log -1 --pretty=%s")
-    };
+function readGitOutput(args: string[]): Promise<string | null> {
+    return new Promise(resolve => {
+        execFile("git", args, {
+            cwd: path.resolve(__dirname, ".."),
+            encoding: "utf8",
+            timeout: 5_000,
+            windowsHide: true
+        }, (error, stdout) => resolve(error ? null : stdout.trim() || null));
+    });
+}
+
+async function getGitDeploymentInfo(): Promise<GitDeploymentInfo> {
+    const [commit, shortCommit, branch, subject] = await Promise.all([
+        readGitOutput(["rev-parse", "HEAD"]),
+        readGitOutput(["rev-parse", "--short", "HEAD"]),
+        readGitOutput(["rev-parse", "--abbrev-ref", "HEAD"]),
+        readGitOutput(["log", "-1", "--pretty=%s"])
+    ]);
+    return { commit, shortCommit, branch, subject };
 }
 
 async function sendDeploymentSummaryIfNeeded(): Promise<void> {
     if (!DEPLOYMENT_SUMMARY_CHANNEL_ID) return;
 
-    const gitInfo = getGitDeploymentInfo();
+    const gitInfo = await getGitDeploymentInfo();
     if (
         gitInfo.commit
         && runtimeMetrics.deployment.lastAnnouncedCommit === gitInfo.commit
@@ -1776,16 +1781,6 @@ function getGiveawayById(id: number): GiveawayEntry | null {
     return giveawayStore.giveaways.find(entry => entry.id === id) || null;
 }
 
-function formatGiveawayDuration(ms: number): string {
-    const seconds = Math.max(0, Math.floor(ms / 1000));
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m ${seconds % 60}s`;
-}
-
 function shuffleUserIds(ids: string[]): string[] {
     const values = [...ids];
     for (let i = values.length - 1; i > 0; i--) {
@@ -1799,8 +1794,7 @@ function pickGiveawayWinners(giveaway: GiveawayEntry): string[] {
     return shuffleUserIds(giveaway.entries).slice(0, Math.max(1, giveaway.winnerCount));
 }
 
-function buildGiveawayEmbed(giveaway: GiveawayEntry, now = Date.now()): EmbedBuilder {
-    const remainingMs = Math.max(0, giveaway.endAt - now);
+function buildGiveawayEmbed(giveaway: GiveawayEntry): EmbedBuilder {
     const winnersText = giveaway.winners.length ? giveaway.winners.map(id => `<@${id}>`).join(", ") : "Pending draw";
     const rewardDetail = giveaway.rewardKind === "item" && giveaway.rewardItemId
         ? `${ITEM_DEFS[giveaway.rewardItemId]?.name || giveaway.rewardItemId} x${giveaway.rewardQty}`
@@ -2307,7 +2301,7 @@ const TICKET_TEMPLATE_IDS = {
 function recordTicketEvent(ticket: TicketEntry, actorId: string, type: string, detail: string): void {
     const event = { at: Date.now(), actorId, type: type.slice(0, 40), detail: detail.slice(0, 300) };
     ticket.events = [...(ticket.events || []), event].slice(-100);
-    void notifyTicketWatchers(ticket, event);
+    runAsyncWithBoundary("ticketWatcherNotification", () => notifyTicketWatchers(ticket, event));
 }
 
 async function notifyTicketWatchers(ticket: TicketEntry, event: { at: number; actorId: string; type: string; detail: string }): Promise<void> {
@@ -2380,10 +2374,6 @@ function ensureTicketConfig(guildId: string): TicketConfig {
     if (cfg.reopenWindowHours === undefined) cfg.reopenWindowHours = 72;
     if (cfg.exportWebhookUrl === undefined) cfg.exportWebhookUrl = null;
     return cfg;
-}
-
-function findOpenTicketByOwner(guildId: string, ownerId: string): TicketEntry | null {
-    return stateFindOpenTicketByOwner(ticketStore.tickets, guildId, ownerId);
 }
 
 type TicketCaseBucket = "support" | "report";
@@ -3619,6 +3609,7 @@ const CASINO_GAME_ORDER: CasinoGameKey[] = [
     "hilo",
     "keno"
 ];
+const PRIVATE_SLASH_COMMANDS = new Set(["reportintake", "reportprofile", "reportresolve", "reportanalytics"]);
 
 const XP_ROLE_SYNC_RUNNING_GUILDS = new Set<string>();
 const XP_ROLE_SYNC_RUNNING_MEMBERS = new Set<string>();
@@ -3840,7 +3831,7 @@ function describeXpRoleDiff(member: GuildMember, xp: number, roleEntries: XpRole
     };
 }
 
-async function getEffectiveXpRoleEntriesForGuild(guild: Guild): Promise<XpRoleEntry[]> {
+async function getEffectiveXpRoleEntriesForGuild(_guild: Guild): Promise<XpRoleEntry[]> {
     return mergeXpRoleEntries(readXpRoleEntries());
 }
 
@@ -3863,7 +3854,9 @@ async function ensureXpTierRoles(guild: Guild): Promise<XpRoleEntry[]> {
         if (!role) {
             role = await guild.roles.create({
                 name: displayName,
-                color: XP_ROLE_COLORS[Math.min(index, XP_ROLE_COLORS.length - 1)],
+                colors: {
+                    primaryColor: XP_ROLE_COLORS[Math.min(index, XP_ROLE_COLORS.length - 1)]
+                },
                 reason: `Create missing XP tier role for ${entry.xp} XP`
             }).catch(() => null);
             if (!role) {
@@ -4152,7 +4145,7 @@ function enqueueXpRoleSync(guild: Guild, userId: string, xp: number): void {
         }
         XP_ROLE_SYNC_QUEUE.push({ guild, userId, xp });
     }
-    void drainXpRoleSyncQueue();
+    runAsyncWithBoundary("xpRoleSyncQueue", drainXpRoleSyncQueue);
 }
 
 function awardEngagementXp(guild: Guild | null, userId: string, xpDelta: number, voiceMinutesDelta = 0): { previousXp: number; totalXp: number } {
@@ -4162,7 +4155,7 @@ function awardEngagementXp(guild: Guild | null, userId: string, xpDelta: number,
     const totalXp = addXP(userId, xpDelta);
     if (guild && getEffectiveXpRoleEntries().some(entry => previousXp < entry.xp && totalXp >= entry.xp)) {
         enqueueXpRoleSync(guild, userId, totalXp);
-        void notifyXpThresholdUnlock(guild, userId, previousXp, totalXp);
+        runAsyncWithBoundary("xpRoleThresholdNotification", () => notifyXpThresholdUnlock(guild, userId, previousXp, totalXp));
     }
     return { previousXp, totalXp };
 }
@@ -4946,42 +4939,6 @@ function helpPageGeneral() {
         .setFooter({ text: "Tip: use /ticket for direct FN support and /quickstart for the fastest onboarding route." });
 }
 
-function buildQuickstartEmbed(user: User): EmbedBuilder {
-    return new EmbedBuilder()
-        .setColor(0x22c55e)
-        .setTitle("🚀 Quickstart Mission")
-        .setDescription("Fast launch path for new or returning operators. Follow these in order for the smoothest start.")
-        .addFields(
-            {
-                name: "1️⃣ Setup Economy",
-                value: "Run `/balance` then `/daily` to initialize and claim your streak reward.",
-                inline: false
-            },
-            {
-                name: "2️⃣ Gear Up",
-                value: "Use `/shop` to browse items, `/buy` to purchase gear, and `/inventory` to confirm your loadout.",
-                inline: false
-            },
-            {
-                name: "3️⃣ Raid Preparation",
-                value: "Run `/loadout` to preview auto-applied gear bonuses, then `/raidintel` for map and trigger projections.",
-                inline: false
-            },
-            {
-                name: "4️⃣ Run Missions",
-                value: "Start with `/raid bet:10 tension:low`, then scale risk to `medium`/`high` as your inventory and PMC level improve.",
-                inline: false
-            },
-            {
-                name: "5️⃣ Loop Rewards",
-                value: "Open crates with `/opencrate`, consume support items with `/useitem`, and track consistency via `/raidhistory` + `/pmc`.",
-                inline: false
-            }
-        )
-        .setFooter({ text: `Requested by ${user.tag} • Stay consistent and scale risk gradually.` })
-        .setTimestamp(new Date());
-}
-
 async function helpPageXP(guild?: Guild | null) {
     const rankLines = await resolveXpRoleLines(guild);
     const rankChunks = chunkRoleLines(rankLines, 900);
@@ -5355,17 +5312,6 @@ function embedFromPayload(commandName: string, raw: APIEmbed, user: User): APIEm
     return brandEmbedForUser(embed, user, `/${commandName}`).toJSON();
 }
 
-function getShopItems(): ItemDef[] {
-    return SHOP_ITEMS.map(id => ITEM_DEFS[id]);
-}
-
-function formatInventory(userId: string): string {
-    const inv = ensureUser(userId).inventory;
-    const entries = Object.entries(inv);
-    if (!entries.length) return "Empty";
-    return entries.map(([id, qty]) => `${qty}x ${ITEM_DEFS[id]?.name || id}`).join("\n");
-}
-
 function getInventoryAutocompleteOptions(input: {
     userId: string;
     focusedRaw: string;
@@ -5667,16 +5613,6 @@ function weightedPick(table: Array<{ id: string; weight: number }>): string {
         if (roll <= 0) return entry.id;
     }
     return positive[positive.length - 1].id;
-}
-
-function pushLootStack(loot: Array<{ id: string; qty: number }>, id: string, qty: number): void {
-    const amount = Math.max(1, Math.floor(qty));
-    const existing = loot.find(entry => entry.id === id);
-    if (existing) {
-        existing.qty += amount;
-        return;
-    }
-    loot.push({ id, qty: amount });
 }
 
 function buyItem(userId: string, itemId: string, qty: number): { error?: string; cost?: number; total?: number } {
@@ -6541,27 +6477,6 @@ function reconcileBossBattleOutcomeUnbatched(userId: string, mapCfg: RaidDomain.
     if (heart.awarded) result.bossHeartUnlockedName = heart.heartName;
     recordGameResult(userId, "raid", "win", 0, bonusTokens);
     savePoints();
-}
-
-function formatRaidHistory(userId: string): string {
-    const history = ensureUser(userId).raidHistory.slice(0, 8);
-    if (!history.length) return "No raids yet.";
-    return history.map(entry => {
-        const time = new Date(entry.timestamp).toLocaleString();
-        const status = entry.success ? "Success" : "Fail";
-        const map = entry.map ? ` | Map ${entry.map}` : "";
-        const condition = entry.condition ? ` | Cond ${entry.condition}` : "";
-        const approach = entry.approach ? ` | ${entry.approach}` : "";
-        const route = entry.extractionRoute
-            ? ` | Route ${entry.extractionRoute} (${entry.branchDecision || "Original Route"})`
-            : entry.branchDecision && entry.branchDecision !== "Original Route"
-                ? ` | Decision ${entry.branchDecision}`
-                : "";
-        const boss = entry.bossSpawned
-            ? ` | Boss ${entry.bossName || "Unknown"} ${entry.bossDefeated ? "defeated" : "engaged"}${entry.bossBonusXp ? ` (+${entry.bossBonusXp} XP)` : ""}`
-            : "";
-        return `* [${time}] ${status} ${entry.tension}${map}${condition}${approach}${route}${boss} | Bet ${entry.bet} | Net ${entry.net} | Rxp +${entry.rxpGain}`;
-    }).join("\n");
 }
 
 function buildRaidHistoryPayload(userId: string): string {
@@ -8775,7 +8690,7 @@ function trackGuildMemberChange(member: Pick<GuildMember, "guild" | "id" | "user
 
     const current = PLAYER_COUNTS_BY_GUILD.get(member.guild.id);
     if (!current) {
-        void ensurePlayerCountPanelForGuild(member.guild);
+        runAsyncWithBoundary("playerCountPanelInit", () => ensurePlayerCountPanelForGuild(member.guild));
         return;
     }
     PLAYER_COUNTS_BY_GUILD.set(member.guild.id, adjustPlayerCounts(current, member.user.bot, direction));
@@ -9599,7 +9514,7 @@ const moderationCommandHandlers = buildModerationCommandHandlers({
 });
 
 const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction) => Promise<string>> = {
-    ping: async interaction => {
+    ping: async () => {
         return "Pong.";
     },
     help: async interaction => {
@@ -9653,9 +9568,9 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         if (pause !== null) {
             XP_ROLE_SYNC_PAUSED = pause;
             appendAuditEvent("xp_role_sync_pause_changed", { guildId: guild.id, paused: pause, actorId: interaction.user.id });
-            if (!pause) void drainXpRoleSyncQueue();
+            if (!pause) runAsyncWithBoundary("xpRoleSyncResume", drainXpRoleSyncQueue);
         }
-        if (retry) void retryXpRoleDeadLetters();
+        if (retry) runAsyncWithBoundary("xpRoleDeadLetterRetry", retryXpRoleDeadLetters);
         if (XP_ROLE_SYNC_PAUSED) return "XP role synchronization is paused for maintenance.";
 
         if (XP_ROLE_SYNC_RUNNING_GUILDS.has(guild.id)) {
@@ -9682,7 +9597,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     },
     status: async () => {
         const memory = process.memoryUsage();
-        const deployment = getGitDeploymentInfo();
+        const deployment = await getGitDeploymentInfo();
         return [
             ...buildStatusLines(client.user?.tag, client.guilds.cache.size, client.ws.ping, memory, Math.floor(process.uptime())),
             `Deployment: ${deployment.shortCommit || "unknown"} • ${deployment.branch || "unknown"}`,
@@ -10155,7 +10070,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
 
         if (restartAfter) {
             setTimeout(() => {
-                requestManagedRestart("incident_command", interaction.user.id);
+                runAsyncWithBoundary("incidentRestart", () => requestManagedRestart("incident_command", interaction.user.id));
             }, 2500).unref();
         }
 
@@ -10507,8 +10422,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                     { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true }
                 )
                 .setTimestamp(new Date())
-                .toJSON(),
-            ephemeral: true
+                .toJSON()
         });
     },
     reportprofile: async interaction => {
@@ -10552,8 +10466,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                 )
                 .setFooter({ text: `Report logs channel: ${REPORT_LOG_CHANNEL_ID}` })
                 .setTimestamp(new Date())
-                .toJSON(),
-            ephemeral: true
+                .toJSON()
         });
     },
     ticketintake: async () => {
@@ -10667,8 +10580,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                     { name: "Logged Channel", value: `<#${REPORT_LOG_CHANNEL_ID}>`, inline: true }
                 )
                 .setTimestamp(new Date())
-                .toJSON(),
-            ephemeral: true
+                .toJSON()
         });
     },
     reportanalytics: async interaction => {
@@ -11293,7 +11205,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                 ? buildRaidUnlockBroadcastEmbed({ user: interaction.user, result })
                 : null;
             if (interaction.guild && raidBroadcast) {
-                void sendOpsBroadcastEmbed(interaction.guild, raidBroadcast);
+                runAsyncWithBoundary("raidUnlockBroadcast", () => sendOpsBroadcastEmbed(interaction.guild!, raidBroadcast));
                 appendAuditEvent("raid_unlock_broadcast", {
                     guildId: interaction.guild.id,
                     userId: interaction.user.id,
@@ -11659,7 +11571,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     }
 };
 
-client.once("clientReady", async () => {
+client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () => {
     console.log(`Logged in as ${client.user?.tag ?? "unknown-user"}`);
     console.log(`[startup] Preparing to register ${slashCommands.length} guild slash commands.`);
     if (slashCommands.length > 100) {
@@ -11728,9 +11640,9 @@ client.once("clientReady", async () => {
 
     console.log("Global slash commands cleared to prevent duplicate command entries.");
     console.log("Guild-only slash commands are active.");
-});
+}));
 
-client.on("guildBanAdd", async ban => {
+client.on("guildBanAdd", ban => runAsyncWithBoundary("guildBanAdd", async () => {
     const guildId = ban.guild.id;
     const userId = ban.user.id;
     if (shouldSkipRecentModerationLog("ban", guildId, userId)) return;
@@ -11748,9 +11660,9 @@ client.on("guildBanAdd", async ban => {
         { name: "Target", value: `<@${userId}>`, inline: true },
         { name: "Reason", value: reason }
     ]);
-});
+}));
 
-client.on("guildMemberAdd", async member => {
+client.on("guildMemberAdd", member => runAsyncWithBoundary("guildMemberAdd", async () => {
     trackGuildMemberChange(member, 1);
     const channel = await member.guild.channels.fetch(JOIN_WELCOME_CHANNEL_ID).catch(() => null);
     if (!channel || channel.type !== ChannelType.GuildText) {
@@ -11786,9 +11698,9 @@ client.on("guildMemberAdd", async member => {
         messageId: sent.id,
         isBot: member.user.bot
     });
-});
+}));
 
-client.on("guildMemberRemove", async member => {
+client.on("guildMemberRemove", member => runAsyncWithBoundary("guildMemberRemove", async () => {
     trackGuildMemberChange(member, -1);
     const guildId = member.guild.id;
     const userId = member.id;
@@ -11807,7 +11719,7 @@ client.on("guildMemberRemove", async member => {
         { name: "Target", value: `<@${userId}>`, inline: true },
         { name: "Reason", value: reason }
     ]);
-});
+}));
 
 setInterval(() => {
     checkpointState("interval_30s");
@@ -11832,38 +11744,38 @@ setInterval(() => {
 }, IN_MEMORY_STATE_PRUNE_INTERVAL_MS).unref();
 
 setInterval(() => {
-    void sendAutomatedHealthReport("interval_24h");
+    runAsyncWithBoundary("healthReportInterval", () => sendAutomatedHealthReport("interval_24h"));
 }, DAILY_HEALTH_REPORT_MS).unref();
 
 setInterval(() => {
-    void runHealthWatchdog("interval_10m");
+    runAsyncWithBoundary("healthWatchdogInterval", () => runHealthWatchdog("interval_10m"));
 }, HEALTH_WATCHDOG_INTERVAL_MS).unref();
 
 setInterval(() => {
-    void sendAutomatedBalanceReport("interval_7d");
+    runAsyncWithBoundary("balanceReportInterval", () => sendAutomatedBalanceReport("interval_7d"));
 }, WEEKLY_BALANCE_REPORT_MS).unref();
 
 setInterval(() => {
-    void processDueGiveaways();
+    runAsyncWithBoundary("giveawayExpiryInterval", processDueGiveaways);
 }, 15_000).unref();
 
 setInterval(() => {
-    void refreshActiveGiveawayEmbeds();
+    runAsyncWithBoundary("giveawayRefreshInterval", refreshActiveGiveawayEmbeds);
 }, 60_000).unref();
 
 setTimeout(() => {
-    void sendAutomatedHealthReport("startup_warmup");
+    runAsyncWithBoundary("startupHealthReport", () => sendAutomatedHealthReport("startup_warmup"));
 }, 90_000).unref();
 
 setTimeout(() => {
-    void runHealthWatchdog("startup_warmup");
+    runAsyncWithBoundary("startupHealthWatchdog", () => runHealthWatchdog("startup_warmup"));
 }, 45_000).unref();
 
 setTimeout(() => {
-    void sendAutomatedBalanceReport("startup_warmup");
+    runAsyncWithBoundary("startupBalanceReport", () => sendAutomatedBalanceReport("startup_warmup"));
 }, 120_000).unref();
 
-function requestManagedRestart(trigger: string, requestedByUserId: string | null = null): void {
+async function requestManagedRestart(trigger: string, requestedByUserId: string | null = null): Promise<void> {
     const pm2IdRaw = String(process.env.pm_id || "").trim();
     const pm2Name = String(process.env.name || process.env.PM2_PROCESS_NAME || "").trim();
     const restartTargets: string[] = [];
@@ -11877,7 +11789,12 @@ function requestManagedRestart(trigger: string, requestedByUserId: string | null
 
     for (const target of restartTargets) {
         try {
-            execSync(`pm2 restart ${target}`, { stdio: "ignore" });
+            await new Promise<void>((resolve, reject) => {
+                execFile("pm2", ["restart", target], { timeout: 15_000, windowsHide: true }, error => {
+                    if (error) reject(error);
+                    else resolve();
+                });
+            });
             appendAuditEvent("process_restart_requested", {
                 trigger,
                 requestedByUserId,
@@ -11927,7 +11844,7 @@ process.on("beforeExit", () => {
     releaseInstanceLock();
 });
 
-client.on("interactionCreate", async interaction => {
+client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
     if (interaction.isAutocomplete()) {
         const focused = interaction.options.getFocused(true);
 
@@ -12955,7 +12872,9 @@ client.on("interactionCreate", async interaction => {
 
     try {
         const startedAt = Date.now();
-        await interaction.deferReply();
+        await interaction.deferReply({
+            flags: PRIVATE_SLASH_COMMANDS.has(interaction.commandName) ? MessageFlags.Ephemeral : undefined
+        });
         const rawResult = await handler(interaction);
         const result = typeof rawResult === "string"
             ? rawResult
@@ -13034,12 +12953,12 @@ client.on("interactionCreate", async interaction => {
             // Ignore secondary response errors (e.g. interaction expired)
         }
     }
-});
+}));
 
-client.on("voiceStateUpdate", async (oldState, newState) => {
+client.on("voiceStateUpdate", (oldState, newState) => {
     if (oldState.channelId && oldState.channelId !== newState.channelId) {
         setTimeout(() => {
-            void cleanupEmptyTemporaryVoiceChannel(oldState.guild, oldState.channelId!);
+            runAsyncWithBoundary("temporaryVoiceCleanup", () => cleanupEmptyTemporaryVoiceChannel(oldState.guild, oldState.channelId!));
         }, 1000).unref();
     }
 
@@ -13055,7 +12974,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     }
 });
 
-client.on("messageCreate", async message => {
+client.on("messageCreate", message => runAsyncWithBoundary("messageCreate", async () => {
     if (message.author.bot) return;
 
     if (message.guildId) {
@@ -13092,7 +13011,7 @@ client.on("messageCreate", async message => {
         message.attachments.size > 0;
 
     if (isCommunicationEvent) {
-        const { previousXp: currentXp, totalXp: nextXp } = awardEngagementXp(message.guild, message.author.id, MESSAGE_XP_GAIN);
+        const { totalXp: nextXp } = awardEngagementXp(message.guild, message.author.id, MESSAGE_XP_GAIN);
         appendAuditEvent("engagement_xp", {
             userId: message.author.id,
             guildId: message.guildId,
@@ -13106,9 +13025,9 @@ client.on("messageCreate", async message => {
     }
 
     if (message.content.trim().toLowerCase() === `${PREFIX}ping`) {
-        void message.reply("Pong.");
+        await message.reply("Pong.");
     }
-});
+}));
 
 process.on("unhandledRejection", reason => {
     console.error("Unhandled promise rejection:", reason);
