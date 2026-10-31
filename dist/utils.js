@@ -260,6 +260,7 @@ function defaultUserState() {
         dailyStreak: 0,
         achievements: [],
         achievementIds: [],
+        achievementTitleId: null,
         voiceMinutes: 0,
         bossHeartClaims: [],
         fnTokens: 50,
@@ -461,8 +462,9 @@ function ensureUser(userId) {
         user.achievements = [];
     if (!Array.isArray(user.achievementIds))
         user.achievementIds = [];
-    else
-        user.achievementIds = user.achievementIds.filter(id => typeof id === "string");
+    if (typeof user.achievementTitleId !== "string")
+        user.achievementTitleId = null;
+    user.achievementIds = user.achievementIds.filter(id => typeof id === "string");
     if (typeof user.voiceMinutes !== "number" || !Number.isFinite(user.voiceMinutes))
         user.voiceMinutes = 0;
     user.voiceMinutes = Math.max(0, Math.floor(user.voiceMinutes));

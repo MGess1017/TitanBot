@@ -65,6 +65,8 @@ const coreCommands_1 = require("./commands/coreCommands");
 const slashCatalog_1 = require("./commands/slashCatalog");
 const health_1 = require("./runtime/health");
 const achievements_1 = require("./game/achievements");
+const achievementTitles_1 = require("./features/achievementTitles");
+const temporaryVoice_1 = require("./features/temporaryVoice");
 const playerCounts_1 = require("./runtime/playerCounts");
 const rateLimit_1 = require("./runtime/rateLimit");
 const voiceXp_1 = require("./runtime/voiceXp");
@@ -137,7 +139,6 @@ const ROLE_SELECTOR_CHANNEL_ID = "1554389202085482566";
 const TEMP_VOICE_CATEGORY_ID = "1523417152441421888";
 const TEMP_VOICE_PANEL_CHANNEL_NAME = "create-your-vc";
 const TEMP_VOICE_PANEL_BUTTON_ID = "temporary_vc:create";
-const TEMP_VOICE_CHANNEL_PREFIX = "temp-vc-";
 const VOICE_XP_TICK_MS = 15000;
 const VOICE_XP_REMAINDER_TTL_MS = 24 * 60 * 60 * 1000;
 const SELF_ROLE_SELECTOR_ROLES = [
@@ -3439,7 +3440,8 @@ function awardConnectedVoiceXp(session, now = Date.now()) {
 function processVoiceXpSessions(now = Date.now()) {
     for (const [key, session] of VOICE_XP_SESSIONS.entries()) {
         if (session.connected) {
-            if (!session.guild.voiceStates.cache.get(session.userId)?.channelId) {
+            const channelId = session.guild.voiceStates.cache.get(session.userId)?.channelId || null;
+            if (!(0, voiceXp_1.isVoiceXpEligible)(channelId, session.guild.afkChannelId, false)) {
                 awardConnectedVoiceXp(session, now);
                 session.connected = false;
                 session.lastAccruedAt = now;
@@ -3458,7 +3460,7 @@ function seedConnectedVoiceXpSessions() {
     const now = Date.now();
     for (const guild of client.guilds.cache.values()) {
         for (const state of guild.voiceStates.cache.values()) {
-            if (state.channelId && state.member && !state.member.user.bot) {
+            if ((0, voiceXp_1.isVoiceXpEligible)(state.channelId, guild.afkChannelId, Boolean(state.member?.user.bot)) && state.member) {
                 trackVoiceXpConnection(guild, state.member.id, true, now);
             }
         }
@@ -5535,6 +5537,16 @@ function buildBossRosterPayload() {
 }
 function buildLeaderboardPayload() {
     const top = (0, economy_1.getLeaderboard)();
+    const voiceLeaders = Object.entries(utils_1.points)
+        .map(([id, user]) => ({ id, voiceMinutes: user.voiceMinutes || 0 }))
+        .filter(row => row.voiceMinutes > 0)
+        .sort((a, b) => b.voiceMinutes - a.voiceMinutes)
+        .slice(0, 5);
+    const achievementLeaders = Object.entries(utils_1.points)
+        .map(([id, user]) => ({ id, achievements: user.achievementIds?.length || 0 }))
+        .filter(row => row.achievements > 0)
+        .sort((a, b) => b.achievements - a.achievements)
+        .slice(0, 5);
     if (!top.length) {
         return JSON.stringify({
             embed: new discord_js_1.EmbedBuilder()
@@ -5549,7 +5561,10 @@ function buildLeaderboardPayload() {
         const medal = medals[idx] || `#${idx + 1}`;
         return `${medal} <@${row.id}>\nXP ${row.xp.toLocaleString()} • Prestige ${row.prestige}`;
     });
-    const totalXp = top.reduce((sum, row) => sum + row.xp, 0);
+    const totalXp = Object.values(utils_1.points).reduce((sum, user) => sum + (user.xp || 0), 0);
+    const formatRankings = (rows, suffix) => rows.length
+        ? rows.map((row, index) => `${medals[index] || `#${index + 1}`} <@${row.id}> • ${row.value.toLocaleString()} ${suffix}`).join("\n")
+        : "No ranking data yet.";
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(0xf59e0b)
         .setTitle("🏆 XP Command Board")
@@ -5559,6 +5574,7 @@ function buildLeaderboardPayload() {
         value: [
             `Tracked Players: ${top.length}`,
             `Total XP Across Board: ${totalXp.toLocaleString()}`,
+            `Tracked Players: ${Object.keys(utils_1.points).length.toLocaleString()}`,
             `Top Rank XP: ${top[0]?.xp?.toLocaleString() || 0}`
         ].join("\n"),
         inline: false
@@ -5566,7 +5582,15 @@ function buildLeaderboardPayload() {
         name: index === 0 ? "Podium and Ranks" : `Podium and Ranks ${index + 1}`,
         value: chunk,
         inline: false
-    })));
+    })), {
+        name: "Voice Time Leaders",
+        value: formatRankings(voiceLeaders.map(row => ({ id: row.id, value: row.voiceMinutes })), "minutes"),
+        inline: true
+    }, {
+        name: "Achievement Leaders",
+        value: formatRankings(achievementLeaders.map(row => ({ id: row.id, value: row.achievements })), "unlocks"),
+        inline: true
+    });
     return JSON.stringify({ embed: embed.toJSON() });
 }
 function buildPmcProfilePayload(user, view = "overview") {
@@ -7483,7 +7507,7 @@ function buildTemporaryVoicePanelPayload() {
     const embed = brandLiveEmbed(new discord_js_1.EmbedBuilder()
         .setColor(0x0f766e)
         .setTitle("Create Your VC")
-        .setDescription("Create a private room. If you are not in voice yet, join any voice channel and click again to move in. Empty rooms close automatically."), "Temporary Voice Access", "Private room controls");
+        .setDescription("Create your room anytime. If disconnected, use the room link in the response to join; connected members are moved automatically. Empty rooms close automatically."), "Temporary Voice Access", "Private room controls");
     const button = new discord_js_1.ButtonBuilder()
         .setCustomId(TEMP_VOICE_PANEL_BUTTON_ID)
         .setLabel("Create my VC")
@@ -8518,6 +8542,7 @@ const commandHandlers = {
         const voiceMinutes = Math.floor(voiceTimeMs / 60000);
         const earnedXpAchievements = achievements_1.XP_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).length;
         const earnedVoiceAchievements = achievements_1.VOICE_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).length;
+        const equippedAchievementTitle = (0, achievementTitles_1.getEquippedAchievementTitle)(user.achievementTitleId, user.achievementIds);
         const nextXpAchievement = achievements_1.XP_ACHIEVEMENTS.find(achievement => user.xp < achievement.threshold);
         const nextVoiceAchievement = achievements_1.VOICE_ACHIEVEMENTS.find(achievement => voiceMinutes < achievement.threshold);
         const pmcProgress = (0, utils_1.getPmcProgress)(user.pmcXP);
@@ -8590,6 +8615,10 @@ const commandHandlers = {
             ].join("\n"),
             inline: false
         }, {
+            name: "✨ Equipped Title",
+            value: equippedAchievementTitle?.title || "No achievement title equipped",
+            inline: true
+        }, {
             name: "🎰 Game Record",
             value: [
                 `Sessions: **${gameStats.casinoPlayed.toLocaleString()}**`,
@@ -8607,7 +8636,13 @@ const commandHandlers = {
             inline: false
         })
             .setFooter({ text: "Detailed progression data is sourced from persisted state." });
-        return JSON.stringify({ embed: embed.toJSON() });
+        return JSON.stringify({
+            embed: embed.toJSON(),
+            components: [new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(achievementTitles_1.ACHIEVEMENT_TITLE_BUTTON_ID)
+                    .setLabel("Equip Achievement Title")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary)).toJSON()]
+        });
     },
     health: async (interaction) => {
         const adminError = requireAdministrator(interaction);
@@ -8712,6 +8747,8 @@ const commandHandlers = {
         if (adminError)
             return adminError;
         const target = interaction.options.getUser("user", true);
+        const targetState = (0, utils_1.ensureUser)(target.id);
+        (0, utils_1.syncProgressAchievements)(target.id);
         const snapshot = (0, utils_1.getXpPersistenceSnapshot)(target.id);
         const effectiveXp = Math.max(snapshot.memoryXp, snapshot.primaryXp ?? 0, snapshot.backupXp ?? 0);
         const level = (0, utils_1.getXPLevel)(effectiveXp);
@@ -8759,6 +8796,24 @@ const commandHandlers = {
         }, {
             name: "Role Assignment Check",
             value: roleStatus,
+            inline: false
+        }, {
+            name: "Achievements and Voice",
+            value: [
+                `Voice connected: ${formatVoiceDuration(targetState.voiceMinutes * 60000)}`,
+                `XP achievements: ${achievements_1.XP_ACHIEVEMENTS.filter(achievement => targetState.achievementIds.includes(achievement.id)).length}/${achievements_1.XP_ACHIEVEMENTS.length}`,
+                `Voice achievements: ${achievements_1.VOICE_ACHIEVEMENTS.filter(achievement => targetState.achievementIds.includes(achievement.id)).length}/${achievements_1.VOICE_ACHIEVEMENTS.length}`,
+                `Recent unlocks: ${targetState.achievements.slice(-4).reverse().join(", ") || "none"}`
+            ].join("\n"),
+            inline: false
+        }, {
+            name: "Auto-Sync Health",
+            value: [
+                `Processed: ${XP_ROLE_SYNC_METRICS.processed}`,
+                `Failures: ${XP_ROLE_SYNC_METRICS.failed}`,
+                `Retries: ${XP_ROLE_SYNC_METRICS.retries}`,
+                `Pending dead letters: ${readXpRoleDeadLetters().filter(entry => entry.userId === target.id).length}`
+            ].join("\n"),
             inline: false
         })
             .setFooter({ text: mismatch ? "XP mismatch detected: run /xprolesync after confirming bot instance consistency." : "XP persistence healthy." });
@@ -10707,6 +10762,130 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
         }
         return;
     }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith("achievement_title_modal:")) {
+        const [, ownerId, ...extra] = interaction.customId.split(":");
+        if (extra.length || ownerId !== interaction.user.id) {
+            await interaction.reply({ content: "This achievement-title form is invalid or expired.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const user = (0, utils_1.ensureUser)(interaction.user.id);
+        (0, utils_1.syncProgressAchievements)(interaction.user.id);
+        const requestedTitle = interaction.fields.getTextInputValue("title").trim();
+        if (requestedTitle.toLowerCase() === "none") {
+            user.achievementTitleId = null;
+            (0, utils_1.savePoints)();
+            await interaction.reply({ content: "Your achievement title has been cleared.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const earnedTitle = (0, achievementTitles_1.resolveEarnedAchievementTitle)(requestedTitle, user.achievementIds);
+        if (!earnedTitle) {
+            await interaction.reply({ content: "Enter the exact title of an achievement you have earned, or enter `none` to clear it.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        user.achievementTitleId = earnedTitle.id;
+        (0, utils_1.savePoints)();
+        await interaction.reply({ content: `Equipped achievement title: **${earnedTitle.title}**.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${temporaryVoice_1.TEMP_VOICE_MODAL_PREFIX}:`)) {
+        const parsed = (0, temporaryVoice_1.parseTemporaryVoiceModalId)(interaction.customId);
+        const guild = interaction.guild;
+        if (!parsed || !guild) {
+            await interaction.reply({ content: "These voice-room controls are invalid or expired.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (interaction.user.id !== parsed.ownerId) {
+            await interaction.reply({ content: "Only the current room owner can use these controls.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const room = await (0, temporaryVoice_1.fetchOwnedTemporaryVoiceRoom)(guild, parsed.channelId, parsed.ownerId, TEMP_VOICE_CATEGORY_ID);
+        if (!room) {
+            await interaction.reply({ content: "This room no longer belongs to you or has already closed.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        if (!botMember?.permissions.has(discord_js_1.PermissionFlagsBits.ManageChannels)
+            || !room.permissionsFor(botMember)?.has(discord_js_1.PermissionFlagsBits.ManageChannels)) {
+            await interaction.reply({ content: "The bot needs Manage Channels permission for this room.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const value = interaction.fields.getTextInputValue("value").trim();
+        if (parsed.action === "rename") {
+            const name = (0, temporaryVoice_1.buildTemporaryVoiceRoomName)(value, parsed.ownerId);
+            if (name === room.name) {
+                await interaction.reply({ content: "That room name is already in use.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+                return;
+            }
+            const renamed = await room.setName(name, `Room renamed by owner ${parsed.ownerId}`).then(() => true).catch(error => {
+                console.warn(`[voice] Rename failed for room ${room.id}:`, toSafeString(error));
+                return false;
+            });
+            await interaction.reply({
+                content: renamed ? `Room renamed to **${name}**.` : "Could not rename the room. Check Manage Channels permission.",
+                flags: discord_js_1.MessageFlags.Ephemeral
+            }).catch(() => undefined);
+            return;
+        }
+        if (parsed.action === "limit") {
+            if (!/^\d{1,2}$/.test(value) || Number(value) > 99) {
+                await interaction.reply({ content: "Enter a whole number from 0 to 99. Use 0 for no limit.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+                return;
+            }
+            const userLimit = Number(value);
+            const changed = await room.setUserLimit(userLimit, `Room limit changed by owner ${parsed.ownerId}`).then(() => true).catch(error => {
+                console.warn(`[voice] User limit update failed for room ${room.id}:`, toSafeString(error));
+                return false;
+            });
+            await interaction.reply({
+                content: changed ? `Room member limit set to ${userLimit || "unlimited"}.` : "Could not update the room limit. Check Manage Channels permission.",
+                flags: discord_js_1.MessageFlags.Ephemeral
+            }).catch(() => undefined);
+            return;
+        }
+        const mention = value.match(/^<@!?(\d{17,20})>$/);
+        const newOwnerId = mention?.[1] || (/^\d{17,20}$/.test(value) ? value : null);
+        if (!newOwnerId || newOwnerId === parsed.ownerId) {
+            await interaction.reply({ content: "Enter another member's valid user ID or mention.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const newOwner = await guild.members.fetch(newOwnerId).catch(() => null);
+        if (!newOwner || newOwner.user.bot) {
+            await interaction.reply({ content: "The new owner must be a non-bot member of this server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const newOwnerAccess = await room.permissionOverwrites.edit(newOwner.id, {
+            ViewChannel: true,
+            Connect: true,
+            Speak: true
+        }, { reason: `Temporary room ownership transfer to ${newOwner.id}` }).then(() => true).catch(error => {
+            console.warn(`[voice] Could not grant room access to transfer target ${newOwner.id}:`, toSafeString(error));
+            return false;
+        });
+        if (!newOwnerAccess) {
+            await interaction.reply({ content: "Could not grant the new owner access. Check Manage Channels permission.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const oldName = room.name;
+        const newName = (0, temporaryVoice_1.buildTemporaryVoiceRoomName)(newOwner.displayName, newOwner.id);
+        const renamed = await room.setName(newName, `Temporary room ownership transferred to ${newOwner.id}`).then(() => true).catch(error => {
+            console.warn(`[voice] Could not rename room ${room.id} during transfer:`, toSafeString(error));
+            return false;
+        });
+        if (!renamed) {
+            await room.permissionOverwrites.delete(newOwner.id, "Ownership transfer rolled back").catch(() => undefined);
+            await interaction.reply({ content: "Could not transfer ownership because the room could not be renamed.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (room.permissionOverwrites.cache.has(parsed.ownerId)) {
+            await room.permissionOverwrites.delete(parsed.ownerId, `Room ownership transferred to ${newOwner.id}`).catch(error => {
+                console.warn(`[voice] Could not remove prior owner access from room ${room.id}:`, toSafeString(error));
+                return null;
+            });
+        }
+        appendAuditEvent("temporary_voice_owner_transferred", { guildId: guild.id, channelId: room.id, previousOwnerId: parsed.ownerId, newOwnerId: newOwner.id, oldName });
+        await interaction.reply({ content: `Room ownership transferred to <@${newOwner.id}>.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        return;
+    }
     if (interaction.isButton() && SELF_ROLE_SELECTOR_ROLES.some(role => role.buttonId === interaction.customId)) {
         const guild = interaction.guild;
         const configuredRole = SELF_ROLE_SELECTOR_ROLES.find(role => role.buttonId === interaction.customId);
@@ -10742,6 +10921,71 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
         }).catch(() => undefined);
         return;
     }
+    if (interaction.isButton() && interaction.customId === achievementTitles_1.ACHIEVEMENT_TITLE_BUTTON_ID) {
+        const user = (0, utils_1.ensureUser)(interaction.user.id);
+        (0, utils_1.syncProgressAchievements)(interaction.user.id);
+        const modal = (0, achievementTitles_1.buildAchievementTitleModal)(interaction.user.id, user.achievementIds);
+        if (!modal) {
+            await interaction.reply({ content: "Earn an XP or voice achievement before equipping a title.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.showModal(modal).catch(async () => {
+            await interaction.reply({ content: "Could not open the title form. Please try again.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        });
+        return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(`${temporaryVoice_1.TEMP_VOICE_CONTROL_PREFIX}:`)) {
+        const parsed = (0, temporaryVoice_1.parseTemporaryVoiceControlId)(interaction.customId);
+        const guild = interaction.guild;
+        if (!parsed || !guild) {
+            await interaction.reply({ content: "These voice-room controls are invalid or expired.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (interaction.user.id !== parsed.ownerId) {
+            await interaction.reply({ content: "Only the current room owner can use these controls.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const room = await (0, temporaryVoice_1.fetchOwnedTemporaryVoiceRoom)(guild, parsed.channelId, parsed.ownerId, TEMP_VOICE_CATEGORY_ID);
+        if (!room) {
+            await interaction.reply({ content: "This room no longer belongs to you or has already closed.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        if (!botMember?.permissions.has(discord_js_1.PermissionFlagsBits.ManageChannels)
+            || !room.permissionsFor(botMember)?.has(discord_js_1.PermissionFlagsBits.ManageChannels)) {
+            await interaction.reply({ content: "The bot needs Manage Channels permission for this room.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        if (parsed.action === "rename" || parsed.action === "limit" || parsed.action === "transfer") {
+            await interaction.showModal((0, temporaryVoice_1.buildTemporaryVoiceModal)(parsed.action, room.id, parsed.ownerId)).catch(async () => {
+                await interaction.reply({ content: "Could not open the room control form. Please try again.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            });
+            return;
+        }
+        const locked = parsed.action === "lock";
+        const everyoneOverwrite = room.permissionOverwrites.cache.get(guild.roles.everyone.id);
+        const wasLocked = Boolean(everyoneOverwrite?.deny.has(discord_js_1.PermissionFlagsBits.Connect));
+        if (wasLocked === locked) {
+            await interaction.reply({ content: `Your room is already ${locked ? "locked" : "unlocked"}.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        const updated = await room.permissionOverwrites.edit(guild.roles.everyone.id, {
+            ViewChannel: locked ? false : null,
+            Connect: locked ? false : null
+        }, { reason: `${locked ? "Lock" : "Unlock"} requested by room owner ${parsed.ownerId}` }).then(() => true).catch(error => {
+            console.warn(`[voice] Could not ${locked ? "lock" : "unlock"} room ${room.id}:`, toSafeString(error));
+            return false;
+        });
+        if (!updated) {
+            await interaction.reply({ content: `Could not ${locked ? "lock" : "unlock"} the room. Check Manage Channels permission.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return;
+        }
+        await interaction.update({
+            content: `Room ${locked ? "locked" : "unlocked"}: <#${room.id}>`,
+            components: [(0, temporaryVoice_1.buildTemporaryVoiceControlRow)({ channelId: room.id, ownerId: parsed.ownerId, locked, userLimit: room.userLimit })]
+        }).catch(() => undefined);
+        return;
+    }
     if (interaction.isButton() && interaction.customId === TEMP_VOICE_PANEL_BUTTON_ID) {
         const guild = interaction.guild;
         if (!guild) {
@@ -10766,34 +11010,12 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
             await interaction.editReply("Unable to find your server member record. Please try again.").catch(() => undefined);
             return;
         }
-        const safeName = member.displayName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "member";
-        const roomName = `${TEMP_VOICE_CHANNEL_PREFIX}${safeName}-${member.id}`.slice(0, 100);
-        let room = guild.channels.cache.find(channel => channel.type === discord_js_1.ChannelType.GuildVoice
-            && channel.parentId === category.id
-            && channel.name.startsWith(TEMP_VOICE_CHANNEL_PREFIX)
-            && channel.name.endsWith(`-${member.id}`));
-        let createdRoom = false;
-        if (!room) {
-            const created = await guild.channels.create({
-                name: roomName,
-                type: discord_js_1.ChannelType.GuildVoice,
-                parent: category.id,
-                permissionOverwrites: [
-                    { id: member.id, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.Connect, discord_js_1.PermissionFlagsBits.Speak] },
-                    { id: botMember.id, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.Connect, discord_js_1.PermissionFlagsBits.ManageChannels, discord_js_1.PermissionFlagsBits.MoveMembers] }
-                ],
-                reason: `Temporary voice room requested by ${member.user.tag}`
-            }).catch(error => {
-                console.warn(`[voice] Could not create temporary room for ${member.id} in guild ${guild.id}:`, error);
-                return null;
-            });
-            if (!created || created.type !== discord_js_1.ChannelType.GuildVoice) {
-                await interaction.editReply("Could not create your voice room. Check the bot's category permissions and try again.").catch(() => undefined);
-                return;
-            }
-            room = created;
-            createdRoom = true;
+        const roomResult = await (0, temporaryVoice_1.findOrCreateTemporaryVoiceRoom)(guild, member, category.id);
+        if ("error" in roomResult) {
+            await interaction.editReply(roomResult.error).catch(() => undefined);
+            return;
         }
+        const { room, created: createdRoom } = roomResult;
         if (!room.permissionsFor(botMember)?.has(discord_js_1.PermissionFlagsBits.MoveMembers)) {
             if (createdRoom)
                 await room.delete("Bot cannot move the member into the temporary room").catch(() => undefined);
@@ -10806,20 +11028,32 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
             await interaction.editReply("You do not have Connect permission for the temporary room. Check the category's voice permissions.").catch(() => undefined);
             return;
         }
+        const replyWithRoomControls = async (content) => {
+            const everyoneOverwrite = room.permissionOverwrites.cache.get(guild.roles.everyone.id);
+            await interaction.editReply({
+                content,
+                components: [(0, temporaryVoice_1.buildTemporaryVoiceControlRow)({
+                        channelId: room.id,
+                        ownerId: member.id,
+                        locked: Boolean(everyoneOverwrite?.deny.has(discord_js_1.PermissionFlagsBits.Connect)),
+                        userLimit: room.userLimit
+                    })]
+            }).catch(() => undefined);
+        };
         const currentSourceChannelId = guild.voiceStates.cache.get(member.id)?.channelId || member.voice.channelId;
         if (!currentSourceChannelId) {
-            await interaction.editReply(`Your room is ready: <#${room.id}>. Join any voice channel, then click Create my VC again to move in.`).catch(() => undefined);
+            await replyWithRoomControls(`Your room is ready: <#${room.id}>. Discord cannot connect a disconnected member automatically, so use the room link to join.`);
             return;
         }
         if (currentSourceChannelId !== room.id) {
             const sourceChannel = guild.channels.cache.get(currentSourceChannelId)
                 || await guild.channels.fetch(currentSourceChannelId).catch(() => null);
             if (!sourceChannel || !sourceChannel.isVoiceBased()) {
-                await interaction.editReply(`Your room is ready: <#${room.id}>. Join any voice channel, then click Create my VC again to move in.`).catch(() => undefined);
+                await replyWithRoomControls(`Your room is ready: <#${room.id}>. Join any voice channel, then click Create my VC again to move in.`);
                 return;
             }
             if (!sourceChannel.permissionsFor(botMember)?.has(discord_js_1.PermissionFlagsBits.MoveMembers)) {
-                await interaction.editReply(`Your room is ready: <#${room.id}>. The bot needs Move Members permission in your current voice channel to move you.`).catch(() => undefined);
+                await replyWithRoomControls(`Your room is ready: <#${room.id}>. The bot needs Move Members permission in your current voice channel to move you.`);
                 return;
             }
             const moveError = await member.voice.setChannel(room.id, "Moved into a temporary voice room").then(() => null).catch(error => error);
@@ -10827,15 +11061,15 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
                 const code = typeof moveError === "object" && "code" in moveError ? String(moveError.code) : "unknown";
                 appendAuditEvent("temporary_voice_move_failed", { guildId: guild.id, userId: member.id, roomId: room.id, code });
                 if (code === "40032") {
-                    await interaction.editReply(`Your room is ready: <#${room.id}>. It looks like you disconnected; join voice and click Create my VC again to move in.`).catch(() => undefined);
+                    await replyWithRoomControls(`Your room is ready: <#${room.id}>. You disconnected before the move; use the room link to join.`);
                     return;
                 }
                 console.warn(`[voice] Could not move member ${member.id} to temporary room ${room.id} (Discord ${code}):`, toSafeString(moveError));
-                await interaction.editReply(`Your room is ready: <#${room.id}>. Discord rejected the move; check Move Members in both voice channels and try again.`).catch(() => undefined);
+                await replyWithRoomControls(`Your room is ready: <#${room.id}>. Discord rejected the move; check Move Members in both voice channels and try again.`);
                 return;
             }
         }
-        await interaction.editReply(`Your temporary room is ready: <#${room.id}>`).catch(() => undefined);
+        await replyWithRoomControls(`Your temporary room is ready: <#${room.id}>`);
         return;
     }
     if (interaction.isButton() && interaction.customId.startsWith(`${CASINO_UI_IDS.prefix}:`)) {
@@ -11433,15 +11667,13 @@ client.on("voiceStateUpdate", (oldState, newState) => {
     if (!member || member.user.bot)
         return;
     const key = voiceXpSessionKey(member.guild.id, member.id);
-    if (newState.channelId && !oldState.channelId) {
-        trackVoiceXpConnection(member.guild, member.id, true);
-    }
-    else if (!newState.channelId && oldState.channelId) {
+    const oldEligible = (0, voiceXp_1.isVoiceXpEligible)(oldState.channelId, member.guild.afkChannelId, false);
+    const newEligible = (0, voiceXp_1.isVoiceXpEligible)(newState.channelId, member.guild.afkChannelId, false);
+    const movedChannel = oldState.channelId !== newState.channelId;
+    if (oldEligible && (!newEligible || movedChannel))
         trackVoiceXpConnection(member.guild, member.id, false);
-    }
-    else if (newState.channelId && !VOICE_XP_SESSIONS.has(key)) {
+    if (newEligible && (!oldEligible || movedChannel || !VOICE_XP_SESSIONS.has(key)))
         trackVoiceXpConnection(member.guild, member.id, true);
-    }
 });
 client.on("messageCreate", message => runAsyncWithBoundary("messageCreate", async () => {
     if (message.author.bot)

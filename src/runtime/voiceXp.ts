@@ -6,6 +6,10 @@ export type VoiceXpAccrualState = {
     remainderMs: number;
 };
 
+export function isVoiceXpEligible(channelId: string | null, afkChannelId: string | null, isBot: boolean): boolean {
+    return Boolean(channelId) && channelId !== afkChannelId && !isBot;
+}
+
 export function accrueVoiceXp(state: VoiceXpAccrualState, now: number): { state: VoiceXpAccrualState; xp: number; minutes: number } {
     const lastAccruedAt = Math.max(0, Math.floor(state.lastAccruedAt));
     const currentTime = Math.max(lastAccruedAt, Math.floor(now));

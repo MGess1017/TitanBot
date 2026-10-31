@@ -6,7 +6,7 @@ import ts from "typescript";
 import { buildSlashCommands } from "../commands/slashCatalog";
 import { getNewProgressAchievements, VOICE_ACHIEVEMENTS, XP_ACHIEVEMENTS } from "../game/achievements";
 import { RAID_CONDITIONS, RAID_MAP_CHOICES } from "../raid/domain";
-import { accrueVoiceXp } from "./voiceXp";
+import { accrueVoiceXp, isVoiceXpEligible } from "./voiceXp";
 import { addXP, ensureUser, points, syncProgressAchievements } from "../utils";
 
 async function verifyThresholdRoleApplication(botSource: string): Promise<void> {
@@ -99,6 +99,7 @@ async function verifyThresholdRoleApplication(botSource: string): Promise<void> 
 
 async function runXpRoleRecoveryTests(): Promise<void> {
     const botSource = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
+    const temporaryVoiceSource = fs.readFileSync(path.resolve(__dirname, "../features/temporaryVoice.ts"), "utf8");
     const commands = buildSlashCommands({
         raidConditionChoices: RAID_CONDITIONS.map(condition => ({ name: condition.label, value: condition.key })),
         raidMapChoices: RAID_MAP_CHOICES
@@ -130,12 +131,12 @@ async function runXpRoleRecoveryTests(): Promise<void> {
     assert.match(botSource, /GatewayIntentBits\.GuildVoiceStates/, "voice XP tracking requires the voice-state gateway intent");
     assert.match(botSource, /const TEMP_VOICE_CATEGORY_ID = "1523417152441421888";/, "temporary voice rooms must use the configured category");
     assert.match(botSource, /setCustomId\(TEMP_VOICE_PANEL_BUTTON_ID\)/, "the VC panel must expose its create button");
-    assert.match(botSource, /Create a private room\. If you are not in voice yet, join any voice channel and click again to move in\./, "the panel must allow room creation before joining voice");
+    assert.match(botSource, /Create your room anytime\. If disconnected, use the room link in the response to join; connected members are moved automatically\./, "the panel must explain create-first and direct-join behavior");
     assert.match(botSource, /const currentSourceChannelId = guild\.voiceStates\.cache\.get\(member\.id\)/, "voice presence must be checked after the room exists");
-    assert.match(botSource, /Your room is ready: <#\$\{room\.id\}>\. Join any voice channel, then click Create my VC again to move in\./, "disconnected users must retain their new room and receive next steps");
+    assert.match(botSource, /Your room is ready: <#\$\{room\.id\}>\. Discord cannot connect a disconnected member automatically, so use the room link to join\./, "disconnected users must retain their room and receive the direct-join link");
     assert.match(botSource, /if \(code === "40032"\)/, "disconnect races must be handled without an unhandled move failure");
-    assert.match(botSource, /const roomName = `\$\{TEMP_VOICE_CHANNEL_PREFIX\}\$\{safeName\}-\$\{member\.id\}`/, "temporary voice channels must put the username before the unique owner ID");
-    assert.match(botSource, /channel\.name\.endsWith\(`-\$\{member\.id\}`\)/, "room reuse must remain tied to its owner if their display name changes");
+    assert.match(botSource, /findOrCreateTemporaryVoiceRoom\(guild, member, category\.id\)/, "room creation must use the temporary voice feature module's owner-tagged name");
+    assert.match(temporaryVoiceSource, /getTemporaryVoiceOwnerId\(channel\.name\) === member\.id/, "room reuse must remain tied to its owner if their display name changes");
     assert.match(botSource, /sourceChannel\.permissionsFor\(botMember\).*PermissionFlagsBits\.MoveMembers/, "source-channel move permission must be checked");
     assert.match(botSource, /member\.voice\.setChannel\(room\.id/, "the creator must be moved into their room");
     assert.match(botSource, /channel\.members\.size > 0\) return/, "non-empty temporary rooms must remain open");
@@ -149,6 +150,9 @@ async function runXpRoleRecoveryTests(): Promise<void> {
     assert.equal(resumedVoiceMinute.state.remainderMs, 0, "awarded voice minutes must clear their remainder");
     const longVoiceSession = accrueVoiceXp({ lastAccruedAt: 0, remainderMs: 0 }, 180_000);
     assert.equal(longVoiceSession.xp, 300, "voice accrual must award every complete minute");
+    assert.equal(isVoiceXpEligible("voice-1", null, false), true);
+    assert.equal(isVoiceXpEligible("afk-1", "afk-1", false), false, "AFK voice channel must not accrue XP");
+    assert.equal(isVoiceXpEligible("voice-1", null, true), false, "bot accounts must not accrue voice XP");
 
     const tierMatches = Array.from(botSource.matchAll(/\{ xp: (\d+), roleId: "(\d+)", name: "([^"]+)" \}/g));
     assert.equal(tierMatches.length, 43, "expected 31 existing and 12 new XP role tiers");
