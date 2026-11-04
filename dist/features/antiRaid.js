@@ -16,7 +16,6 @@ function fingerprintMessage(content) {
 class AntiRaidDetector {
     constructor(getThresholds) {
         this.getThresholds = getThresholds;
-        this.joins = new Map();
         this.messages = new Map();
         this.lastAlertAt = new Map();
     }
@@ -26,16 +25,6 @@ class AntiRaidDetector {
             return false;
         this.lastAlertAt.set(key, now);
         return true;
-    }
-    recordJoin(guildId, userId, now = Date.now()) {
-        const t = this.getThresholds();
-        const windowMs = t.joinWindowSeconds * 1000;
-        const recent = (this.joins.get(guildId) || []).filter(entry => now - entry.at <= windowMs);
-        recent.push({ at: now, userId });
-        this.joins.set(guildId, recent);
-        if (recent.length < t.joinThreshold || !this.shouldAlert(`join:${guildId}`, now))
-            return null;
-        return { kind: "join_flood", guildId, userIds: [...new Set(recent.map(entry => entry.userId))], windowSeconds: t.joinWindowSeconds };
     }
     recordMessage(input) {
         const now = input.now ?? Date.now();
@@ -67,9 +56,6 @@ class AntiRaidDetector {
     /** Drops idle buckets so long-running processes do not accumulate memory. */
     prune(now = Date.now()) {
         const horizon = 10 * 60000;
-        for (const [key, entries] of this.joins)
-            if (!entries.some(entry => now - entry.at <= horizon))
-                this.joins.delete(key);
         for (const [key, entries] of this.messages)
             if (!entries.some(entry => now - entry.at <= horizon))
                 this.messages.delete(key);
@@ -80,9 +66,6 @@ class AntiRaidDetector {
 }
 exports.AntiRaidDetector = AntiRaidDetector;
 function describeDetection(detection) {
-    if (detection.kind === "join_flood") {
-        return { userIds: detection.userIds, detail: `${detection.userIds.length} joins within ${detection.windowSeconds}s` };
-    }
     if (detection.kind === "spam") {
         return { userIds: [detection.userId], detail: `${detection.count} repeated messages in ${detection.channelIds.map(id => `<#${id}>`).join(", ")}\n> ${detection.sample.replace(/\n/g, " ").slice(0, 150)}` };
     }
@@ -100,7 +83,13 @@ class AntiRaidIncidentStore {
                 const raw = fs_extra_1.default.readJsonSync(filePath);
                 if (Array.isArray(raw?.incidents)) {
                     this.incidents = raw.incidents.filter((entry) => Boolean(entry && typeof entry === "object"
-                        && typeof entry.id === "string" && Array.isArray(entry.userIds)));
+                        && typeof entry.id === "string" && Array.isArray(entry.userIds)
+                        && (entry.kind === "spam" || entry.kind === "mention_abuse")))
+                        .map(entry => ({
+                        ...entry,
+                        timedOutUserIds: Array.isArray(entry.timedOutUserIds) ? entry.timedOutUserIds : [],
+                        actions: Array.isArray(entry.actions) ? entry.actions.filter(action => action.type === "timeout" || action.type === "untimeout" || action.type === "dismiss") : []
+                    }));
                 }
             }
         }
@@ -113,7 +102,7 @@ class AntiRaidIncidentStore {
         const incident = {
             id: `${now.toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}`,
             guildId: detection.guildId, kind: detection.kind, at: now, userIds: userIds.slice(0, 50), detail,
-            alertChannelId: null, alertMessageId: null, timedOutUserIds: [], previousVerificationLevel: null, actions: []
+            alertChannelId: null, alertMessageId: null, timedOutUserIds: [], actions: []
         };
         this.incidents.push(incident);
         this.incidents = this.incidents.slice(-200);

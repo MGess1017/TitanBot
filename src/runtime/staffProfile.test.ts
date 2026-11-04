@@ -18,7 +18,8 @@ import {
     COSMETICS, defaultCosmeticState, DEFAULT_THEME_ID, equipCosmetic, MAX_SHOWCASE_BADGES, normalizeCosmeticState,
     normalizeProfilePreferences, purchaseCosmetic
 } from "../game/cosmetics";
-import { REWARD_SETTINGS } from "../features/botSettings";
+import { ANTI_RAID_SETTINGS, REWARD_SETTINGS } from "../features/botSettings";
+import { buildWhatsNewEmbed, WHATS_NEW_COLOR, WHATS_NEW_RELEASE, WhatsNewStore } from "../features/whatsNew";
 
 const CHANNELS = { modAlerts: "1500000000000000001", xpPanels: "1527571592320651285", checkpointCards: "1567414626273202286" };
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "titan-staff-"));
@@ -35,7 +36,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "titan-staff-"));
         channels: { xpPanels: "not-a-snowflake", modAlerts: "1234567890123456789" },
         features: { antiRaid: false, unknown: true },
         rewards: { messageXp: 999_999, voiceDoubleXpHours: "2" },
-        antiRaid: { joinThreshold: 1, timeoutMinutes: 99_999 }
+        antiRaid: { joinThreshold: 1, mentionThreshold: 1, timeoutMinutes: 99_999 }
     }, defaults);
     assert.deepEqual(normalized.staffRoleIds, ["1506135569913085972"]);
     assert.equal(normalized.channels.xpPanels, CHANNELS.xpPanels, "invalid channel ids fall back");
@@ -44,7 +45,8 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "titan-staff-"));
     assert.equal((normalized.features as Record<string, boolean>).unknown, undefined);
     assert.equal(normalized.rewards.messageXp, REWARD_SETTINGS.messageXp.max, "rewards are clamped");
     assert.equal(normalized.rewards.voiceDoubleXpHours, 2, "non-numeric values fall back");
-    assert.equal(normalized.antiRaid.joinThreshold, 3);
+    assert.equal((normalized.antiRaid as Record<string, number>).joinThreshold, undefined, "saved join settings from older versions are dropped");
+    assert.equal(normalized.antiRaid.mentionThreshold, ANTI_RAID_SETTINGS.mentionThreshold.min, "spam thresholds are clamped");
     assert.equal(normalized.antiRaid.timeoutMinutes, 1440);
 
     const file = path.join(tmp, "settings.json");
@@ -75,51 +77,73 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "titan-staff-"));
     }
 }
 
-// ---------- Anti-raid ----------
+// ---------- Spam alerts (joins are always welcome) ----------
 {
-    const thresholds = { joinThreshold: 3, joinWindowSeconds: 10, spamRepeatThreshold: 3, spamWindowSeconds: 20, mentionThreshold: 5 };
+    const thresholds = { spamRepeatThreshold: 3, spamWindowSeconds: 20, mentionThreshold: 5 };
     const detector = new AntiRaidDetector(() => thresholds);
     const t0 = 1_000_000;
-    assert.equal(detector.recordJoin("g", "u1", t0), null);
-    assert.equal(detector.recordJoin("g", "u2", t0 + 1000), null);
-    const flood = detector.recordJoin("g", "u3", t0 + 2000);
-    assert.equal(flood?.kind, "join_flood");
-    assert.equal(detector.recordJoin("g", "u4", t0 + 3000), null, "a flood alerts once per cooldown");
-    assert.equal(new AntiRaidDetector(() => thresholds).recordJoin("g", "u1", t0) , null);
-
-    const slow = new AntiRaidDetector(() => thresholds);
-    slow.recordJoin("g", "a", t0);
-    slow.recordJoin("g", "b", t0 + 11_000);
-    assert.equal(slow.recordJoin("g", "c", t0 + 22_000), null, "joins outside the window do not count");
+    assert.equal("recordJoin" in detector, false, "joins are never tracked or flagged");
 
     const msg = (content: string, at: number, mentionCount = 0) => detector.recordMessage({ guildId: "g", userId: "spammer", channelId: "c", messageId: String(at), content, mentionCount, now: at });
     assert.equal(msg("Buy NOW https://a.b", t0), null);
     assert.equal(msg("buy   now https://c.d", t0 + 1000), null);
     const spam = msg("BUY NOW https://x.y", t0 + 2000);
     assert.equal(spam?.kind, "spam", "normalized repeats are detected");
+    assert.equal(msg("BUY NOW https://x.y", t0 + 3000), null, "one alert per cooldown");
     const mentions = detector.recordMessage({ guildId: "g", userId: "pinger", channelId: "c", messageId: "m", content: "hi", mentionCount: 6, now: t0 });
     assert.equal(mentions?.kind, "mention_abuse");
     detector.prune(t0 + 60 * 60_000);
 
     const incidents = new AntiRaidIncidentStore(path.join(tmp, "incidents.json"), false);
-    const incident = incidents.create(flood!, t0);
-    assert.deepEqual(incident.userIds, ["u1", "u2", "u3"]);
+    const incident = incidents.create(spam!, t0);
+    assert.deepEqual(incident.userIds, ["spammer"]);
     incidents.update(incident.id, entry => {
-        entry.timedOutUserIds = ["u1"];
+        entry.timedOutUserIds = ["spammer"];
         entry.actions.push({ type: "timeout", byId: "staff", at: t0 + 1, count: 1 });
     });
-    assert.equal(incidents.forUser("g", "u2").length, 1);
+    assert.equal(incidents.forUser("g", "spammer").length, 1);
     assert.equal(incidents.recent("g", 5)[0].id, incident.id);
 
-    const alert = buildIncidentAlert(incidents.get(incident.id)!, true);
+    const alert = buildIncidentAlert(incidents.get(incident.id)!);
     const buttons = (alert.components[0] as { components: Array<{ custom_id: string; disabled?: boolean }> }).components;
     assert.ok(buttons.some(button => button.custom_id === `${STAFF_IDS.alert}:untimeout:${incident.id}` && !button.disabled), "timeouts can be undone");
-    assert.ok(buttons.some(button => button.custom_id === `${STAFF_IDS.alert}:raidmode_on:${incident.id}`));
+    assert.deepEqual(buttons.map(button => button.custom_id.split(":")[1]).sort(), ["dismiss", "timeout", "untimeout"], "alerts only offer reversible actions");
     assert.ok(buttons.every(button => button.custom_id.length <= 100));
 
+    const legacyFile = path.join(tmp, "incidents-legacy.json");
+    fs.writeFileSync(legacyFile, JSON.stringify({ incidents: [
+        { id: "old", guildId: "g", kind: "join_flood", at: 1, userIds: ["a"], detail: "", timedOutUserIds: [], actions: [] },
+        { id: "keep", guildId: "g", kind: "spam", at: 2, userIds: ["b"], detail: "", timedOutUserIds: [], actions: [{ type: "raidmode_on", byId: "s", at: 3 }] }
+    ] }));
+    const legacy = new AntiRaidIncidentStore(legacyFile);
+    assert.equal(legacy.get("old"), null, "saved join-flood incidents are dropped");
+    assert.deepEqual(legacy.get("keep")?.actions, []);
+
     const persisted = new AntiRaidIncidentStore(path.join(tmp, "incidents-persist.json"));
-    const stored = persisted.create(spam!, t0);
+    const stored = persisted.create(mentions!, t0);
     assert.ok(new AntiRaidIncidentStore(path.join(tmp, "incidents-persist.json")).get(stored.id), "incidents persist so alert buttons survive restarts");
+}
+
+// ---------- What's New ----------
+{
+    const embed = buildWhatsNewEmbed().toJSON();
+    assert.equal(embed.color, WHATS_NEW_COLOR);
+    assert.ok(embed.fields && embed.fields.length === WHATS_NEW_RELEASE.sections.length && embed.fields.length <= 25);
+    for (const section of WHATS_NEW_RELEASE.sections) {
+        assert.ok(section.lines.map(line => `• ${line}`).join("\n").length <= 1024, `${section.name} fits in one field`);
+    }
+    const totalLength = (embed.title?.length || 0) + (embed.description?.length || 0) + (embed.footer?.text.length || 0)
+        + embed.fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
+    assert.ok(totalLength <= 6000, "embed stays under Discord's 6000 character limit");
+    assert.doesNotMatch(JSON.stringify(embed), /@everyone|@here|raid mode/i);
+
+    const file = path.join(tmp, "whats-new.json");
+    const store = new WhatsNewStore(file);
+    assert.equal(store.hasPosted(WHATS_NEW_RELEASE.id, "c1"), false);
+    store.markPosted(WHATS_NEW_RELEASE.id, "c1", "m1");
+    assert.equal(new WhatsNewStore(file).hasPosted(WHATS_NEW_RELEASE.id, "c1"), true, "each release posts once, even across restarts");
+    assert.equal(new WhatsNewStore(file).hasPosted(WHATS_NEW_RELEASE.id, "c2"), false, "moving the channel reposts there");
+    assert.equal(new WhatsNewStore(file).hasPosted("next-release", "c1"), false, "new releases post again");
 }
 
 // ---------- Staff desk ----------
@@ -233,7 +257,11 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "titan-staff-"));
     assert.match(botSource, /if \(await handleStaffInteraction\(interaction\)\) return;/);
     assert.match(botSource, /staff: async interaction => \{\s+if \(!interaction\.guild \|\| !isStaffMember\(interaction\.member\)\)/, "/staff is staff-gated");
     assert.match(botSource, /if \(!interaction\.guild \|\| !isStaffMember\(interaction\.member\)\) \{\s+await interaction\.reply\(\{ content: "Staff only\."/, "staff buttons are staff-gated");
-    assert.match(botSource, /member\.user\.bot \|\| isStaffMember\(member\) \|\| !member\.moderatable/, "anti-raid never times out staff");
+    assert.match(botSource, /member\.user\.bot \|\| isStaffMember\(member\) \|\| !member\.moderatable/, "spam alerts never time out staff");
+    const joinHandler = botSource.slice(botSource.indexOf('client.on("guildMemberAdd"'), botSource.indexOf('client.on("guildMemberAdd"') + 1500);
+    assert.doesNotMatch(joinHandler, /antiRaid|\.kick\(|\.ban\(|\.timeout\(/, "new members are never flagged, kicked, banned, or timed out on join");
+    const alertCode = botSource.slice(botSource.indexOf("async function raiseAntiRaidAlert"), botSource.indexOf("// ---------- Health checks ----------"));
+    assert.doesNotMatch(alertCode, /\.kick\(|\.ban\(|setVerificationLevel/, "spam alerts never kick, ban, or lock the server");
     assert.match(botSource, /runStaffHealthMonitor\("interval_10m"\)/);
     assert.match(botSource, /PRIVATE_SLASH_COMMANDS = new Set\(\[[^\]]*"staff"/, "/staff replies are ephemeral");
 }

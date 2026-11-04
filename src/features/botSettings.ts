@@ -10,7 +10,7 @@ export const DEFAULT_STAFF_ROLE_IDS = [
 ];
 
 export const FEATURE_TOGGLES = {
-    antiRaid: "Anti-raid alerts",
+    antiRaid: "Spam alerts",
     messageXp: "Message XP",
     voiceXp: "Voice XP",
     doubleXpDm: "2x unlock DMs",
@@ -22,7 +22,7 @@ export const FEATURE_TOGGLES = {
 export type FeatureToggle = keyof typeof FEATURE_TOGGLES;
 
 export const CHANNEL_SETTINGS = {
-    modAlerts: "Staff alerts (anti-raid + health)",
+    modAlerts: "Staff alerts (spam + health)",
     xpPanels: "Live XP leaderboard + FN Xp Panel",
     checkpointCards: "Arena Player Rating panel + cards"
 } as const;
@@ -37,8 +37,6 @@ export const REWARD_SETTINGS = {
 export type RewardSetting = keyof typeof REWARD_SETTINGS;
 
 export const ANTI_RAID_SETTINGS = {
-    joinThreshold: { label: "Join flood: joins", min: 3, max: 100 },
-    joinWindowSeconds: { label: "Join flood: window (seconds)", min: 5, max: 600 },
     spamRepeatThreshold: { label: "Spam: repeated messages", min: 3, max: 30 },
     spamWindowSeconds: { label: "Spam: window (seconds)", min: 5, max: 600 },
     mentionThreshold: { label: "Mention abuse: mentions", min: 3, max: 50 }
@@ -63,7 +61,7 @@ export function defaultBotSettings(channelDefaults: Record<ChannelSetting, strin
         channels: { ...channelDefaults },
         features: Object.fromEntries(Object.keys(FEATURE_TOGGLES).map(key => [key, true])) as Record<FeatureToggle, boolean>,
         rewards: { messageXp: 100, voiceXpPerMinute: 100, voiceDoubleXpHours: 2, cosmeticPriceMultiplier: 1 },
-        antiRaid: { joinThreshold: 8, joinWindowSeconds: 30, spamRepeatThreshold: 5, spamWindowSeconds: 20, mentionThreshold: 6, timeoutMinutes: 10 },
+        antiRaid: { spamRepeatThreshold: 5, spamWindowSeconds: 20, mentionThreshold: 6, timeoutMinutes: 10 },
         updatedAt: 0,
         updatedBy: null
     };

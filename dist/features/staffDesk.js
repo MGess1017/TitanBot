@@ -82,8 +82,8 @@ exports.BUILT_IN_KB = [
         body: "Members fill four forms in the Arena Player Rating panel. The card posts once all 16 stats are saved and updates in place on every edit. Stats are self-reported." },
     { id: "cosmetics", title: "Cosmetic shop and refunds", tags: ["cosmetic", "theme", "title", "badge", "shop", "tokens", "refund"], builtIn: true,
         body: "Themes, titles, and badges from /profile are cosmetic only. Purchases spend FN Token$. Staff can verify ownership in the member's /profile collection." },
-    { id: "timeouts", title: "Anti-raid alerts and timeouts", tags: ["spam", "raid", "timeout", "mention", "flood", "undo"], builtIn: true,
-        body: "Anti-raid posts alerts to the staff alert channel. Staff can apply a timeout from the alert and undo it from the same alert. Raid mode raises server verification and can be restored." },
+    { id: "timeouts", title: "Spam alerts and timeouts", tags: ["spam", "timeout", "mention", "undo", "join", "welcome"], builtIn: true,
+        body: "Spam and mention-abuse alerts post to the staff alert channel. Staff can apply a timeout from the alert and undo it from the same alert. New members are always welcome: joins are never tracked, and the bot never kicks or bans from an alert." },
     { id: "tickets", title: "Ticket workflow", tags: ["ticket", "claim", "close", "resolve", "reopen"], builtIn: true,
         body: "Claim with /claimticket, add notes with /ticketnote, archive with /closeticket, then /resolveticket. Use /staff in a ticket for the checklist and member history." }
 ];
@@ -188,7 +188,7 @@ function buildCaseHistoryLines(input, perSection = 5) {
         `Tickets: **${input.tickets.length}** (${openTickets} open)`,
         `Reports against: **${input.reports.length}**`,
         `Warnings: **${input.warnings.length}**`,
-        `Anti-raid alerts: **${input.alerts.length}**`
+        `Spam alerts: **${input.alerts.length}**`
     ].join(" • ");
     const section = (name, lines) => ({ name, value: lines.length ? lines.slice(0, perSection).join("\n").slice(0, 1020) : "None" });
     return {
@@ -197,7 +197,7 @@ function buildCaseHistoryLines(input, perSection = 5) {
             section("Tickets", [...input.tickets].sort((a, b) => b.createdAt - a.createdAt).map(ticket => `#${ticket.id} ${ticket.category || "general"} • ${ticket.status} • ${ts(ticket.createdAt)}${ticket.resolvedReason || ticket.closedReason ? ` — ${(ticket.resolvedReason || ticket.closedReason || "").slice(0, 60)}` : ""}`)),
             section("Reports", [...input.reports].sort((a, b) => b.createdAt - a.createdAt).map(report => `R${report.id} • ${report.status} • ${ts(report.createdAt)} — ${report.summary.slice(0, 60)}`)),
             section("Warnings", [...input.warnings].sort((a, b) => b.at - a.at).map(warning => `${ts(warning.at)} — ${warning.reason.slice(0, 80)}`)),
-            section("Anti-raid", [...input.alerts].sort((a, b) => b.at - a.at).map(alert => `${ts(alert.at)} • ${alert.kind.replace("_", " ")}${alert.action ? ` • ${alert.action}` : ""}`))
+            section("Spam alerts", [...input.alerts].sort((a, b) => b.at - a.at).map(alert => `${ts(alert.at)} • ${alert.kind.replace("_", " ")}${alert.action ? ` • ${alert.action}` : ""}`))
         ]
     };
 }

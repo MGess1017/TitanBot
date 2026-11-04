@@ -15,7 +15,6 @@ import {
     GatewayIntentBits,
     Guild,
     GuildMember,
-    GuildVerificationLevel,
     Message,
     ModalBuilder,
     type APIInteractionGuildMember,
@@ -173,6 +172,9 @@ import {
 
 const CHECKPOINT_CARD_CHANNEL_ID = process.env.CHECKPOINT_CARD_CHANNEL_ID || "1567414626273202286";
 const checkpointCardQueues = new Map<string, Promise<void>>();
+import { buildWhatsNewEmbed, WHATS_NEW_RELEASE, WhatsNewStore } from "./features/whatsNew";
+
+const WHATS_NEW_CHANNEL_ID = process.env.WHATS_NEW_CHANNEL_ID || "1554331042293485649";
 import {
     BotSettingsStore, defaultBotSettings, FEATURE_TOGGLES, REWARD_SETTINGS, ANTI_RAID_SETTINGS,
     type ChannelSetting, type FeatureToggle, type RewardSetting, type AntiRaidSetting
@@ -317,6 +319,7 @@ const DEPLOYMENT_SUMMARY_CHANNEL_ID = process.env.DEPLOYMENT_SUMMARY_CHANNEL_ID 
 const BOT_SETTINGS_FILE = path.resolve(__dirname, "../src/data/bot-settings.json");
 const KNOWLEDGE_BASE_FILE = path.resolve(__dirname, "../src/data/knowledge-base.json");
 const ANTI_RAID_INCIDENT_FILE = path.resolve(__dirname, "../src/data/anti-raid-incidents.json");
+const WHATS_NEW_FILE = path.resolve(__dirname, "../src/data/whats-new.json");
 type SaveHealthEntry = { failures: number; lastFailureAt: number; lastSuccessAt: number; lastError: string };
 const SAVE_HEALTH = new Map<string, SaveHealthEntry>();
 const ASYNC_FAILURES: Array<{ context: string; at: number; reason: string }> = [];
@@ -343,6 +346,27 @@ const botSettingsStore = new BotSettingsStore(BOT_SETTINGS_FILE, BOT_SETTINGS_DE
 const knowledgeBase = new KnowledgeBaseStore(KNOWLEDGE_BASE_FILE);
 const antiRaidIncidents = new AntiRaidIncidentStore(ANTI_RAID_INCIDENT_FILE, true, (ok, error) => recordSaveResult("antiRaid", ok, error));
 const antiRaidDetector = new AntiRaidDetector(() => botSettingsStore.get().antiRaid);
+const whatsNewStore = new WhatsNewStore(WHATS_NEW_FILE);
+
+async function postWhatsNewIfNeeded(): Promise<void> {
+    if (!WHATS_NEW_CHANNEL_ID || whatsNewStore.hasPosted(WHATS_NEW_RELEASE.id, WHATS_NEW_CHANNEL_ID)) return;
+    const channel = await client.channels.fetch(WHATS_NEW_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel)) {
+        console.warn(`[whatsNew] Channel ${WHATS_NEW_CHANNEL_ID} is missing or not text-based.`);
+        return;
+    }
+    const sent = await channel.send({ embeds: [buildWhatsNewEmbed()], allowedMentions: { parse: [] } }).catch(error => {
+        console.warn("[whatsNew] Failed to post update:", error instanceof Error ? error.message : error);
+        return null;
+    });
+    if (!sent) return;
+    try {
+        whatsNewStore.markPosted(WHATS_NEW_RELEASE.id, WHATS_NEW_CHANNEL_ID, sent.id);
+        recordSaveResult("whatsNew", true);
+    } catch (error) {
+        recordSaveResult("whatsNew", false, error);
+    }
+}
 
 function isFeatureEnabled(feature: FeatureToggle): boolean {
     return botSettingsStore.get().features[feature];
@@ -5202,7 +5226,7 @@ function helpPageModeration() {
             },
             {
                 name: "Automatic Protection",
-                value: "• Join floods, repeated spam, and mention abuse alert staff instantly.\n\n• Any timeout applied from an alert can be undone from the same alert."
+                value: "• Repeated spam and mention abuse alert staff instantly. New members are always welcome — joins are never flagged.\n\n• Any timeout applied from an alert can be undone from the same alert."
             },
             {
                 name: "Admin Command Visibility",
@@ -10354,7 +10378,7 @@ async function handleStaffInteraction(interaction: Interaction): Promise<boolean
             await interaction.reply({ content: settingsUpdateFailedReply(), flags: MessageFlags.Ephemeral });
             return true;
         }
-        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "antiraid"), "✅ Anti-raid thresholds updated.");
+        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "antiraid"), "✅ Spam alert thresholds updated.");
         void logSettingsChange(actorId, (Object.entries(ANTI_RAID_SETTINGS) as Array<[AntiRaidSetting, { label: string }]>)
             .map(([key, spec]) => `${spec.label}: **${parsed.values[key]}**`).join("\n"));
         return true;
@@ -10366,33 +10390,25 @@ async function handleStaffInteraction(interaction: Interaction): Promise<boolean
             return true;
         }
         await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "antiraid"));
-        void logSettingsChange(actorId, `Anti-raid timeout length: **${minutes} min**`);
+        void logSettingsChange(actorId, `Spam alert timeout length: **${minutes} min**`);
         return true;
     }
     return true;
 }
 
-// ---------- Anti-raid ----------
+// ---------- Spam alerts (message abuse only; never kicks or bans) ----------
 
-function canUseRaidMode(guild: Guild): boolean {
-    return Boolean(guild.members.me?.permissions.has(PermissionFlagsBits.ManageGuild));
-}
-
-async function raiseAntiRaidAlert(guild: Guild, detection: AntiRaidDetection): Promise<void> {
+async function raiseAntiRaidAlert(_guild: Guild, detection: AntiRaidDetection): Promise<void> {
     const incident = antiRaidIncidents.create(detection);
-    appendAuditEvent("anti_raid_detected", { guildId: guild.id, incidentId: incident.id, kind: incident.kind, userIds: incident.userIds });
-    const staffRoles = incident.kind === "join_flood" ? botSettingsStore.get().staffRoleIds.slice(0, 5) : [];
-    const message = await postStaffAlert({
-        content: staffRoles.length ? staffRoles.map(id => `<@&${id}>`).join(" ") : "",
-        ...buildIncidentAlert(incident, canUseRaidMode(guild))
-    }, staffRoles);
+    appendAuditEvent("anti_raid_detected", { guildId: incident.guildId, incidentId: incident.id, kind: incident.kind, userIds: incident.userIds });
+    const message = await postStaffAlert(buildIncidentAlert(incident));
     if (message) {
         antiRaidIncidents.update(incident.id, entry => {
             entry.alertChannelId = message.channelId;
             entry.alertMessageId = message.id;
         });
     } else {
-        postOpsAlert("warn", "Anti-raid alert could not be delivered", { incidentId: incident.id, kind: incident.kind });
+        postOpsAlert("warn", "Spam alert could not be delivered", { incidentId: incident.id, kind: incident.kind });
     }
 }
 
@@ -10415,7 +10431,7 @@ async function handleAntiRaidAction(interaction: Interaction, guild: Guild): Pro
             if (incident.timedOutUserIds.includes(userId)) continue;
             const member = await guild.members.fetch(userId).catch(() => null);
             if (!member || member.user.bot || isStaffMember(member) || !member.moderatable) continue;
-            const ok = await member.timeout(minutes * 60_000, `Anti-raid incident ${incident.id} by ${interaction.user.username}`).then(() => true).catch(() => false);
+            const ok = await member.timeout(minutes * 60_000, `Spam alert ${incident.id} by ${interaction.user.username}`).then(() => true).catch(() => false);
             if (ok) affected.push(userId);
         }
         count = affected.length;
@@ -10427,32 +10443,12 @@ async function handleAntiRaidAction(interaction: Interaction, guild: Guild): Pro
     } else if (action === "untimeout") {
         for (const userId of incident.timedOutUserIds) {
             const member = await guild.members.fetch(userId).catch(() => null);
-            if (member && await member.timeout(null, `Anti-raid incident ${incident.id} undone by ${interaction.user.username}`).then(() => true).catch(() => false)) count += 1;
+            if (member && await member.timeout(null, `Spam alert ${incident.id} undone by ${interaction.user.username}`).then(() => true).catch(() => false)) count += 1;
         }
         antiRaidIncidents.update(incident.id, entry => {
             entry.timedOutUserIds = [];
             entry.actions.push({ type: "untimeout", byId: actorId, at: Date.now(), count });
         });
-    } else if (action === "raidmode_on" && incident.previousVerificationLevel === null) {
-        const previous = guild.verificationLevel;
-        const ok = previous >= GuildVerificationLevel.High
-            || await guild.setVerificationLevel(GuildVerificationLevel.High, `Raid mode by ${interaction.user.username}`).then(() => true).catch(() => false);
-        if (ok) {
-            antiRaidIncidents.update(incident.id, entry => {
-                entry.previousVerificationLevel = previous;
-                entry.actions.push({ type: "raidmode_on", byId: actorId, at: Date.now() });
-            });
-        } else note = "Raid mode failed — the bot needs Manage Server.";
-    } else if (action === "raidmode_off" && incident.previousVerificationLevel !== null) {
-        const previous = incident.previousVerificationLevel as GuildVerificationLevel;
-        const ok = guild.verificationLevel === previous
-            || await guild.setVerificationLevel(previous, `Raid mode ended by ${interaction.user.username}`).then(() => true).catch(() => false);
-        if (ok) {
-            antiRaidIncidents.update(incident.id, entry => {
-                entry.previousVerificationLevel = null;
-                entry.actions.push({ type: "raidmode_off", byId: actorId, at: Date.now() });
-            });
-        } else note = "Could not restore the verification level — the bot needs Manage Server.";
     } else if (action === "dismiss") {
         antiRaidIncidents.update(incident.id, entry => {
             entry.actions.push({ type: "dismiss", byId: actorId, at: Date.now() });
@@ -10460,7 +10456,7 @@ async function handleAntiRaidAction(interaction: Interaction, guild: Guild): Pro
     }
     appendAuditEvent("anti_raid_action", { guildId: guild.id, incidentId: incident.id, action, actorId, count });
     const updated = antiRaidIncidents.get(incident.id)!;
-    await interaction.editReply(buildIncidentAlert(updated, canUseRaidMode(guild)));
+    await interaction.editReply(buildIncidentAlert(updated));
     if (note) await interaction.followUp({ content: note, flags: MessageFlags.Ephemeral });
 }
 
@@ -10481,8 +10477,7 @@ async function runStaffHealthCheck(reason: string): Promise<{ issues: HealthIssu
         } else {
             const guildPerms: Array<[bigint, string, string]> = [
                 [PermissionFlagsBits.ManageRoles, "Manage Roles", "XP rank roles"],
-                [PermissionFlagsBits.ModerateMembers, "Timeout Members", "anti-raid timeouts"],
-                [PermissionFlagsBits.ManageGuild, "Manage Server", "raid mode"],
+                [PermissionFlagsBits.ModerateMembers, "Timeout Members", "spam alert timeouts"],
                 [PermissionFlagsBits.ManageChannels, "Manage Channels", "tickets and temp VCs"]
             ];
             for (const [flag, name, purpose] of guildPerms) {
@@ -10492,6 +10487,7 @@ async function runStaffHealthCheck(reason: string): Promise<{ issues: HealthIssu
                 { id: settings.channels.modAlerts, label: "Staff alerts", files: false },
                 { id: settings.channels.xpPanels, label: "XP panels", files: true },
                 { id: settings.channels.checkpointCards, label: "Player rating", files: true },
+                { id: WHATS_NEW_CHANNEL_ID, label: "What's New", files: false },
                 { id: JOIN_WELCOME_CHANNEL_ID, label: "Welcome", files: false },
                 { id: PERMANENT_TICKET_PANEL_CHANNEL_ID, label: "Ticket panel", files: false }
             ];
@@ -12680,6 +12676,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
     runAsyncWithBoundary("xpLeaderboardInit", refreshXpLeaderboardPanel);
     runAsyncWithBoundary("xpCratePanelInit", ensureXpCratePanel);
     runAsyncWithBoundary("checkpointCardPanelInit", ensureCheckpointCardPanel);
+    runAsyncWithBoundary("whatsNewPost", postWhatsNewIfNeeded);
     console.log(`[startup] ${buildStartupSummary(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {
         userTag: client.user?.tag,
@@ -12764,11 +12761,8 @@ client.on("guildBanAdd", ban => runAsyncWithBoundary("guildBanAdd", async () => 
 }));
 
 client.on("guildMemberAdd", member => runAsyncWithBoundary("guildMemberAdd", async () => {
+    // Every new member is welcome: joins are never rate-limited, flagged, kicked, or banned.
     trackGuildMemberChange(member, 1);
-    if (!member.user.bot && isFeatureEnabled("antiRaid")) {
-        const detection = antiRaidDetector.recordJoin(member.guild.id, member.id);
-        if (detection) runAsyncWithBoundary("antiRaidAlert", () => raiseAntiRaidAlert(member.guild, detection));
-    }
     const channel = await member.guild.channels.fetch(JOIN_WELCOME_CHANNEL_ID).catch(() => null);
     if (!channel || channel.type !== ChannelType.GuildText) {
         console.warn(`[welcome] Join channel ${JOIN_WELCOME_CHANNEL_ID} is missing or is not a text channel.`);

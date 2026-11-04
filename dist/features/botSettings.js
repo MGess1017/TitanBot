@@ -16,7 +16,7 @@ exports.DEFAULT_STAFF_ROLE_IDS = [
     "1506185163330031616"
 ];
 exports.FEATURE_TOGGLES = {
-    antiRaid: "Anti-raid alerts",
+    antiRaid: "Spam alerts",
     messageXp: "Message XP",
     voiceXp: "Voice XP",
     doubleXpDm: "2x unlock DMs",
@@ -26,7 +26,7 @@ exports.FEATURE_TOGGLES = {
     healthAlerts: "Health alerts"
 };
 exports.CHANNEL_SETTINGS = {
-    modAlerts: "Staff alerts (anti-raid + health)",
+    modAlerts: "Staff alerts (spam + health)",
     xpPanels: "Live XP leaderboard + FN Xp Panel",
     checkpointCards: "Arena Player Rating panel + cards"
 };
@@ -37,8 +37,6 @@ exports.REWARD_SETTINGS = {
     cosmeticPriceMultiplier: { label: "Cosmetic price multiplier", min: 0.1, max: 10 }
 };
 exports.ANTI_RAID_SETTINGS = {
-    joinThreshold: { label: "Join flood: joins", min: 3, max: 100 },
-    joinWindowSeconds: { label: "Join flood: window (seconds)", min: 5, max: 600 },
     spamRepeatThreshold: { label: "Spam: repeated messages", min: 3, max: 30 },
     spamWindowSeconds: { label: "Spam: window (seconds)", min: 5, max: 600 },
     mentionThreshold: { label: "Mention abuse: mentions", min: 3, max: 50 }
@@ -50,7 +48,7 @@ function defaultBotSettings(channelDefaults) {
         channels: { ...channelDefaults },
         features: Object.fromEntries(Object.keys(exports.FEATURE_TOGGLES).map(key => [key, true])),
         rewards: { messageXp: 100, voiceXpPerMinute: 100, voiceDoubleXpHours: 2, cosmeticPriceMultiplier: 1 },
-        antiRaid: { joinThreshold: 8, joinWindowSeconds: 30, spamRepeatThreshold: 5, spamWindowSeconds: 20, mentionThreshold: 6, timeoutMinutes: 10 },
+        antiRaid: { spamRepeatThreshold: 5, spamWindowSeconds: 20, mentionThreshold: 6, timeoutMinutes: 10 },
         updatedAt: 0,
         updatedBy: null
     };

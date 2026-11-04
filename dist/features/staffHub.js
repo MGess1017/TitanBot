@@ -40,7 +40,7 @@ exports.STAFF_IDS = {
     timeoutMinutes: "staff:set:timeout",
     alert: "antiraid"
 };
-const SETTINGS_VIEWS = { channels: "Channels", roles: "Staff Roles", features: "Features", rewards: "Rewards", antiraid: "Anti-Raid" };
+const SETTINGS_VIEWS = { channels: "Channels", roles: "Staff Roles", features: "Features", rewards: "Rewards", antiraid: "Spam Alerts" };
 function buildStaffHome(input) {
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(exports.STAFF_COLOR)
@@ -49,12 +49,12 @@ function buildStaffHome(input) {
         input.ticketId ? `You are in **ticket #${input.ticketId}**. Use **Case & Checklist** for history and the resolution checklist.` : "Open this desk inside a ticket to get its case history and resolution checklist.",
         "",
         `🎫 Open tickets: **${input.openTickets}**`,
-        `🚨 Anti-raid alerts (24h): **${input.recentIncidents}**`,
+        `🚨 Spam alerts (24h): **${input.recentIncidents}**`,
         `🩺 Health issues: **${input.healthIssues}**`
     ].join("\n"));
     const rows = [
         new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.caseLookup).setLabel(input.ticketId ? "Case & Checklist" : "Case Lookup").setEmoji("📁").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.kbSearch).setLabel("Search KB").setEmoji("🔎").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.kbAdd).setLabel("Add KB Article").setEmoji("📝").setStyle(discord_js_1.ButtonStyle.Secondary)).toJSON(),
-        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.settings}:channels`).setLabel("Settings").setEmoji("⚙️").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.health).setLabel("Health Check").setEmoji("🩺").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.incidents).setLabel("Anti-Raid Log").setEmoji("🚨").setStyle(discord_js_1.ButtonStyle.Secondary)).toJSON()
+        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.settings}:channels`).setLabel("Settings").setEmoji("⚙️").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.health).setLabel("Health Check").setEmoji("🩺").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.incidents).setLabel("Spam Alert Log").setEmoji("🚨").setStyle(discord_js_1.ButtonStyle.Secondary)).toJSON()
     ];
     return { embeds: [embed.toJSON()], components: rows };
 }
@@ -81,7 +81,7 @@ function buildSettingsPayload(settings, view) {
         }
     }
     else if (view === "roles") {
-        embed.setDescription(["Members with any of these roles (or Administrator) can use `/staff`, receive staff tools, and act on anti-raid alerts.", "",
+        embed.setDescription(["Members with any of these roles (or Administrator) can use `/staff`, receive staff tools, and act on spam alerts.", "",
             settings.staffRoleIds.map(id => `<@&${id}>`).join(" ") || "No staff roles — administrators only."].join("\n"));
         rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.RoleSelectMenuBuilder()
             .setCustomId(exports.STAFF_IDS.roles).setPlaceholder("Select staff roles").setMinValues(0).setMaxValues(25)
@@ -103,7 +103,8 @@ function buildSettingsPayload(settings, view) {
         embed.setDescription([
             ...Object.entries(botSettings_1.ANTI_RAID_SETTINGS).map(([key, spec]) => `**${spec.label}:** ${settings.antiRaid[key]}`),
             `**Alert timeout length:** ${settings.antiRaid.timeoutMinutes} min`,
-            `**Detection:** ${settings.features.antiRaid ? "On" : "Off"} • alerts go to <#${settings.channels.modAlerts}>`
+            `**Detection:** ${settings.features.antiRaid ? "On" : "Off"} • alerts go to <#${settings.channels.modAlerts}>`,
+            "New members are always welcome — joins are never tracked, and alerts never kick or ban."
         ].join("\n"));
         rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.antiRaidModal).setLabel("Edit Thresholds").setEmoji("✏️").setStyle(discord_js_1.ButtonStyle.Primary)).toJSON());
         rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
@@ -124,7 +125,7 @@ function buildRewardsModal(settings) {
     return new discord_js_1.ModalBuilder().setCustomId(exports.STAFF_IDS.rewardsSubmit).setTitle("Edit Rewards").addComponents(Object.entries(botSettings_1.REWARD_SETTINGS).map(([key, spec]) => numberInput(key, `${spec.label} (${spec.min}-${spec.max})`, settings.rewards[key])));
 }
 function buildAntiRaidModal(settings) {
-    return new discord_js_1.ModalBuilder().setCustomId(exports.STAFF_IDS.antiRaidSubmit).setTitle("Anti-Raid Thresholds").addComponents(Object.entries(botSettings_1.ANTI_RAID_SETTINGS).map(([key, spec]) => numberInput(key, `${spec.label} (${spec.min}-${spec.max})`, settings.antiRaid[key])));
+    return new discord_js_1.ModalBuilder().setCustomId(exports.STAFF_IDS.antiRaidSubmit).setTitle("Spam Alert Thresholds").addComponents(Object.entries(botSettings_1.ANTI_RAID_SETTINGS).map(([key, spec]) => numberInput(key, `${spec.label} (${spec.min}-${spec.max})`, settings.antiRaid[key])));
 }
 /** Parses modal numbers strictly; returns per-field errors instead of silently clamping. */
 function parseNumericFields(values, specs) {
@@ -166,7 +167,7 @@ function buildKbResults(query, hits) {
 }
 function buildCaseLookupPicker() {
     return {
-        embeds: [new discord_js_1.EmbedBuilder().setColor(exports.STAFF_COLOR).setTitle("📁 Case Lookup").setDescription("Pick a member to see their tickets, reports, warnings, and anti-raid alerts.").toJSON()],
+        embeds: [new discord_js_1.EmbedBuilder().setColor(exports.STAFF_COLOR).setTitle("📁 Case Lookup").setDescription("Pick a member to see their tickets, reports, warnings, and spam alerts.").toJSON()],
         components: [
             new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.UserSelectMenuBuilder().setCustomId(exports.STAFF_IDS.caseUser).setPlaceholder("Select a member")).toJSON(),
             new discord_js_1.ActionRowBuilder().addComponents(homeButton()).toJSON()
@@ -220,35 +221,29 @@ function healthSignature(issues) {
     return issues.map(issue => issue.key).sort().join("|");
 }
 const KIND_TITLE = {
-    join_flood: "🚨 Join Flood Detected",
     spam: "🚨 Repeated Spam Detected",
     mention_abuse: "🚨 Mention Abuse Detected"
 };
-function buildIncidentAlert(incident, raidModeAvailable) {
+function buildIncidentAlert(incident) {
     const acted = incident.actions[incident.actions.length - 1];
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(incident.actions.some(action => action.type === "dismiss") ? 0x6b7280 : 0xdc2626)
         .setTitle(KIND_TITLE[incident.kind])
         .setDescription(incident.detail.slice(0, 2000))
-        .addFields({ name: "Members", value: incident.userIds.slice(0, 20).map(id => `<@${id}>`).join(" ").slice(0, 1024) || "Unknown", inline: false }, { name: "Timed out", value: incident.timedOutUserIds.length ? incident.timedOutUserIds.slice(0, 20).map(id => `<@${id}>`).join(" ").slice(0, 1024) : "None", inline: true }, { name: "Raid mode", value: incident.previousVerificationLevel !== null ? "🔒 On" : "Off", inline: true }, { name: "History", value: incident.actions.slice(-5).map(action => `<t:${Math.floor(action.at / 1000)}:t> ${action.type.replace("_", " ")} by <@${action.byId}>${action.count !== undefined ? ` (${action.count})` : ""}`).join("\n") || "No action yet — review and choose below.", inline: false })
-        .setFooter({ text: `Incident ${incident.id} • every action here can be undone` })
+        .addFields({ name: "Members", value: incident.userIds.slice(0, 20).map(id => `<@${id}>`).join(" ").slice(0, 1024) || "Unknown", inline: false }, { name: "Timed out", value: incident.timedOutUserIds.length ? incident.timedOutUserIds.slice(0, 20).map(id => `<@${id}>`).join(" ").slice(0, 1024) : "None", inline: true }, { name: "History", value: incident.actions.slice(-5).map(action => `<t:${Math.floor(action.at / 1000)}:t> ${action.type} by <@${action.byId}>${action.count !== undefined ? ` (${action.count})` : ""}`).join("\n") || "No action yet — review and choose below.", inline: false })
+        .setFooter({ text: `Incident ${incident.id} • timeouts are reversible • the bot never kicks or bans from alerts` })
         .setTimestamp(acted?.at ?? incident.at);
     const id = incident.id;
     const timedOut = incident.timedOutUserIds.length > 0;
     const buttons = [
-        new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.alert}:timeout:${id}`).setLabel(incident.kind === "join_flood" ? "Timeout Joiners" : "Timeout").setStyle(discord_js_1.ButtonStyle.Danger).setDisabled(timedOut),
+        new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.alert}:timeout:${id}`).setLabel("Timeout").setStyle(discord_js_1.ButtonStyle.Danger).setDisabled(timedOut),
         new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.alert}:untimeout:${id}`).setLabel("Undo Timeout").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(!timedOut)
     ];
-    if (incident.kind === "join_flood" && raidModeAvailable) {
-        buttons.push(incident.previousVerificationLevel === null
-            ? new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.alert}:raidmode_on:${id}`).setLabel("Raid Mode").setEmoji("🔒").setStyle(discord_js_1.ButtonStyle.Danger)
-            : new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.alert}:raidmode_off:${id}`).setLabel("End Raid Mode").setEmoji("🔓").setStyle(discord_js_1.ButtonStyle.Success));
-    }
     buttons.push(new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.alert}:dismiss:${id}`).setLabel("False Alarm").setStyle(discord_js_1.ButtonStyle.Secondary));
     return { embeds: [embed.toJSON()], components: [new discord_js_1.ActionRowBuilder().addComponents(buttons).toJSON()] };
 }
 function buildIncidentLog(incidents) {
-    const embed = new discord_js_1.EmbedBuilder().setColor(exports.STAFF_COLOR).setTitle("🚨 Anti-Raid Log")
+    const embed = new discord_js_1.EmbedBuilder().setColor(exports.STAFF_COLOR).setTitle("🚨 Spam Alert Log")
         .setDescription(incidents.length ? incidents.map(incident => `\`${incident.id}\` <t:${Math.floor(incident.at / 1000)}:R> • **${incident.kind.replace("_", " ")}** • ${incident.userIds.length} member(s)${incident.actions.length ? ` • last: ${incident.actions[incident.actions.length - 1].type.replace("_", " ")}` : " • no action"}`).join("\n").slice(0, 4000) : "No incidents recorded.");
     return { embeds: [embed.toJSON()], components: [new discord_js_1.ActionRowBuilder().addComponents(homeButton()).toJSON()] };
 }

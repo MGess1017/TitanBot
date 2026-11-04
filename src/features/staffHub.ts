@@ -35,7 +35,7 @@ export const STAFF_IDS = {
 } as const;
 
 export type SettingsView = "channels" | "roles" | "features" | "rewards" | "antiraid";
-const SETTINGS_VIEWS: Record<SettingsView, string> = { channels: "Channels", roles: "Staff Roles", features: "Features", rewards: "Rewards", antiraid: "Anti-Raid" };
+const SETTINGS_VIEWS: Record<SettingsView, string> = { channels: "Channels", roles: "Staff Roles", features: "Features", rewards: "Rewards", antiraid: "Spam Alerts" };
 
 type Row = APIActionRowComponent<APIComponentInMessageActionRow>;
 export type StaffPayload = { embeds: APIEmbed[]; components: Row[] };
@@ -48,7 +48,7 @@ export function buildStaffHome(input: { ticketId: number | null; openTickets: nu
             input.ticketId ? `You are in **ticket #${input.ticketId}**. Use **Case & Checklist** for history and the resolution checklist.` : "Open this desk inside a ticket to get its case history and resolution checklist.",
             "",
             `🎫 Open tickets: **${input.openTickets}**`,
-            `🚨 Anti-raid alerts (24h): **${input.recentIncidents}**`,
+            `🚨 Spam alerts (24h): **${input.recentIncidents}**`,
             `🩺 Health issues: **${input.healthIssues}**`
         ].join("\n"));
     const rows: Row[] = [
@@ -60,7 +60,7 @@ export function buildStaffHome(input: { ticketId: number | null; openTickets: nu
         new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(`${STAFF_IDS.settings}:channels`).setLabel("Settings").setEmoji("⚙️").setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(STAFF_IDS.health).setLabel("Health Check").setEmoji("🩺").setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(STAFF_IDS.incidents).setLabel("Anti-Raid Log").setEmoji("🚨").setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(STAFF_IDS.incidents).setLabel("Spam Alert Log").setEmoji("🚨").setStyle(ButtonStyle.Secondary)
         ).toJSON()
     ];
     return { embeds: [embed.toJSON()], components: rows };
@@ -90,7 +90,7 @@ export function buildSettingsPayload(settings: Readonly<BotSettings>, view: Sett
                 .setDefaultChannels(settings.channels[key])).toJSON());
         }
     } else if (view === "roles") {
-        embed.setDescription(["Members with any of these roles (or Administrator) can use `/staff`, receive staff tools, and act on anti-raid alerts.", "",
+        embed.setDescription(["Members with any of these roles (or Administrator) can use `/staff`, receive staff tools, and act on spam alerts.", "",
             settings.staffRoleIds.map(id => `<@&${id}>`).join(" ") || "No staff roles — administrators only."].join("\n"));
         rows.push(new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(new RoleSelectMenuBuilder()
             .setCustomId(STAFF_IDS.roles).setPlaceholder("Select staff roles").setMinValues(0).setMaxValues(25)
@@ -111,7 +111,8 @@ export function buildSettingsPayload(settings: Readonly<BotSettings>, view: Sett
         embed.setDescription([
             ...(Object.entries(ANTI_RAID_SETTINGS) as Array<[AntiRaidSetting, { label: string }]>).map(([key, spec]) => `**${spec.label}:** ${settings.antiRaid[key]}`),
             `**Alert timeout length:** ${settings.antiRaid.timeoutMinutes} min`,
-            `**Detection:** ${settings.features.antiRaid ? "On" : "Off"} • alerts go to <#${settings.channels.modAlerts}>`
+            `**Detection:** ${settings.features.antiRaid ? "On" : "Off"} • alerts go to <#${settings.channels.modAlerts}>`,
+            "New members are always welcome — joins are never tracked, and alerts never kick or ban."
         ].join("\n"));
         rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(STAFF_IDS.antiRaidModal).setLabel("Edit Thresholds").setEmoji("✏️").setStyle(ButtonStyle.Primary)).toJSON());
@@ -138,7 +139,7 @@ export function buildRewardsModal(settings: Readonly<BotSettings>): ModalBuilder
 }
 
 export function buildAntiRaidModal(settings: Readonly<BotSettings>): ModalBuilder {
-    return new ModalBuilder().setCustomId(STAFF_IDS.antiRaidSubmit).setTitle("Anti-Raid Thresholds").addComponents(
+    return new ModalBuilder().setCustomId(STAFF_IDS.antiRaidSubmit).setTitle("Spam Alert Thresholds").addComponents(
         (Object.entries(ANTI_RAID_SETTINGS) as Array<[AntiRaidSetting, { label: string; min: number; max: number }]>).map(([key, spec]) =>
             numberInput(key, `${spec.label} (${spec.min}-${spec.max})`, settings.antiRaid[key])));
 }
@@ -188,7 +189,7 @@ export function buildKbResults(query: string, hits: KbSearchHit[]): StaffPayload
 
 export function buildCaseLookupPicker(): StaffPayload {
     return {
-        embeds: [new EmbedBuilder().setColor(STAFF_COLOR).setTitle("📁 Case Lookup").setDescription("Pick a member to see their tickets, reports, warnings, and anti-raid alerts.").toJSON()],
+        embeds: [new EmbedBuilder().setColor(STAFF_COLOR).setTitle("📁 Case Lookup").setDescription("Pick a member to see their tickets, reports, warnings, and spam alerts.").toJSON()],
         components: [
             new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(new UserSelectMenuBuilder().setCustomId(STAFF_IDS.caseUser).setPlaceholder("Select a member")).toJSON(),
             new ActionRowBuilder<ButtonBuilder>().addComponents(homeButton()).toJSON()
@@ -250,12 +251,11 @@ export function healthSignature(issues: HealthIssue[]): string {
 }
 
 const KIND_TITLE: Record<AntiRaidIncident["kind"], string> = {
-    join_flood: "🚨 Join Flood Detected",
     spam: "🚨 Repeated Spam Detected",
     mention_abuse: "🚨 Mention Abuse Detected"
 };
 
-export function buildIncidentAlert(incident: AntiRaidIncident, raidModeAvailable: boolean): StaffPayload {
+export function buildIncidentAlert(incident: AntiRaidIncident): StaffPayload {
     const acted = incident.actions[incident.actions.length - 1];
     const embed = new EmbedBuilder()
         .setColor(incident.actions.some(action => action.type === "dismiss") ? 0x6b7280 : 0xdc2626)
@@ -264,28 +264,22 @@ export function buildIncidentAlert(incident: AntiRaidIncident, raidModeAvailable
         .addFields(
             { name: "Members", value: incident.userIds.slice(0, 20).map(id => `<@${id}>`).join(" ").slice(0, 1024) || "Unknown", inline: false },
             { name: "Timed out", value: incident.timedOutUserIds.length ? incident.timedOutUserIds.slice(0, 20).map(id => `<@${id}>`).join(" ").slice(0, 1024) : "None", inline: true },
-            { name: "Raid mode", value: incident.previousVerificationLevel !== null ? "🔒 On" : "Off", inline: true },
-            { name: "History", value: incident.actions.slice(-5).map(action => `<t:${Math.floor(action.at / 1000)}:t> ${action.type.replace("_", " ")} by <@${action.byId}>${action.count !== undefined ? ` (${action.count})` : ""}`).join("\n") || "No action yet — review and choose below.", inline: false }
+            { name: "History", value: incident.actions.slice(-5).map(action => `<t:${Math.floor(action.at / 1000)}:t> ${action.type} by <@${action.byId}>${action.count !== undefined ? ` (${action.count})` : ""}`).join("\n") || "No action yet — review and choose below.", inline: false }
         )
-        .setFooter({ text: `Incident ${incident.id} • every action here can be undone` })
+        .setFooter({ text: `Incident ${incident.id} • timeouts are reversible • the bot never kicks or bans from alerts` })
         .setTimestamp(acted?.at ?? incident.at);
     const id = incident.id;
     const timedOut = incident.timedOutUserIds.length > 0;
     const buttons = [
-        new ButtonBuilder().setCustomId(`${STAFF_IDS.alert}:timeout:${id}`).setLabel(incident.kind === "join_flood" ? "Timeout Joiners" : "Timeout").setStyle(ButtonStyle.Danger).setDisabled(timedOut),
+        new ButtonBuilder().setCustomId(`${STAFF_IDS.alert}:timeout:${id}`).setLabel("Timeout").setStyle(ButtonStyle.Danger).setDisabled(timedOut),
         new ButtonBuilder().setCustomId(`${STAFF_IDS.alert}:untimeout:${id}`).setLabel("Undo Timeout").setStyle(ButtonStyle.Secondary).setDisabled(!timedOut)
     ];
-    if (incident.kind === "join_flood" && raidModeAvailable) {
-        buttons.push(incident.previousVerificationLevel === null
-            ? new ButtonBuilder().setCustomId(`${STAFF_IDS.alert}:raidmode_on:${id}`).setLabel("Raid Mode").setEmoji("🔒").setStyle(ButtonStyle.Danger)
-            : new ButtonBuilder().setCustomId(`${STAFF_IDS.alert}:raidmode_off:${id}`).setLabel("End Raid Mode").setEmoji("🔓").setStyle(ButtonStyle.Success));
-    }
     buttons.push(new ButtonBuilder().setCustomId(`${STAFF_IDS.alert}:dismiss:${id}`).setLabel("False Alarm").setStyle(ButtonStyle.Secondary));
     return { embeds: [embed.toJSON()], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons).toJSON()] };
 }
 
 export function buildIncidentLog(incidents: AntiRaidIncident[]): StaffPayload {
-    const embed = new EmbedBuilder().setColor(STAFF_COLOR).setTitle("🚨 Anti-Raid Log")
+    const embed = new EmbedBuilder().setColor(STAFF_COLOR).setTitle("🚨 Spam Alert Log")
         .setDescription(incidents.length ? incidents.map(incident =>
             `\`${incident.id}\` <t:${Math.floor(incident.at / 1000)}:R> • **${incident.kind.replace("_", " ")}** • ${incident.userIds.length} member(s)${incident.actions.length ? ` • last: ${incident.actions[incident.actions.length - 1].type.replace("_", " ")}` : " • no action"}`
         ).join("\n").slice(0, 4000) : "No incidents recorded.");
