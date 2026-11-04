@@ -13,6 +13,7 @@ exports.getSirGruRaidBonuses = getSirGruRaidBonuses;
 exports.ensureSirGruFollower = ensureSirGruFollower;
 exports.awardSirGruRaidXp = awardSirGruRaidXp;
 exports.savePoints = savePoints;
+exports.getPointsSaveHealth = getPointsSaveHealth;
 exports.withDeferredPointsSave = withDeferredPointsSave;
 exports.getPointsSaveDiagnostics = getPointsSaveDiagnostics;
 exports.getXpPersistenceSnapshot = getXpPersistenceSnapshot;
@@ -63,6 +64,7 @@ const path_1 = __importDefault(require("path"));
 const achievements_1 = require("./game/achievements");
 const xpCrates_1 = require("./game/xpCrates");
 const checkpointRating_1 = require("./game/checkpointRating");
+const cosmetics_1 = require("./game/cosmetics");
 exports.FOLLOWER_SUPPORT_ROLES = {
     balanced: { label: "Balanced", description: "Standard support across all raid bonuses." },
     scout: { label: "Scout", description: "25% stronger follower extraction bonus; 25% less follower token bonus." },
@@ -261,6 +263,8 @@ function defaultUserState() {
         lastDaily: 0,
         latestXpCrate: null,
         checkpointProfile: null,
+        cosmetics: (0, cosmetics_1.defaultCosmeticState)(),
+        preferences: (0, cosmetics_1.defaultProfilePreferences)(),
         dailyStreak: 0,
         achievements: [],
         achievementIds: [],
@@ -362,6 +366,7 @@ function shouldSkipPointsPersistence() {
 let pointsSaveBatchDepth = 0;
 let pointsSaveBatchDirty = false;
 let deferredPointsSaves = 0;
+const pointsSaveHealth = { failures: 0, lastFailureAt: 0, lastSuccessAt: 0, lastError: "" };
 function savePoints() {
     if (pointsSaveBatchDepth > 0) {
         pointsSaveBatchDirty = true;
@@ -371,7 +376,19 @@ function savePoints() {
     // Runtime tests can disable disk writes to avoid polluting live JSON stores.
     if (shouldSkipPointsPersistence())
         return;
-    writePointsFileAtomic({ users: exports.points });
+    try {
+        writePointsFileAtomic({ users: exports.points });
+        pointsSaveHealth.lastSuccessAt = Date.now();
+    }
+    catch (error) {
+        pointsSaveHealth.failures += 1;
+        pointsSaveHealth.lastFailureAt = Date.now();
+        pointsSaveHealth.lastError = error instanceof Error ? error.message : String(error);
+        throw error;
+    }
+}
+function getPointsSaveHealth() {
+    return pointsSaveHealth;
 }
 function withDeferredPointsSave(fn) {
     pointsSaveBatchDepth += 1;
@@ -414,6 +431,8 @@ function getXpPersistenceSnapshot(userId) {
     };
 }
 const validatedCheckpointProfiles = new WeakSet();
+const validatedCosmetics = new WeakSet();
+const validatedPreferences = new WeakSet();
 function ensureUser(userId) {
     if (!exports.points[userId]) {
         exports.points[userId] = defaultUserState();
@@ -473,6 +492,14 @@ function ensureUser(userId) {
         user.checkpointProfile = (0, checkpointRating_1.normalizeCheckpointProfile)(user.checkpointProfile);
         if (user.checkpointProfile)
             validatedCheckpointProfiles.add(user.checkpointProfile);
+    }
+    if (!user.cosmetics || !validatedCosmetics.has(user.cosmetics)) {
+        user.cosmetics = (0, cosmetics_1.normalizeCosmeticState)(user.cosmetics);
+        validatedCosmetics.add(user.cosmetics);
+    }
+    if (!user.preferences || !validatedPreferences.has(user.preferences)) {
+        user.preferences = (0, cosmetics_1.normalizeProfilePreferences)(user.preferences);
+        validatedPreferences.add(user.preferences);
     }
     if (user.dailyStreak === undefined)
         user.dailyStreak = 0;

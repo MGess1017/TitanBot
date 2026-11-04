@@ -6,7 +6,7 @@ import ts from "typescript";
 import { EmbedBuilder } from "discord.js";
 import { addXpCrateProfile } from "../features/xpCratePanel";
 import type { XpCrateReward } from "../game/xpCrates";
-import { accrueVoiceXp, getVoiceXpMultiplier, isVoiceXpEligible, VOICE_XP_DOUBLE_AFTER_MS, type VoiceXpAccrualState } from "./voiceXp";
+import { accrueVoiceXp, getVoiceXpConfig, getVoiceXpMultiplier, isVoiceXpEligible, VOICE_XP_DOUBLE_AFTER_MS, type VoiceXpAccrualState } from "./voiceXp";
 
 const minute = 60_000;
 const threshold = VOICE_XP_DOUBLE_AFTER_MS;
@@ -86,6 +86,7 @@ const context = vm.createContext({
     getVoiceXpMultiplier,
     isVoiceXpEligible,
     scheduleXpLeaderboardUpdate: () => undefined,
+    isFeatureEnabled: () => true,
     appendAuditEvent: () => undefined,
     runAsyncWithBoundary: (_name: string, task: () => Promise<void>) => { void task(); },
     notifyVoiceDoubleXpUnlock: async (session: TestSession) => { unlockNotifications.push(session.userId); },
@@ -238,6 +239,8 @@ async function verifyXpStatus(): Promise<void> {
     let dmClosed = false;
     const dmContext = vm.createContext({
         EmbedBuilder,
+        getVoiceXpConfig,
+        shouldSendDoubleXpDm: () => true,
         client: { users: { fetch: async (id: string) => {
             fetched.push(id);
             return { send: async (payload: { embeds: EmbedBuilder[] }) => {

@@ -64,6 +64,7 @@ async function verifyThresholdRoleApplication(botSource: string): Promise<void> 
         runAsyncWithBoundary: (_context: string, task: () => Promise<unknown>) => { void task().catch(() => undefined); },
         notifyXpThresholdUnlock: async () => undefined,
         scheduleXpLeaderboardUpdate: () => undefined,
+        isFeatureEnabled: () => true,
         accrueVoiceXp,
         getCurrentVoiceXpMultiplier: () => 1,
         appendAuditEvent: () => undefined,

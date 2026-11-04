@@ -215,7 +215,8 @@ export function buildSlashCommands(input: {
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addStringOption(o => o.setName("user_id").setDescription("User ID to unban").setRequired(true))
             .addStringOption(o => o.setName("reason").setDescription("Optional unban reason").setRequired(false)),
-        new SlashCommandBuilder().setName("xpstats").setDescription("Show your XP stats"),
+        new SlashCommandBuilder().setName("profile").setDescription("Open your FNT profile: progression, achievements, collections, and preferences")
+            .addUserOption(o => o.setName("user").setDescription("View another member's profile").setRequired(false)),
         new SlashCommandBuilder().setName("health").setDescription("Admin: runtime and persistence diagnostics")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName("balancereport").setDescription("Admin: weekly raid economy telemetry snapshot")
@@ -408,8 +409,7 @@ export function buildSlashCommands(input: {
             .addIntegerOption(o => o.setName("id").setDescription("Giveaway id").setRequired(true)),
         new SlashCommandBuilder().setName("giveawaylist").setDescription("Admin: list recent giveaways")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName("giveaways").setDescription("Admin: alias for giveaway list")
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName("staff").setDescription("Staff desk: case history, checklists, knowledge base, settings, and health"),
         new SlashCommandBuilder().setName("setmodlog").setDescription("Set the moderation log channel")
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addChannelOption(o => o.setName("channel").setDescription("Log channel").addChannelTypes(ChannelType.GuildText).setRequired(true)),

@@ -57,6 +57,7 @@ export type TicketRecord = {
     events?: Array<{ at: number; actorId: string; type: string; detail: string }>;
     slaPausedAt?: number | null;
     slaPausedMs?: number;
+    checklist?: Record<string, { byId: string; at: number }>;
 };
 
 export type TicketStoreState = {

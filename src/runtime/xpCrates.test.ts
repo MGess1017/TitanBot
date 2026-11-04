@@ -122,7 +122,8 @@ async function verifyClaimButton(): Promise<void> {
     const failures: string[] = [];
     const context = vm.createContext({
         XP_CRATE_BUTTON_ID,
-        XP_LEADERBOARD_CHANNEL_ID: "1527571592320651285",
+        getXpPanelChannelId: () => "1527571592320651285",
+        isFeatureEnabled: () => true,
         MessageFlags,
         ensureUser: () => user,
         claimXpCrate: (state: XpCrateState) => {

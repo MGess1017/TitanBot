@@ -15,7 +15,10 @@ import {
     GatewayIntentBits,
     Guild,
     GuildMember,
+    GuildVerificationLevel,
+    Message,
     ModalBuilder,
+    type APIInteractionGuildMember,
     MessageFlags,
     PermissionFlagsBits,
     StringSelectMenuBuilder,
@@ -70,6 +73,7 @@ import {
     PMC_PRESTIGE_LEVEL_REQUIREMENT,
     pmcBar,
     getPoints,
+    getPointsSaveHealth,
     getTokens,
     getXPLevel,
     points,
@@ -156,7 +160,7 @@ import {
 import { adjustPlayerCounts, buildPlayerCountEmbed, countPlayers, type PlayerCounts } from "./runtime/playerCounts";
 import { upsertXpLeaderboardPanel, XP_LEADERBOARD_CHANNEL_ID } from "./features/xpLeaderboard";
 import { addXpCrateProfile, buildXpCrateRewardEmbed, upsertXpCratePanel, xpCrateAttachment, XP_CRATE_BUTTON_ID } from "./features/xpCratePanel";
-import { claimXpCrate, type XpCrateId } from "./game/xpCrates";
+import { claimXpCrate, getXpCrateDefinition, XP_CRATE_COOLDOWN_MS, type XpCrateId } from "./game/xpCrates";
 import {
     buildCheckpointBreakdownEmbed, buildCheckpointCardMessage, buildCheckpointModal, CHECKPOINT_EDIT_PREFIX,
     CHECKPOINT_MODAL_PREFIX, CHECKPOINT_VIEW_ID, describeCheckpointProgress, renderCheckpointCard,
@@ -169,8 +173,25 @@ import {
 
 const CHECKPOINT_CARD_CHANNEL_ID = process.env.CHECKPOINT_CARD_CHANNEL_ID || "1567414626273202286";
 const checkpointCardQueues = new Map<string, Promise<void>>();
+import {
+    BotSettingsStore, defaultBotSettings, FEATURE_TOGGLES, REWARD_SETTINGS, ANTI_RAID_SETTINGS,
+    type ChannelSetting, type FeatureToggle, type RewardSetting, type AntiRaidSetting
+} from "./features/botSettings";
+import { AntiRaidDetector, AntiRaidIncidentStore, type AntiRaidDetection } from "./features/antiRaid";
+import { buildCaseHistoryLines, getChecklist, KnowledgeBaseStore, normalizeTicketChecklist, searchKnowledgeBase } from "./features/staffDesk";
+import {
+    buildAntiRaidModal, buildCaseLookupPicker, buildCaseView, buildHealthPayload, buildIncidentAlert, buildIncidentLog,
+    buildKbAddModal, buildKbResults, buildKbSearchModal, buildRewardsModal, buildSettingsPayload, buildStaffHome,
+    healthSignature, parseNumericFields, STAFF_IDS, type HealthIssue, type SettingsView, type StaffPayload
+} from "./features/staffHub";
+import {
+    buildProfileComponents, buildProfileEmbed, buildShopPayload as buildCosmeticShopPayload, PROFILE_IDS, PROFILE_PAGES,
+    type ProfilePage, type ProfileSnapshot
+} from "./features/profileHub";
+import { equipCosmetic, purchaseCosmetic, type CosmeticKind } from "./game/cosmetics";
+import { calculateCheckpointRating, getCheckpointTier } from "./game/checkpointRating";
 import { rejectIfRateLimited } from "./runtime/rateLimit";
-import { accrueVoiceXp, getVoiceXpMultiplier, isVoiceXpEligible, type VoiceXpAccrualState } from "./runtime/voiceXp";
+import { accrueVoiceXp, configureVoiceXp, getVoiceXpConfig, getVoiceXpMultiplier, isVoiceXpEligible, type VoiceXpAccrualState } from "./runtime/voiceXp";
 import { sanitizeTranscriptLine } from "./services/ticketText";
 import {
     archiveTicketByChannel as stateArchiveTicketByChannel,
@@ -293,6 +314,53 @@ const BOT_FEATURE_BRIEF_CHANNEL_ID = process.env.BOT_FEATURE_BRIEF_CHANNEL_ID ||
 const WELCOME_PANEL_CHANNEL_ID = process.env.WELCOME_PANEL_CHANNEL_ID || DEFAULT_WELCOME_PANEL_CHANNEL_ID;
 const MOD_LOG_CHANNEL_ID = process.env.MOD_LOG_CHANNEL_ID || DEFAULT_MOD_LOG_CHANNEL_ID;
 const DEPLOYMENT_SUMMARY_CHANNEL_ID = process.env.DEPLOYMENT_SUMMARY_CHANNEL_ID || DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID;
+const BOT_SETTINGS_FILE = path.resolve(__dirname, "../src/data/bot-settings.json");
+const KNOWLEDGE_BASE_FILE = path.resolve(__dirname, "../src/data/knowledge-base.json");
+const ANTI_RAID_INCIDENT_FILE = path.resolve(__dirname, "../src/data/anti-raid-incidents.json");
+type SaveHealthEntry = { failures: number; lastFailureAt: number; lastSuccessAt: number; lastError: string };
+const SAVE_HEALTH = new Map<string, SaveHealthEntry>();
+const ASYNC_FAILURES: Array<{ context: string; at: number; reason: string }> = [];
+const PROCESS_STARTED_AT = Date.now();
+
+function recordSaveResult(store: string, ok: boolean, error?: unknown): void {
+    const entry = SAVE_HEALTH.get(store) || { failures: 0, lastFailureAt: 0, lastSuccessAt: 0, lastError: "" };
+    if (ok) entry.lastSuccessAt = Date.now();
+    else {
+        entry.failures += 1;
+        entry.lastFailureAt = Date.now();
+        entry.lastError = error instanceof Error ? error.message : String(error ?? "unknown error");
+    }
+    SAVE_HEALTH.set(store, entry);
+}
+
+const BOT_SETTINGS_DEFAULTS = defaultBotSettings({
+    modAlerts: MOD_LOG_CHANNEL_ID,
+    xpPanels: XP_LEADERBOARD_CHANNEL_ID,
+    checkpointCards: CHECKPOINT_CARD_CHANNEL_ID
+});
+BOT_SETTINGS_DEFAULTS.rewards.messageXp = MESSAGE_XP_GAIN;
+const botSettingsStore = new BotSettingsStore(BOT_SETTINGS_FILE, BOT_SETTINGS_DEFAULTS, (ok, error) => recordSaveResult("settings", ok, error));
+const knowledgeBase = new KnowledgeBaseStore(KNOWLEDGE_BASE_FILE);
+const antiRaidIncidents = new AntiRaidIncidentStore(ANTI_RAID_INCIDENT_FILE, true, (ok, error) => recordSaveResult("antiRaid", ok, error));
+const antiRaidDetector = new AntiRaidDetector(() => botSettingsStore.get().antiRaid);
+
+function isFeatureEnabled(feature: FeatureToggle): boolean {
+    return botSettingsStore.get().features[feature];
+}
+
+function getXpPanelChannelId(): string {
+    return botSettingsStore.get().channels.xpPanels;
+}
+
+function getMessageXpGain(): number {
+    return Math.floor(botSettingsStore.get().rewards.messageXp);
+}
+
+function applyRewardSettings(): void {
+    const rewards = botSettingsStore.get().rewards;
+    configureVoiceXp({ perMinute: rewards.voiceXpPerMinute, doubleAfterMs: rewards.voiceDoubleXpHours * 60 * 60 * 1000 });
+}
+applyRewardSettings();
 const TICKET_EXPORT_WEBHOOK_URL = process.env.TICKET_EXPORT_WEBHOOK_URL || "";
 const ARMY_ICON_URL = "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1fa96.png";
 const OPS_ALERT_COOLDOWN_MS = 60 * 1000;
@@ -1200,6 +1268,8 @@ function runAsyncWithBoundary(context: string, task: () => Promise<unknown>): vo
         const reason = clampText(toSafeString(error), 240);
         console.error(`[async:${context}] ${reason}`);
         appendAuditEvent("async_task_failed", { context, reason });
+        ASYNC_FAILURES.push({ context, at: Date.now(), reason });
+        if (ASYNC_FAILURES.length > 50) ASYNC_FAILURES.splice(0, ASYNC_FAILURES.length - 50);
     });
 }
 
@@ -2174,6 +2244,7 @@ type TicketRowLike = {
     slaPausedMs?: unknown;
     csat?: unknown;
     slaPolicy?: unknown;
+    checklist?: unknown;
 };
 
 type ComponentLike = {
@@ -2290,6 +2361,7 @@ function normalizeTicketFromRaw(ticketRaw: TicketRowLike): TicketEntry | null {
         }).filter(event => event.detail).slice(-100) : [],
         slaPausedAt: typeof ticketRaw.slaPausedAt === "number" ? ticketRaw.slaPausedAt : null,
         slaPausedMs: typeof ticketRaw.slaPausedMs === "number" ? Math.max(0, ticketRaw.slaPausedMs) : 0,
+        checklist: normalizeTicketChecklist(ticketRaw.checklist),
         csat,
         slaPolicy: {
             name: typeof rawSla?.name === "string" ? rawSla.name : derivedPolicy.name,
@@ -2386,9 +2458,11 @@ function saveTicketStore(): boolean {
     ticketStore.version = previousVersion + 1;
     try {
         writeJsonAtomic(TICKET_DATA_FILE, ticketStore);
+        recordSaveResult("tickets", true);
         return true;
-    } catch {
+    } catch (error) {
         ticketStore.version = previousVersion;
+        recordSaveResult("tickets", false, error);
         return false;
     }
 }
@@ -3649,7 +3723,7 @@ const CASINO_GAME_ORDER: CasinoGameKey[] = [
     "hilo",
     "keno"
 ];
-const PRIVATE_SLASH_COMMANDS = new Set(["reportintake", "reportprofile", "reportresolve", "reportanalytics"]);
+const PRIVATE_SLASH_COMMANDS = new Set(["reportintake", "reportprofile", "reportresolve", "reportanalytics", "staff"]);
 
 const XP_ROLE_SYNC_RUNNING_GUILDS = new Set<string>();
 const XP_ROLE_SYNC_RUNNING_MEMBERS = new Set<string>();
@@ -4279,7 +4353,7 @@ function awardConnectedVoiceXp(session: VoiceXpSession, now = Date.now()): void 
         session.doubleXpNotified = true;
         runAsyncWithBoundary("voiceDoubleXpNotification", () => notifyVoiceDoubleXpUnlock(session));
     }
-    if (accrued.xp <= 0) return;
+    if (accrued.xp <= 0 || !isFeatureEnabled("voiceXp")) return;
 
     const award = awardEngagementXp(session.guild, session.userId, accrued.xp, accrued.minutes);
     appendAuditEvent("voice_engagement_xp", {
@@ -4292,17 +4366,25 @@ function awardConnectedVoiceXp(session: VoiceXpSession, now = Date.now()): void 
 }
 
 async function notifyVoiceDoubleXpUnlock(session: VoiceXpSession): Promise<void> {
+    if (!shouldSendDoubleXpDm(session.userId)) return;
+    const config = getVoiceXpConfig();
+    const hours = config.doubleAfterMs / 3_600_000;
     const user = await client.users.fetch(session.userId);
     await user.send({
         embeds: [new EmbedBuilder()
             .setColor(0x9b59b6)
             .setTitle("Double Voice XP Unlocked!")
-            .setDescription(`You've stayed in voice for over 2 continuous hours in **${session.guild.name}**.\n`
-                + "**2x voice XP is active: 200 XP/minute.**\n"
-                + "Switching VCs keeps your bonus. Disconnecting resets it to 1x. Message XP is unchanged.")],
+            .setDescription(`You've stayed in voice for over ${Number.isInteger(hours) ? hours : hours.toFixed(2)} continuous hour${hours === 1 ? "" : "s"} in **${session.guild.name}**.\n`
+                + `**2x voice XP is active: ${(config.perMinute * 2).toLocaleString("en-US")} XP/minute.**\n`
+                + "Switching VCs keeps your bonus. Disconnecting resets it to 1x. Message XP is unchanged.\n"
+                + "-# Turn these DMs off any time in /profile → Preferences.")],
         allowedMentions: { parse: [] }
     });
     appendAuditEvent("voice_double_xp_notified", { guildId: session.guild.id, userId: session.userId });
+}
+
+function shouldSendDoubleXpDm(userId: string): boolean {
+    return isFeatureEnabled("doubleXpDm") && ensureUser(userId).preferences.doubleXpDm;
 }
 
 function processVoiceXpSessions(now = Date.now()): void {
@@ -5003,7 +5085,7 @@ function helpPageGeneral() {
             },
             {
                 name: "📈 Progress and Economy",
-                value: "• `/xp` — engagement XP panel\n\n• `/xpstats` — detailed progression stats\n\n• `/xproles` — themed rank role directory\n\n• `/xprolesync` — admin force-sync all XP roles\n\n• `/pmc` — persistent raid profile\n\n• `/leaderboard` — top XP players\n\n• `/daily` — streak reward claim"
+                value: "• `/xp` — engagement XP panel\n\n• `/profile` — progression, achievements, collections, activity, cosmetics\n\n• `/xproles` — themed rank role directory\n\n• `/xprolesync` — admin force-sync all XP roles\n\n• `/pmc` — persistent raid profile\n\n• `/leaderboard` — top XP players\n\n• `/daily` — streak reward claim"
             },
             {
                 name: "🗂️ Directory Topics",
@@ -5023,11 +5105,11 @@ async function helpPageXP(guild?: Guild | null) {
         .addFields(
             {
                 name: "Command Summary",
-                value: "• `/xp` — compact level and progress bar\n\n• `/xpstats` — detailed engagement + PMC progression\n\n• `/xproles` — view 5 themed role sections\n\n• `/xprolesync` — admin force-sync rank roles now\n\n• `/leaderboard` — server-wide engagement XP ranking\n\n• `/daily` — claim streak bonus"
+                value: "• `/xp` — compact level and progress bar\n\n• `/profile` — unified profile with progression, collections, and the FNT cosmetic shop\n\n• `/xproles` — view 5 themed role sections\n\n• `/xprolesync` — admin force-sync rank roles now\n\n• `/leaderboard` — server-wide engagement XP ranking\n\n• `/daily` — claim streak bonus"
             },
             {
                 name: "🪖 Progression Rules",
-                value: `• Each eligible non-bot message grants ${MESSAGE_XP_GAIN} engagement XP.\n\n• XP role progression ends at 50,000,000 XP.\n\n• Voice time and achievements are tracked in /xpstats.\n\n• Raid XP is tracked separately in your PMC profile.`
+                value: `• Each eligible non-bot message grants ${getMessageXpGain().toLocaleString()} engagement XP.\n\n• XP role progression ends at 50,000,000 XP.\n\n• Voice time and achievements are tracked in /profile.\n\n• Raid XP is tracked separately in your PMC profile.`
             }
         );
 
@@ -5116,7 +5198,11 @@ function helpPageModeration() {
             },
             {
                 name: "Support Workflow",
-                value: "• Tickets are handled through claim, assignment, workflow updates, archive, reopen, and permanent resolution stages.\n\n• SLA monitoring and audit logs are active for support operations quality."
+                value: "• Tickets are handled through claim, assignment, workflow updates, archive, reopen, and permanent resolution stages.\n\n• SLA monitoring and audit logs are active for support operations quality.\n\n• Staff use `/staff` for case history, resolution checklists, the knowledge base, settings, and health checks."
+            },
+            {
+                name: "Automatic Protection",
+                value: "• Join floods, repeated spam, and mention abuse alert staff instantly.\n\n• Any timeout applied from an alert can be undone from the same alert."
             },
             {
                 name: "Admin Command Visibility",
@@ -5154,7 +5240,7 @@ function resolveCommandTheme(commandName: string): CommandTheme {
     const cmd = commandName.toLowerCase();
 
     const raidCommands = new Set(["raid", "raidintel", "raidhistory", "bosses", "conditions", "gearintel", "loadout", "pmc"]);
-    const xpCommands = new Set(["xp", "xpstats", "xproles", "xprolesync", "leaderboard", "daily", "xpverify"]);
+    const xpCommands = new Set(["xp", "profile", "xproles", "xprolesync", "leaderboard", "daily", "xpverify"]);
     const economyCommands = new Set(["balance", "token", "bank", "deposit", "withdraw", "transfer", "shop", "inventory", "buy", "sell", "opencrate", "useitem", "tradeoffer", "trades", "tradeaccept", "tradedecline"]);
     const gameCommands = new Set(["dice", "roulette", "blackjack", "crash", "magicslots", "coinflip", "baccarat", "hilo", "keno"]);
     const moderationCommands = new Set(["warn", "warnings", "clearwarnings", "tempban", "purge", "points", "pointsuser", "addpoints", "addtoken", "timeout", "kick", "ban", "setmodlog", "modconfig", "xprolesync", "health", "rolesanity", "ticketsanity", "xpverify", "incident"]);
@@ -8726,10 +8812,10 @@ async function refreshXpLeaderboardPanel(): Promise<void> {
     if (!client.isReady() || xpLeaderboardUpdateInFlight) return;
     xpLeaderboardUpdateInFlight = true;
     try {
-        const channel = client.channels.cache.get(XP_LEADERBOARD_CHANNEL_ID)
-            || await client.channels.fetch(XP_LEADERBOARD_CHANNEL_ID);
+        const channelId = getXpPanelChannelId();
+        const channel = client.channels.cache.get(channelId) || await client.channels.fetch(channelId);
         if (!channel || channel.type !== ChannelType.GuildText) {
-            throw new Error(`XP leaderboard channel ${XP_LEADERBOARD_CHANNEL_ID} is missing or is not a text channel.`);
+            throw new Error(`XP leaderboard channel ${channelId} is missing or is not a text channel.`);
         }
         const now = Date.now();
         const entries = await Promise.all(getLeaderboard().map(async row => {
@@ -8747,10 +8833,10 @@ async function refreshXpLeaderboardPanel(): Promise<void> {
 
 async function ensureXpCratePanel(): Promise<void> {
     if (!client.isReady()) return;
-    const channel = client.channels.cache.get(XP_LEADERBOARD_CHANNEL_ID)
-        || await client.channels.fetch(XP_LEADERBOARD_CHANNEL_ID);
+    const channelId = getXpPanelChannelId();
+    const channel = client.channels.cache.get(channelId) || await client.channels.fetch(channelId);
     if (!channel || channel.type !== ChannelType.GuildText) {
-        throw new Error(`XP crate panel channel ${XP_LEADERBOARD_CHANNEL_ID} is missing or is not a text channel.`);
+        throw new Error(`XP crate panel channel ${channelId} is missing or is not a text channel.`);
     }
     const previousId = getGuildPanelMessageId(channel.guild.id, "xpCrate");
     const messageId = await upsertXpCratePanel(channel, client.user.id, previousId);
@@ -8758,10 +8844,10 @@ async function ensureXpCratePanel(): Promise<void> {
 }
 
 async function getCheckpointCardChannel(): Promise<TextChannel> {
-    const channel = client.channels.cache.get(CHECKPOINT_CARD_CHANNEL_ID)
-        || await client.channels.fetch(CHECKPOINT_CARD_CHANNEL_ID);
+    const channelId = botSettingsStore.get().channels.checkpointCards;
+    const channel = client.channels.cache.get(channelId) || await client.channels.fetch(channelId);
     if (!channel || channel.type !== ChannelType.GuildText) {
-        throw new Error(`Player rating channel ${CHECKPOINT_CARD_CHANNEL_ID} is missing or is not a text channel.`);
+        throw new Error(`Player rating channel ${channelId} is missing or is not a text channel.`);
     }
     return channel;
 }
@@ -8820,6 +8906,12 @@ function getCheckpointCardUrl(profile: { cardChannelId: string | null; cardMessa
 }
 
 async function handleCheckpointInteraction(interaction: Interaction): Promise<boolean> {
+    const isCheckpointComponent = (interaction.isButton() || interaction.isModalSubmit())
+        && (interaction.customId.startsWith(CHECKPOINT_EDIT_PREFIX) || interaction.customId === CHECKPOINT_VIEW_ID || interaction.customId.startsWith(CHECKPOINT_MODAL_PREFIX));
+    if (isCheckpointComponent && !isFeatureEnabled("checkpointCards")) {
+        await interaction.reply({ content: "Player rating cards are paused by staff right now.", flags: MessageFlags.Ephemeral });
+        return true;
+    }
     if (interaction.isButton() && interaction.customId.startsWith(CHECKPOINT_EDIT_PREFIX)) {
         const section = interaction.customId.slice(CHECKPOINT_EDIT_PREFIX.length);
         if (!isCheckpointSectionId(section) || interaction.user.bot) return true;
@@ -9801,6 +9893,816 @@ const moderationCommandHandlers = buildModerationCommandHandlers({
     getAvatar
 });
 
+function isStaffMember(member: GuildMember | APIInteractionGuildMember | null | undefined): boolean {
+    if (!member) return false;
+    const permissions = member.permissions;
+    const isAdmin = typeof permissions === "string"
+        ? (BigInt(permissions) & PermissionFlagsBits.Administrator) === PermissionFlagsBits.Administrator
+        : permissions.has(PermissionFlagsBits.Administrator);
+    if (isAdmin) return true;
+    const roleIds: string[] = Array.isArray(member.roles) ? member.roles : [...member.roles.cache.keys()];
+    const staffRoles = botSettingsStore.get().staffRoleIds;
+    return roleIds.some(id => staffRoles.includes(id));
+}
+
+async function fetchGuildTextChannel(channelId: string): Promise<TextChannel | null> {
+    if (!channelId) return null;
+    const channel = client.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
+    return channel && channel.type === ChannelType.GuildText ? channel : null;
+}
+
+async function postStaffAlert(payload: { content?: string; embeds: APIEmbed[]; components?: StaffPayload["components"] }, roleMentions: string[] = []): Promise<Message | null> {
+    const channel = await fetchGuildTextChannel(botSettingsStore.get().channels.modAlerts);
+    if (!channel) {
+        console.warn("[staff] Staff alert channel is missing or not a text channel.");
+        return null;
+    }
+    return channel.send({ ...payload, allowedMentions: { parse: [], roles: roleMentions } });
+}
+
+// ---------- Unified profile ----------
+
+function buildProfileSnapshot(target: User, guild: Guild | null): ProfileSnapshot {
+    const user = ensureUser(target.id);
+    syncProgressAchievements(target.id);
+    const settings = botSettingsStore.get();
+    const voiceMs = getLiveVoiceTimeMs(target.id);
+    const voiceMinutes = Math.floor(voiceMs / 60_000);
+    const games = getGameStatsSummary(target.id);
+    const nextXp = XP_ACHIEVEMENTS.find(achievement => user.xp < achievement.threshold);
+    const nextVoice = VOICE_ACHIEVEMENTS.find(achievement => voiceMinutes < achievement.threshold);
+    const crate = user.latestXpCrate ? getXpCrateDefinition(user.latestXpCrate.crateId) : null;
+    const checkpointProfile = user.checkpointProfile;
+    const checkpointRating = checkpointProfile && isCheckpointComplete(checkpointProfile.stats)
+        ? calculateCheckpointRating(checkpointProfile.stats).rating
+        : null;
+    return {
+        userId: target.id,
+        username: target.username,
+        avatarUrl: target.displayAvatarURL({ extension: "png", size: 128 }),
+        cosmetics: user.cosmetics,
+        preferences: user.preferences,
+        xp: user.xp,
+        level: getXPLevel(user.xp),
+        xpBar: xpBar(user.xp),
+        xpRole: getXpRoleProgress(user.xp).currentRole?.name || "No role yet",
+        prestigeLabel: getPrestigeBadge(user.prestige).label,
+        fnTokens: user.fnTokens,
+        bankTokens: user.bankTokens,
+        pmcLevel: getPmcLevel(user.pmcXP),
+        pmcXp: user.pmcXP,
+        pmcRaids: user.pmcRaids,
+        pmcRaidWins: user.pmcRaidWins,
+        pmcBossKills: user.pmcBossKills,
+        voiceMultiplier: getCurrentVoiceXpMultiplier(guild, target.id),
+        inVoice: Boolean(guild?.voiceStates.cache.get(target.id)?.channelId),
+        voiceTime: formatVoiceDuration(voiceMs),
+        dailyStreak: user.dailyStreak,
+        lastXpAt: user.lastXP,
+        achievementTitle: getEquippedAchievementTitle(user.achievementTitleId, user.achievementIds)?.title || null,
+        xpAchievements: {
+            earned: XP_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).map(achievement => achievement.title),
+            total: XP_ACHIEVEMENTS.length,
+            next: nextXp ? `XP: **${nextXp.title}** at ${nextXp.threshold.toLocaleString()} XP` : null
+        },
+        voiceAchievements: {
+            earned: VOICE_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).map(achievement => achievement.title),
+            total: VOICE_ACHIEVEMENTS.length,
+            next: nextVoice ? `Voice: **${nextVoice.title}** at ${nextVoice.threshold.toLocaleString()} min` : null
+        },
+        recentAchievements: user.achievements,
+        latestCrate: user.latestXpCrate && crate
+            ? { name: crate.name, xp: user.latestXpCrate.xp, claimedAt: user.latestXpCrate.claimedAt, color: crate.color }
+            : null,
+        nextCrateAt: user.latestXpCrate ? user.latestXpCrate.claimedAt + XP_CRATE_COOLDOWN_MS : null,
+        bossHearts: getUnlockedBossHeartNames(target.id),
+        checkpoint: checkpointProfile && checkpointRating !== null
+            ? { rating: checkpointRating, tier: getCheckpointTier(checkpointRating).name, url: getCheckpointCardUrl(checkpointProfile, guild?.id ?? null) }
+            : null,
+        games: { played: games.casinoPlayed, wins: games.wins, losses: games.losses, net: games.net },
+        cosmeticShopEnabled: settings.features.cosmeticShop,
+        priceMultiplier: settings.rewards.cosmeticPriceMultiplier
+    };
+}
+
+function buildProfilePayload(target: User, page: ProfilePage, viewerId: string, guild: Guild | null): { embed: APIEmbed; components: unknown[] } {
+    const snapshot = buildProfileSnapshot(target, guild);
+    const embed = buildProfileEmbed(snapshot, page, page === "progression" ? buildXpIntelligenceEmbed({ user: { id: target.id } }).toJSON() : undefined);
+    const components: unknown[] = buildProfileComponents(snapshot, page, viewerId);
+    if (page === "achievements" && viewerId === target.id) {
+        components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(ACHIEVEMENT_TITLE_BUTTON_ID).setLabel("Equip Achievement Title").setStyle(ButtonStyle.Secondary)).toJSON());
+    }
+    return { embed, components };
+}
+
+function buildShopReply(userId: string, kind: CosmeticKind, notice?: string) {
+    const user = ensureUser(userId);
+    const payload = buildCosmeticShopPayload(user.cosmetics, user.fnTokens, kind, botSettingsStore.get().rewards.cosmeticPriceMultiplier);
+    return { content: notice || "", embeds: payload.embeds, components: payload.components };
+}
+
+async function handleProfileInteraction(interaction: Interaction): Promise<boolean> {
+    if (!(interaction.isButton() || interaction.isStringSelectMenu()) || !interaction.customId.startsWith("profile:")) return false;
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${PROFILE_IDS.page}:`)) {
+        const ownerId = interaction.customId.slice(PROFILE_IDS.page.length + 1);
+        const page = interaction.values[0] as ProfilePage;
+        if (!Object.prototype.hasOwnProperty.call(PROFILE_PAGES, page)) return true;
+        const target = await client.users.fetch(ownerId);
+        const payload = buildProfilePayload(target, page, interaction.user.id, interaction.guild);
+        if (interaction.user.id === ownerId) {
+            await interaction.update({ embeds: [payload.embed], components: payload.components as never[] });
+        } else {
+            await interaction.reply({ embeds: [payload.embed], components: payload.components as never[], flags: MessageFlags.Ephemeral });
+        }
+        return true;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(`${PROFILE_IDS.pref}:`)) {
+        const [, , key, ownerId] = interaction.customId.split(":");
+        if (interaction.user.id !== ownerId) {
+            await interaction.reply({ content: "Only the profile owner can change these preferences. Open your own with `/profile`.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        if (key !== "doubleXpDm" && key !== "showCheckpointRating") return true;
+        const user = ensureUser(interaction.user.id);
+        user.preferences[key] = !user.preferences[key];
+        savePoints();
+        appendAuditEvent("profile_preference_changed", { userId: interaction.user.id, key, value: user.preferences[key] });
+        const payload = buildProfilePayload(interaction.user, "preferences", interaction.user.id, interaction.guild);
+        await interaction.update({ embeds: [payload.embed], components: payload.components as never[] });
+        return true;
+    }
+
+    if (!isFeatureEnabled("cosmeticShop")) {
+        await interaction.reply({ content: "The cosmetic shop is closed by staff right now.", flags: MessageFlags.Ephemeral });
+        return true;
+    }
+
+    if (interaction.isButton() && interaction.customId === PROFILE_IDS.shop) {
+        await interaction.reply({ ...buildShopReply(interaction.user.id, "theme"), flags: MessageFlags.Ephemeral });
+        return true;
+    }
+
+    const kindFrom = (customId: string, prefix: string): CosmeticKind | null => {
+        const kind = customId.slice(prefix.length + 1);
+        return kind === "theme" || kind === "title" || kind === "badge" ? kind : null;
+    };
+
+    if (interaction.isButton() && interaction.customId.startsWith(`${PROFILE_IDS.shopKind}:`)) {
+        const kind = kindFrom(interaction.customId, PROFILE_IDS.shopKind);
+        if (kind) await interaction.update(buildShopReply(interaction.user.id, kind));
+        return true;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${PROFILE_IDS.buy}:`)) {
+        const kind = kindFrom(interaction.customId, PROFILE_IDS.buy);
+        if (!kind) return true;
+        const itemId = interaction.values[0];
+        const result = withDeferredPointsSave(() => {
+            const user = ensureUser(interaction.user.id);
+            const purchase = purchaseCosmetic(user.cosmetics, user, itemId, botSettingsStore.get().rewards.cosmeticPriceMultiplier);
+            const equipped = purchase.ok ? equipCosmetic(user.cosmetics, purchase.item.id).ok : false;
+            if (purchase.ok) savePoints();
+            return { purchase, equipped };
+        });
+        let notice: string;
+        const purchase = result.purchase;
+        if (purchase.ok) {
+            appendAuditEvent("cosmetic_purchased", { userId: interaction.user.id, itemId, price: purchase.price });
+            notice = `✅ Purchased ${result.equipped ? "and equipped " : ""}**${purchase.item.name}** for ${purchase.price.toLocaleString()} FN Token$.`
+                + (result.equipped ? "" : " Your badge showcase is full — swap one out below.");
+        } else if (purchase.reason === "funds") {
+            notice = `❌ You need ${purchase.price?.toLocaleString()} FN Token$ for that.`;
+        } else if (purchase.reason === "owned") {
+            notice = "You already own that cosmetic.";
+        } else {
+            notice = "That cosmetic is no longer available.";
+        }
+        await interaction.update(buildShopReply(interaction.user.id, kind, notice));
+        return true;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${PROFILE_IDS.equip}:`)) {
+        const kind = kindFrom(interaction.customId, PROFILE_IDS.equip);
+        if (!kind) return true;
+        const user = ensureUser(interaction.user.id);
+        const result = equipCosmetic(user.cosmetics, interaction.values[0]);
+        if (result.ok) savePoints();
+        await interaction.update(buildShopReply(interaction.user.id, kind, result.ok ? `✅ ${result.message}` : `❌ ${result.message}`));
+        return true;
+    }
+    return true;
+}
+
+// ---------- Staff desk ----------
+
+let lastHealthIssues: HealthIssue[] = [];
+let lastHealthSignature = "";
+
+function buildStaffHomeFor(guildId: string, channelId: string | null): StaffPayload {
+    const now = Date.now();
+    const ticket = channelId ? findTicketByChannel(channelId) : null;
+    return buildStaffHome({
+        ticketId: ticket && ticket.guildId === guildId ? ticket.id : null,
+        openTickets: ticketStore.tickets.filter(entry => entry.guildId === guildId && (entry.status === "open" || entry.status === "claimed")).length,
+        recentIncidents: antiRaidIncidents.recent(guildId, 200).filter(incident => now - incident.at <= 24 * 60 * 60 * 1000).length,
+        healthIssues: lastHealthIssues.length
+    });
+}
+
+function buildCaseFile(guildId: string, userId: string, ticket: TicketEntry | null): StaffPayload {
+    const moderation = ensureGuildModeration(guildId);
+    const history = buildCaseHistoryLines({
+        userId,
+        tickets: ticketStore.tickets.filter(entry => entry.guildId === guildId && entry.ownerId === userId),
+        reports: getGuildUserReports(guildId).filter(report => report.targetUserId === userId),
+        warnings: (moderation.warnings[userId] || []).map(warning => ({ reason: warning.reason, at: warning.timestamp, moderatorId: warning.moderatorId })),
+        alerts: antiRaidIncidents.forUser(guildId, userId).map(incident => ({
+            kind: incident.kind, at: incident.at, action: incident.actions.length ? incident.actions[incident.actions.length - 1].type : null
+        }))
+    });
+    return buildCaseView({
+        userId,
+        summary: history.summary,
+        sections: history.sections,
+        ticket: ticket ? {
+            id: ticket.id,
+            category: ticket.category || "general",
+            reason: ticket.reason,
+            checklist: getChecklist(ticket.category),
+            done: ticket.checklist || {}
+        } : null
+    });
+}
+
+async function logSettingsChange(actorId: string, summary: string): Promise<void> {
+    appendAuditEvent("bot_settings_changed", { actorId, summary });
+    await postStaffAlert({
+        embeds: [new EmbedBuilder().setColor(0x9b59b6).setTitle("⚙️ Bot Settings Changed")
+            .setDescription(`${summary}\nBy <@${actorId}>`).setTimestamp().toJSON()]
+    }).catch(error => console.warn("[staff] Could not log settings change:", error));
+}
+
+async function relocatePanelsForChannel(setting: ChannelSetting, oldChannelId: string, guildId: string): Promise<void> {
+    const panels: GuildPanelKey[] = setting === "xpPanels" ? ["xpLeaderboard", "xpCrate"] : setting === "checkpointCards" ? ["checkpointCard"] : [];
+    const oldChannel = await fetchGuildTextChannel(oldChannelId);
+    for (const panel of panels) {
+        const messageId = getGuildPanelMessageId(guildId, panel);
+        if (messageId && oldChannel) await oldChannel.messages.delete(messageId).catch(() => undefined);
+        setGuildPanelMessageId(guildId, panel, null);
+    }
+    if (setting === "xpPanels") {
+        await refreshXpLeaderboardPanel();
+        await ensureXpCratePanel();
+    } else if (setting === "checkpointCards") {
+        await ensureCheckpointCardPanel();
+    }
+}
+
+function settingsUpdateFailedReply(): string {
+    return "❌ Settings could not be saved to disk, so nothing changed. Check the health report.";
+}
+
+async function respondStaff(interaction: Interaction, payload: StaffPayload, content = ""): Promise<void> {
+    if (interaction.isMessageComponent()) {
+        await interaction.update({ content, embeds: payload.embeds, components: payload.components });
+    } else if (interaction.isModalSubmit() && interaction.isFromMessage()) {
+        await interaction.update({ content, embeds: payload.embeds, components: payload.components });
+    } else if (interaction.isRepliable()) {
+        await interaction.reply({ content, embeds: payload.embeds, components: payload.components, flags: MessageFlags.Ephemeral });
+    }
+}
+
+async function handleStaffInteraction(interaction: Interaction): Promise<boolean> {
+    if (!(interaction.isMessageComponent() || interaction.isModalSubmit())) return false;
+    const customId = interaction.customId;
+    if (!customId.startsWith("staff:") && !customId.startsWith(`${STAFF_IDS.alert}:`)) return false;
+    if (!interaction.guild || !isStaffMember(interaction.member)) {
+        await interaction.reply({ content: "Staff only.", flags: MessageFlags.Ephemeral });
+        return true;
+    }
+    const guild = interaction.guild;
+    const actorId = interaction.user.id;
+
+    if (customId.startsWith(`${STAFF_IDS.alert}:`)) {
+        await handleAntiRaidAction(interaction, guild);
+        return true;
+    }
+    if (customId === STAFF_IDS.home) {
+        await respondStaff(interaction, buildStaffHomeFor(guild.id, interaction.channelId));
+        return true;
+    }
+    if (customId.startsWith(`${STAFF_IDS.settings}:`)) {
+        const view = customId.slice(STAFF_IDS.settings.length + 1) as SettingsView;
+        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), view));
+        return true;
+    }
+    if (customId === STAFF_IDS.health && interaction.isButton()) {
+        await interaction.deferUpdate();
+        const report = await runStaffHealthCheck("manual");
+        await interaction.editReply({ content: "", ...buildHealthPayload(report.issues, Date.now(), report.notes) });
+        return true;
+    }
+    if (customId === STAFF_IDS.kbSearch && interaction.isButton()) {
+        await interaction.showModal(buildKbSearchModal());
+        return true;
+    }
+    if (customId === STAFF_IDS.kbAdd && interaction.isButton()) {
+        await interaction.showModal(buildKbAddModal());
+        return true;
+    }
+    if (customId === STAFF_IDS.kbSearchModal && interaction.isModalSubmit()) {
+        const query = interaction.fields.getTextInputValue("query");
+        const resolved = ticketStore.tickets
+            .filter(ticket => ticket.guildId === guild.id && (ticket.resolvedReason || ticket.closedReason))
+            .map(ticket => ({
+                id: ticket.id,
+                text: `${ticket.reason} ${(ticket.tags || []).join(" ")} ${ticket.category || ""} ${(ticket.internalNotes || []).map(note => note.note).join(" ")}`,
+                resolution: ticket.resolvedReason || ticket.closedReason || ""
+            }));
+        await respondStaff(interaction, buildKbResults(query, searchKnowledgeBase(query, knowledgeBase.all(), resolved)));
+        return true;
+    }
+    if (customId === STAFF_IDS.kbAddModal && interaction.isModalSubmit()) {
+        try {
+            const article = knowledgeBase.add({
+                title: interaction.fields.getTextInputValue("title"),
+                body: interaction.fields.getTextInputValue("body"),
+                tags: interaction.fields.getTextInputValue("tags").split(","),
+                authorId: actorId
+            });
+            recordSaveResult("knowledgeBase", true);
+            appendAuditEvent("kb_article_added", { actorId, articleId: article.id, title: article.title });
+            await respondStaff(interaction, buildKbResults(article.title, [{ kind: "article", article, score: 1 }]), `✅ Article **${article.title}** added to the knowledge base.`);
+        } catch (error) {
+            recordSaveResult("knowledgeBase", false, error);
+            await interaction.reply({ content: "❌ The article could not be saved.", flags: MessageFlags.Ephemeral });
+        }
+        return true;
+    }
+    if (customId === STAFF_IDS.caseLookup) {
+        const ticket = interaction.channelId ? findTicketByChannel(interaction.channelId) : null;
+        await respondStaff(interaction, ticket && ticket.guildId === guild.id ? buildCaseFile(guild.id, ticket.ownerId, ticket) : buildCaseLookupPicker());
+        return true;
+    }
+    if (customId === STAFF_IDS.caseUser && interaction.isUserSelectMenu()) {
+        await respondStaff(interaction, buildCaseFile(guild.id, interaction.values[0], null));
+        return true;
+    }
+    if (customId.startsWith(`${STAFF_IDS.checklist}:`) && interaction.isButton()) {
+        const [ticketIdRaw, itemId] = customId.slice(STAFF_IDS.checklist.length + 1).split(":");
+        const ticket = ticketStore.tickets.find(entry => entry.id === Number(ticketIdRaw) && entry.guildId === guild.id);
+        if (!ticket || !getChecklist(ticket.category).some(item => item.id === itemId)) {
+            await interaction.reply({ content: "That ticket or checklist item no longer exists.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        const checklist = { ...(ticket.checklist || {}) };
+        if (checklist[itemId]) delete checklist[itemId];
+        else checklist[itemId] = { byId: actorId, at: Date.now() };
+        const previous = ticket.checklist;
+        ticket.checklist = checklist;
+        ticket.events = [...(ticket.events || []), { at: Date.now(), actorId, type: "checklist", detail: `${checklist[itemId] ? "Checked" : "Unchecked"}: ${itemId}` }].slice(-100);
+        if (!saveTicketStore()) {
+            ticket.checklist = previous;
+            await interaction.reply({ content: "❌ The checklist could not be saved. Try again.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await respondStaff(interaction, buildCaseFile(guild.id, ticket.ownerId, ticket));
+        return true;
+    }
+    if (customId === STAFF_IDS.incidents) {
+        await respondStaff(interaction, buildIncidentLog(antiRaidIncidents.recent(guild.id, 15)));
+        return true;
+    }
+
+    // Settings mutations
+    if (customId.startsWith(`${STAFF_IDS.channel}:`) && interaction.isChannelSelectMenu()) {
+        const key = customId.slice(STAFF_IDS.channel.length + 1) as ChannelSetting;
+        const channelId = interaction.values[0];
+        const oldChannelId = botSettingsStore.get().channels[key];
+        if (!channelId || channelId === oldChannelId) {
+            await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "channels"));
+            return true;
+        }
+        if (!botSettingsStore.update(actorId, draft => { draft.channels[key] = channelId; })) {
+            await interaction.reply({ content: settingsUpdateFailedReply(), flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "channels"), `✅ Updated. Moving panels to <#${channelId}>…`);
+        void logSettingsChange(actorId, `Channel **${key}**: <#${oldChannelId}> → <#${channelId}>`);
+        runAsyncWithBoundary("relocatePanels", () => relocatePanelsForChannel(key, oldChannelId, guild.id));
+        return true;
+    }
+    if (customId === STAFF_IDS.roles && interaction.isRoleSelectMenu()) {
+        const roleIds = [...interaction.values];
+        if (!botSettingsStore.update(actorId, draft => { draft.staffRoleIds = roleIds; })) {
+            await interaction.reply({ content: settingsUpdateFailedReply(), flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "roles"), "✅ Staff roles updated.");
+        void logSettingsChange(actorId, `Staff roles: ${roleIds.map(id => `<@&${id}>`).join(" ") || "administrators only"}`);
+        return true;
+    }
+    if (customId.startsWith(`${STAFF_IDS.feature}:`) && interaction.isButton()) {
+        const key = customId.slice(STAFF_IDS.feature.length + 1) as FeatureToggle;
+        if (!Object.prototype.hasOwnProperty.call(FEATURE_TOGGLES, key)) return true;
+        const next = !botSettingsStore.get().features[key];
+        if (!botSettingsStore.update(actorId, draft => { draft.features[key] = next; })) {
+            await interaction.reply({ content: settingsUpdateFailedReply(), flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "features"));
+        void logSettingsChange(actorId, `Feature **${FEATURE_TOGGLES[key]}** turned **${next ? "on" : "off"}**`);
+        return true;
+    }
+    if (customId === STAFF_IDS.rewardsModal && interaction.isButton()) {
+        await interaction.showModal(buildRewardsModal(botSettingsStore.get()));
+        return true;
+    }
+    if (customId === STAFF_IDS.antiRaidModal && interaction.isButton()) {
+        await interaction.showModal(buildAntiRaidModal(botSettingsStore.get()));
+        return true;
+    }
+    if (customId === STAFF_IDS.rewardsSubmit && interaction.isModalSubmit()) {
+        const raw = Object.fromEntries(Object.keys(REWARD_SETTINGS).map(key => [key, interaction.fields.getTextInputValue(key)])) as Record<RewardSetting, string>;
+        const parsed = parseNumericFields(raw, REWARD_SETTINGS);
+        if (!parsed.ok) {
+            await interaction.reply({ content: `❌ Not saved:\n${parsed.errors.map(error => `• ${error}`).join("\n")}`, flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        if (!botSettingsStore.update(actorId, draft => { draft.rewards = { ...parsed.values }; })) {
+            await interaction.reply({ content: settingsUpdateFailedReply(), flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        applyRewardSettings();
+        scheduleXpLeaderboardUpdate();
+        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "rewards"), "✅ Rewards updated and live.");
+        void logSettingsChange(actorId, (Object.entries(REWARD_SETTINGS) as Array<[RewardSetting, { label: string }]>)
+            .map(([key, spec]) => `${spec.label}: **${parsed.values[key]}**`).join("\n"));
+        return true;
+    }
+    if (customId === STAFF_IDS.antiRaidSubmit && interaction.isModalSubmit()) {
+        const raw = Object.fromEntries(Object.keys(ANTI_RAID_SETTINGS).map(key => [key, interaction.fields.getTextInputValue(key)])) as Record<AntiRaidSetting, string>;
+        const parsed = parseNumericFields(raw, ANTI_RAID_SETTINGS);
+        if (!parsed.ok) {
+            await interaction.reply({ content: `❌ Not saved:\n${parsed.errors.map(error => `• ${error}`).join("\n")}`, flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        if (!botSettingsStore.update(actorId, draft => { draft.antiRaid = { ...draft.antiRaid, ...parsed.values }; })) {
+            await interaction.reply({ content: settingsUpdateFailedReply(), flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "antiraid"), "✅ Anti-raid thresholds updated.");
+        void logSettingsChange(actorId, (Object.entries(ANTI_RAID_SETTINGS) as Array<[AntiRaidSetting, { label: string }]>)
+            .map(([key, spec]) => `${spec.label}: **${parsed.values[key]}**`).join("\n"));
+        return true;
+    }
+    if (customId === STAFF_IDS.timeoutMinutes && interaction.isStringSelectMenu()) {
+        const minutes = Number(interaction.values[0]);
+        if (!botSettingsStore.update(actorId, draft => { draft.antiRaid.timeoutMinutes = minutes; })) {
+            await interaction.reply({ content: settingsUpdateFailedReply(), flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await respondStaff(interaction, buildSettingsPayload(botSettingsStore.get(), "antiraid"));
+        void logSettingsChange(actorId, `Anti-raid timeout length: **${minutes} min**`);
+        return true;
+    }
+    return true;
+}
+
+// ---------- Anti-raid ----------
+
+function canUseRaidMode(guild: Guild): boolean {
+    return Boolean(guild.members.me?.permissions.has(PermissionFlagsBits.ManageGuild));
+}
+
+async function raiseAntiRaidAlert(guild: Guild, detection: AntiRaidDetection): Promise<void> {
+    const incident = antiRaidIncidents.create(detection);
+    appendAuditEvent("anti_raid_detected", { guildId: guild.id, incidentId: incident.id, kind: incident.kind, userIds: incident.userIds });
+    const staffRoles = incident.kind === "join_flood" ? botSettingsStore.get().staffRoleIds.slice(0, 5) : [];
+    const message = await postStaffAlert({
+        content: staffRoles.length ? staffRoles.map(id => `<@&${id}>`).join(" ") : "",
+        ...buildIncidentAlert(incident, canUseRaidMode(guild))
+    }, staffRoles);
+    if (message) {
+        antiRaidIncidents.update(incident.id, entry => {
+            entry.alertChannelId = message.channelId;
+            entry.alertMessageId = message.id;
+        });
+    } else {
+        postOpsAlert("warn", "Anti-raid alert could not be delivered", { incidentId: incident.id, kind: incident.kind });
+    }
+}
+
+async function handleAntiRaidAction(interaction: Interaction, guild: Guild): Promise<void> {
+    if (!interaction.isButton()) return;
+    const [, action, incidentId] = interaction.customId.split(":");
+    const incident = antiRaidIncidents.get(incidentId);
+    if (!incident || incident.guildId !== guild.id) {
+        await interaction.reply({ content: "This incident is no longer tracked.", flags: MessageFlags.Ephemeral });
+        return;
+    }
+    await interaction.deferUpdate();
+    const actorId = interaction.user.id;
+    const minutes = botSettingsStore.get().antiRaid.timeoutMinutes;
+    let count = 0;
+    let note = "";
+    if (action === "timeout") {
+        const affected: string[] = [];
+        for (const userId of incident.userIds) {
+            if (incident.timedOutUserIds.includes(userId)) continue;
+            const member = await guild.members.fetch(userId).catch(() => null);
+            if (!member || member.user.bot || isStaffMember(member) || !member.moderatable) continue;
+            const ok = await member.timeout(minutes * 60_000, `Anti-raid incident ${incident.id} by ${interaction.user.username}`).then(() => true).catch(() => false);
+            if (ok) affected.push(userId);
+        }
+        count = affected.length;
+        antiRaidIncidents.update(incident.id, entry => {
+            entry.timedOutUserIds = [...new Set([...entry.timedOutUserIds, ...affected])];
+            entry.actions.push({ type: "timeout", byId: actorId, at: Date.now(), count });
+        });
+        if (!count) note = "No members could be timed out (they left, are staff, or rank above the bot).";
+    } else if (action === "untimeout") {
+        for (const userId of incident.timedOutUserIds) {
+            const member = await guild.members.fetch(userId).catch(() => null);
+            if (member && await member.timeout(null, `Anti-raid incident ${incident.id} undone by ${interaction.user.username}`).then(() => true).catch(() => false)) count += 1;
+        }
+        antiRaidIncidents.update(incident.id, entry => {
+            entry.timedOutUserIds = [];
+            entry.actions.push({ type: "untimeout", byId: actorId, at: Date.now(), count });
+        });
+    } else if (action === "raidmode_on" && incident.previousVerificationLevel === null) {
+        const previous = guild.verificationLevel;
+        const ok = previous >= GuildVerificationLevel.High
+            || await guild.setVerificationLevel(GuildVerificationLevel.High, `Raid mode by ${interaction.user.username}`).then(() => true).catch(() => false);
+        if (ok) {
+            antiRaidIncidents.update(incident.id, entry => {
+                entry.previousVerificationLevel = previous;
+                entry.actions.push({ type: "raidmode_on", byId: actorId, at: Date.now() });
+            });
+        } else note = "Raid mode failed — the bot needs Manage Server.";
+    } else if (action === "raidmode_off" && incident.previousVerificationLevel !== null) {
+        const previous = incident.previousVerificationLevel as GuildVerificationLevel;
+        const ok = guild.verificationLevel === previous
+            || await guild.setVerificationLevel(previous, `Raid mode ended by ${interaction.user.username}`).then(() => true).catch(() => false);
+        if (ok) {
+            antiRaidIncidents.update(incident.id, entry => {
+                entry.previousVerificationLevel = null;
+                entry.actions.push({ type: "raidmode_off", byId: actorId, at: Date.now() });
+            });
+        } else note = "Could not restore the verification level — the bot needs Manage Server.";
+    } else if (action === "dismiss") {
+        antiRaidIncidents.update(incident.id, entry => {
+            entry.actions.push({ type: "dismiss", byId: actorId, at: Date.now() });
+        });
+    }
+    appendAuditEvent("anti_raid_action", { guildId: guild.id, incidentId: incident.id, action, actorId, count });
+    const updated = antiRaidIncidents.get(incident.id)!;
+    await interaction.editReply(buildIncidentAlert(updated, canUseRaidMode(guild)));
+    if (note) await interaction.followUp({ content: note, flags: MessageFlags.Ephemeral });
+}
+
+// ---------- Health checks ----------
+
+async function runStaffHealthCheck(reason: string): Promise<{ issues: HealthIssue[]; notes: string[] }> {
+    const issues: HealthIssue[] = [];
+    const notes: string[] = [];
+    const settings = botSettingsStore.get();
+    const guild = getPrimaryGuild();
+    if (!client.isReady()) issues.push({ key: "client:not-ready", severity: "critical", message: "Discord client is not ready." });
+    if (!guild) {
+        issues.push({ key: "guild:missing", severity: "critical", message: "Primary guild is unavailable." });
+    } else {
+        const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        if (!me) {
+            issues.push({ key: "guild:no-member", severity: "critical", message: "Bot member could not be loaded." });
+        } else {
+            const guildPerms: Array<[bigint, string, string]> = [
+                [PermissionFlagsBits.ManageRoles, "Manage Roles", "XP rank roles"],
+                [PermissionFlagsBits.ModerateMembers, "Timeout Members", "anti-raid timeouts"],
+                [PermissionFlagsBits.ManageGuild, "Manage Server", "raid mode"],
+                [PermissionFlagsBits.ManageChannels, "Manage Channels", "tickets and temp VCs"]
+            ];
+            for (const [flag, name, purpose] of guildPerms) {
+                if (!me.permissions.has(flag)) issues.push({ key: `perm:guild:${name}`, severity: "warning", message: `Missing **${name}** (needed for ${purpose}).` });
+            }
+            const channelChecks: Array<{ id: string; label: string; files: boolean }> = [
+                { id: settings.channels.modAlerts, label: "Staff alerts", files: false },
+                { id: settings.channels.xpPanels, label: "XP panels", files: true },
+                { id: settings.channels.checkpointCards, label: "Player rating", files: true },
+                { id: JOIN_WELCOME_CHANNEL_ID, label: "Welcome", files: false },
+                { id: PERMANENT_TICKET_PANEL_CHANNEL_ID, label: "Ticket panel", files: false }
+            ];
+            for (const check of channelChecks) {
+                const channel = await fetchGuildTextChannel(check.id);
+                if (!channel) {
+                    issues.push({ key: `channel:missing:${check.id}`, severity: "critical", message: `${check.label} channel <#${check.id}> is missing or not a text channel.` });
+                    continue;
+                }
+                const perms = channel.permissionsFor(me);
+                const needed: Array<[bigint, string]> = [
+                    [PermissionFlagsBits.ViewChannel, "View Channel"], [PermissionFlagsBits.SendMessages, "Send Messages"],
+                    [PermissionFlagsBits.EmbedLinks, "Embed Links"], [PermissionFlagsBits.ReadMessageHistory, "Read History"],
+                    ...(check.files ? [[PermissionFlagsBits.AttachFiles, "Attach Files"] as [bigint, string]] : [])
+                ];
+                const missing = needed.filter(([flag]) => !perms?.has(flag)).map(([, name]) => name);
+                if (missing.length) issues.push({ key: `perm:${check.id}:${missing.join(",")}`, severity: "critical", message: `${check.label} <#${check.id}> missing: ${missing.join(", ")}.` });
+            }
+            const panels: Array<{ key: GuildPanelKey; channelId: string; label: string; repair: () => Promise<void>; enabled: boolean }> = [
+                { key: "xpLeaderboard", channelId: settings.channels.xpPanels, label: "XP leaderboard", repair: refreshXpLeaderboardPanel, enabled: true },
+                { key: "xpCrate", channelId: settings.channels.xpPanels, label: "FN Xp Panel", repair: ensureXpCratePanel, enabled: settings.features.xpCrates },
+                { key: "checkpointCard", channelId: settings.channels.checkpointCards, label: "Arena Player Rating panel", repair: ensureCheckpointCardPanel, enabled: settings.features.checkpointCards }
+            ];
+            for (const panel of panels) {
+                if (!panel.enabled) continue;
+                const channel = await fetchGuildTextChannel(panel.channelId);
+                const messageId = getGuildPanelMessageId(guild.id, panel.key);
+                const exists = Boolean(channel && messageId && await channel.messages.fetch(messageId).catch(() => null));
+                if (exists) continue;
+                try {
+                    await panel.repair();
+                    notes.push(`🔧 Re-posted missing **${panel.label}**.`);
+                    appendAuditEvent("health_panel_repaired", { panel: panel.key, reason });
+                } catch (error) {
+                    issues.push({ key: `panel:${panel.key}`, severity: "critical", message: `${panel.label} is missing and could not be re-posted: ${clampText(toSafeString(error), 120)}` });
+                }
+            }
+        }
+    }
+
+    const pointsHealth = getPointsSaveHealth();
+    if (pointsHealth.lastFailureAt > pointsHealth.lastSuccessAt) {
+        issues.push({ key: "save:points", severity: "critical", message: `Player data saves are failing: ${clampText(pointsHealth.lastError, 120)}` });
+    }
+    for (const [store, entry] of SAVE_HEALTH) {
+        if (entry.lastFailureAt > entry.lastSuccessAt) {
+            issues.push({ key: `save:${store}`, severity: "critical", message: `${store} saves are failing: ${clampText(entry.lastError, 120)}` });
+        }
+    }
+    const now = Date.now();
+    const startupFailures = ASYNC_FAILURES.filter(failure => failure.at - PROCESS_STARTED_AT <= 2 * 60_000);
+    for (const context of new Set(startupFailures.map(failure => failure.context))) {
+        issues.push({ key: `startup:${context}`, severity: "critical", message: `Startup task **${context}** failed: ${clampText(startupFailures.find(failure => failure.context === context)!.reason, 100)}` });
+    }
+    const recentFailures = ASYNC_FAILURES.filter(failure => now - failure.at <= 30 * 60_000 && failure.at - PROCESS_STARTED_AT > 2 * 60_000);
+    const byContext = new Map<string, number>();
+    for (const failure of recentFailures) byContext.set(failure.context, (byContext.get(failure.context) || 0) + 1);
+    for (const [context, count] of byContext) {
+        issues.push({ key: `async:${context}`, severity: "warning", message: `**${context}** failed ${count}× in the last 30 min.` });
+    }
+
+    lastHealthIssues = issues;
+    return { issues, notes };
+}
+
+async function runStaffHealthMonitor(reason: string): Promise<void> {
+    const report = await runStaffHealthCheck(reason);
+    const signature = healthSignature(report.issues);
+    const changed = signature !== lastHealthSignature;
+    lastHealthSignature = signature;
+    if (!isFeatureEnabled("healthAlerts")) return;
+    if ((changed && (report.issues.length > 0 || reason !== "startup")) || report.notes.length) {
+        await postStaffAlert({ embeds: buildHealthPayload(report.issues, Date.now(), [`Trigger: ${reason}`, ...report.notes]).embeds });
+    }
+}
+
+/** Detailed progression report; reused as the /profile Progression page. */
+function buildXpIntelligenceEmbed(interaction: { user: { id: string } }): EmbedBuilder {
+    const user = ensureUser(interaction.user.id);
+    syncProgressAchievements(interaction.user.id);
+    const gameStats = getGameStatsSummary(interaction.user.id);
+    const prestigeBadge = getPrestigeBadge(user.prestige);
+    const engagementLevel = getXPLevel(user.xp);
+    const pmcLevel = getPmcLevel(user.pmcXP);
+    const pmcPrestigeTier = getPmcPrestigeTier(user.pmcPrestige);
+    const tierVisual = getPmcTierVisual(pmcLevel);
+    const currentThreshold = engagementLevel > 0 ? XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
+    const nextThreshold = XP_LEVEL_THRESHOLDS[engagementLevel] ?? currentThreshold;
+    const levelSpan = Math.max(1, nextThreshold - currentThreshold);
+    const xpIntoLevel = Math.max(0, user.xp - currentThreshold);
+    const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - user.xp) : 0;
+    const progressPercent = nextThreshold > currentThreshold
+        ? formatProgressPercent(xpIntoLevel / levelSpan)
+        : "100%";
+    const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
+    const achievements = user.achievements.length > 0
+        ? user.achievements.slice(-6).reverse().join("\n")
+        : "No achievements yet";
+    const voiceTimeMs = getLiveVoiceTimeMs(interaction.user.id);
+    const voiceMinutes = Math.floor(voiceTimeMs / 60_000);
+    const earnedXpAchievements = XP_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).length;
+    const earnedVoiceAchievements = VOICE_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).length;
+    const equippedAchievementTitle = getEquippedAchievementTitle(user.achievementTitleId, user.achievementIds);
+    const nextXpAchievement = XP_ACHIEVEMENTS.find(achievement => user.xp < achievement.threshold);
+    const nextVoiceAchievement = VOICE_ACHIEVEMENTS.find(achievement => voiceMinutes < achievement.threshold);
+    const pmcProgress = getPmcProgress(user.pmcXP);
+    const roleProgress = getXpRoleProgress(user.xp);
+    const embed = new EmbedBuilder()
+        .setColor(prestigeBadge.color)
+        .setTitle("📊 XP Intelligence Report")
+        .setDescription([
+            `🧠 **Engagement XP:** ${user.xp.toLocaleString()}`,
+            `🎚️ **Level ${engagementLevel}**${nextThreshold > currentThreshold ? ` • ${xpToNextLevel.toLocaleString()} XP to level ${engagementLevel + 1}` : " • Level cap reached"}`,
+            `${xpBar(user.xp)}`
+        ].join("\n"))
+        .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4ca.png")
+        .addFields(
+            {
+                name: "🎯 Engagement Breakdown",
+                value: [
+                    `Level: **${engagementLevel.toLocaleString()}**`,
+                    `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
+                    `Completion: **${progressPercent}**`
+                ].join("\n"),
+                inline: true
+            },
+            {
+                name: "🔥 Activity Signals",
+                value: [
+                    `📆 Daily streak: **${user.dailyStreak.toLocaleString()}**`,
+                    `⏱️ Last XP: **${lastXpAt}**`,
+                    `🏆 Achievements: **${user.achievements.length.toLocaleString()}**`
+                ].join("\n"),
+                inline: true
+            },
+            {
+                name: "🎖️ XP Role Track",
+                value: [
+                    `Current: **${roleProgress.currentRole?.name || "No role yet"}**`,
+                    `Next: **${roleProgress.nextRole ? `${roleProgress.nextRole.name} at ${roleProgress.nextRole.xp.toLocaleString()} XP` : "Maximum tier"}**`,
+                    roleProgress.progressBar,
+                    roleProgress.progressText
+                ].join("\n"),
+                inline: true
+            },
+            {
+                name: "💼 Economy Snapshot",
+                value: [
+                    `🪙 Wallet: **${user.fnTokens.toLocaleString()}**`,
+                    `🏦 Bank: **${user.bankTokens.toLocaleString()}**`,
+                    `🎯 Access Points: **${getPoints(interaction.user.id).toLocaleString()}**`
+                ].join("\n"),
+                inline: true
+            },
+            {
+                name: "🪖 Raid Progression",
+                value: [
+                    `PMC Level: **${pmcLevel.toLocaleString()}**`,
+                    `Raid XP: **${user.pmcXP.toLocaleString()}**`,
+                    `Next PMC Level: **${pmcProgress.needForNext.toLocaleString()} XP away**`,
+                    `PMC Prestige: **${pmcPrestigeTier.numeral} • ${pmcPrestigeTier.label}**`
+                ].join("\n"),
+                inline: true
+            },
+            {
+                name: "🌟 Status Badges",
+                value: [
+                    `Engagement Prestige: **${user.prestige.toLocaleString()}**`,
+                    `Prestige Badge: **${prestigeBadge.label}**`,
+                    `PMC Tier: **${tierVisual.label}**`
+                ].join("\n"),
+                inline: true
+            },
+            {
+                name: "🏆 Achievement Track",
+                value: [
+                    `XP: ${earnedXpAchievements}/${XP_ACHIEVEMENTS.length}${nextXpAchievement ? ` • Next ${nextXpAchievement.threshold.toLocaleString()} XP` : " • Capstone earned"}`,
+                    `Voice: ${earnedVoiceAchievements}/${VOICE_ACHIEVEMENTS.length} • ${formatVoiceDuration(voiceTimeMs)}`,
+                    nextVoiceAchievement ? `Next voice award: ${nextVoiceAchievement.title} at ${nextVoiceAchievement.threshold.toLocaleString()} minutes` : "All voice awards earned"
+                ].join("\n"),
+                inline: false
+            },
+            {
+                name: "✨ Equipped Title",
+                value: equippedAchievementTitle?.title || "No achievement title equipped",
+                inline: true
+            },
+            {
+                name: "🎰 Game Record",
+                value: [
+                    `Sessions: **${gameStats.casinoPlayed.toLocaleString()}**`,
+                    `W/L/P: **${gameStats.wins}/${gameStats.losses}/${gameStats.pushes}**`,
+                    `Net: **${gameStats.net >= 0 ? `+${gameStats.net}` : gameStats.net} FN Token$**`
+                ].join("\n"),
+                inline: true
+            },
+            {
+                name: "✨ Recent Achievements",
+                value: achievements,
+                inline: false
+            },
+            {
+                name: "🎖️ Recent Role Unlocks",
+                value: formatXpRoleUnlocks(interaction.user.id, 5),
+                inline: false
+            }
+        )
+        .setFooter({ text: "Detailed progression data is sourced from persisted state." });
+    return embed;
+}
+
 const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction) => Promise<string>> = {
     ping: async () => {
         return "Pong.";
@@ -10136,146 +11038,10 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
         return JSON.stringify({ embed: embed.toJSON(), xpCrateId: user.latestXpCrate?.crateId });
     },
     pmc: async interaction => buildPmcProfilePayload(interaction.user),
-    xpstats: async interaction => {
-        const user = ensureUser(interaction.user.id);
-        syncProgressAchievements(interaction.user.id);
-        const gameStats = getGameStatsSummary(interaction.user.id);
-        const prestigeBadge = getPrestigeBadge(user.prestige);
-        const engagementLevel = getXPLevel(user.xp);
-        const pmcLevel = getPmcLevel(user.pmcXP);
-        const pmcPrestigeTier = getPmcPrestigeTier(user.pmcPrestige);
-        const tierVisual = getPmcTierVisual(pmcLevel);
-        const currentThreshold = engagementLevel > 0 ? XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
-        const nextThreshold = XP_LEVEL_THRESHOLDS[engagementLevel] ?? currentThreshold;
-        const levelSpan = Math.max(1, nextThreshold - currentThreshold);
-        const xpIntoLevel = Math.max(0, user.xp - currentThreshold);
-        const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - user.xp) : 0;
-        const progressPercent = nextThreshold > currentThreshold
-            ? formatProgressPercent(xpIntoLevel / levelSpan)
-            : "100%";
-        const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
-        const achievements = user.achievements.length > 0
-            ? user.achievements.slice(-6).reverse().join("\n")
-            : "No achievements yet";
-        const voiceTimeMs = getLiveVoiceTimeMs(interaction.user.id);
-        const voiceMinutes = Math.floor(voiceTimeMs / 60_000);
-        const earnedXpAchievements = XP_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).length;
-        const earnedVoiceAchievements = VOICE_ACHIEVEMENTS.filter(achievement => user.achievementIds.includes(achievement.id)).length;
-        const equippedAchievementTitle = getEquippedAchievementTitle(user.achievementTitleId, user.achievementIds);
-        const nextXpAchievement = XP_ACHIEVEMENTS.find(achievement => user.xp < achievement.threshold);
-        const nextVoiceAchievement = VOICE_ACHIEVEMENTS.find(achievement => voiceMinutes < achievement.threshold);
-        const pmcProgress = getPmcProgress(user.pmcXP);
-        const roleProgress = getXpRoleProgress(user.xp);
-        const embed = new EmbedBuilder()
-            .setColor(prestigeBadge.color)
-            .setTitle("📊 XP Intelligence Report")
-            .setDescription([
-                `🧠 **Engagement XP:** ${user.xp.toLocaleString()}`,
-                `🎚️ **Level ${engagementLevel}**${nextThreshold > currentThreshold ? ` • ${xpToNextLevel.toLocaleString()} XP to level ${engagementLevel + 1}` : " • Level cap reached"}`,
-                `${xpBar(user.xp)}`
-            ].join("\n"))
-            .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4ca.png")
-            .addFields(
-                {
-                    name: "🎯 Engagement Breakdown",
-                    value: [
-                        `Level: **${engagementLevel.toLocaleString()}**`,
-                        `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
-                        `Completion: **${progressPercent}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🔥 Activity Signals",
-                    value: [
-                        `📆 Daily streak: **${user.dailyStreak.toLocaleString()}**`,
-                        `⏱️ Last XP: **${lastXpAt}**`,
-                        `🏆 Achievements: **${user.achievements.length.toLocaleString()}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🎖️ XP Role Track",
-                    value: [
-                        `Current: **${roleProgress.currentRole?.name || "No role yet"}**`,
-                        `Next: **${roleProgress.nextRole ? `${roleProgress.nextRole.name} at ${roleProgress.nextRole.xp.toLocaleString()} XP` : "Maximum tier"}**`,
-                        roleProgress.progressBar,
-                        roleProgress.progressText
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "💼 Economy Snapshot",
-                    value: [
-                        `🪙 Wallet: **${user.fnTokens.toLocaleString()}**`,
-                        `🏦 Bank: **${user.bankTokens.toLocaleString()}**`,
-                        `🎯 Access Points: **${getPoints(interaction.user.id).toLocaleString()}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🪖 Raid Progression",
-                    value: [
-                        `PMC Level: **${pmcLevel.toLocaleString()}**`,
-                        `Raid XP: **${user.pmcXP.toLocaleString()}**`,
-                        `Next PMC Level: **${pmcProgress.needForNext.toLocaleString()} XP away**`,
-                        `PMC Prestige: **${pmcPrestigeTier.numeral} • ${pmcPrestigeTier.label}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🌟 Status Badges",
-                    value: [
-                        `Engagement Prestige: **${user.prestige.toLocaleString()}**`,
-                        `Prestige Badge: **${prestigeBadge.label}**`,
-                        `PMC Tier: **${tierVisual.label}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🏆 Achievement Track",
-                    value: [
-                        `XP: ${earnedXpAchievements}/${XP_ACHIEVEMENTS.length}${nextXpAchievement ? ` • Next ${nextXpAchievement.threshold.toLocaleString()} XP` : " • Capstone earned"}`,
-                        `Voice: ${earnedVoiceAchievements}/${VOICE_ACHIEVEMENTS.length} • ${formatVoiceDuration(voiceTimeMs)}`,
-                        nextVoiceAchievement ? `Next voice award: ${nextVoiceAchievement.title} at ${nextVoiceAchievement.threshold.toLocaleString()} minutes` : "All voice awards earned"
-                    ].join("\n"),
-                    inline: false
-                },
-                {
-                    name: "✨ Equipped Title",
-                    value: equippedAchievementTitle?.title || "No achievement title equipped",
-                    inline: true
-                },
-                {
-                    name: "🎰 Game Record",
-                    value: [
-                        `Sessions: **${gameStats.casinoPlayed.toLocaleString()}**`,
-                        `W/L/P: **${gameStats.wins}/${gameStats.losses}/${gameStats.pushes}**`,
-                        `Net: **${gameStats.net >= 0 ? `+${gameStats.net}` : gameStats.net} FN Token$**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "✨ Recent Achievements",
-                    value: achievements,
-                    inline: false
-                },
-                {
-                    name: "🎖️ Recent Role Unlocks",
-                    value: formatXpRoleUnlocks(interaction.user.id, 5),
-                    inline: false
-                }
-            )
-            .setFooter({ text: "Detailed progression data is sourced from persisted state." });
-        return JSON.stringify({
-            embed: embed.toJSON(),
-            components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
-                new ButtonBuilder()
-                    .setCustomId(ACHIEVEMENT_TITLE_BUTTON_ID)
-                    .setLabel("Equip Achievement Title")
-                    .setStyle(ButtonStyle.Secondary)
-            ).toJSON()]
-        });
+    profile: async interaction => {
+        const target = interaction.options.getUser("user") || interaction.user;
+        if (target.bot) return "Bots do not have FNT profiles.";
+        return JSON.stringify({ ...buildProfilePayload(target, "overview", interaction.user.id, interaction.guild), profilePayload: true });
     },
     health: async interaction => {
         const adminError = requireAdministrator(interaction);
@@ -11234,8 +12000,9 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             ...scoped.map(entry => `#${entry.id} [${entry.status}|${entry.rewardKind === "item" ? `item:${entry.rewardItemId || "unknown"}x${entry.rewardQty}` : "generic"}] ${entry.prize} | entries ${entry.entries.length} | winners ${entry.winnerCount} | end <t:${Math.floor(entry.endAt / 1000)}:R>`)
         ].join("\n");
     },
-    giveaways: async interaction => {
-        return await commandHandlers.giveawaylist(interaction);
+    staff: async interaction => {
+        if (!interaction.guild || !isStaffMember(interaction.member)) return "Staff only. This desk is for administrators and configured staff roles.";
+        return JSON.stringify({ ...buildStaffHomeFor(interaction.guild.id, interaction.channelId), staffPayload: true });
     },
     ticketworkload: async interaction => {
         const adminError = requireAdministrator(interaction);
@@ -11998,6 +12765,10 @@ client.on("guildBanAdd", ban => runAsyncWithBoundary("guildBanAdd", async () => 
 
 client.on("guildMemberAdd", member => runAsyncWithBoundary("guildMemberAdd", async () => {
     trackGuildMemberChange(member, 1);
+    if (!member.user.bot && isFeatureEnabled("antiRaid")) {
+        const detection = antiRaidDetector.recordJoin(member.guild.id, member.id);
+        if (detection) runAsyncWithBoundary("antiRaidAlert", () => raiseAntiRaidAlert(member.guild, detection));
+    }
     const channel = await member.guild.channels.fetch(JOIN_WELCOME_CHANNEL_ID).catch(() => null);
     if (!channel || channel.type !== ChannelType.GuildText) {
         console.warn(`[welcome] Join channel ${JOIN_WELCOME_CHANNEL_ID} is missing or is not a text channel.`);
@@ -12084,6 +12855,8 @@ setInterval(() => {
 
 setInterval(() => {
     runAsyncWithBoundary("healthWatchdogInterval", () => runHealthWatchdog("interval_10m"));
+    runAsyncWithBoundary("staffHealthMonitor", () => runStaffHealthMonitor("interval_10m"));
+    antiRaidDetector.prune(Date.now());
 }, HEALTH_WATCHDOG_INTERVAL_MS).unref();
 
 setInterval(() => {
@@ -12105,6 +12878,10 @@ setTimeout(() => {
 setTimeout(() => {
     runAsyncWithBoundary("startupHealthWatchdog", () => runHealthWatchdog("startup_warmup"));
 }, 45_000).unref();
+
+setTimeout(() => {
+    runAsyncWithBoundary("staffHealthStartup", () => runStaffHealthMonitor("startup"));
+}, 60_000).unref();
 
 setTimeout(() => {
     runAsyncWithBoundary("startupBalanceReport", () => sendAutomatedBalanceReport("startup_warmup"));
@@ -12180,10 +12957,16 @@ process.on("beforeExit", () => {
 });
 
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
+    if (await handleProfileInteraction(interaction)) return;
+    if (await handleStaffInteraction(interaction)) return;
     if (await handleCheckpointInteraction(interaction)) return;
     if (interaction.isButton() && interaction.customId === XP_CRATE_BUTTON_ID) {
-        if (!interaction.guild || interaction.channelId !== XP_LEADERBOARD_CHANNEL_ID || interaction.user.bot) {
+        if (!interaction.guild || interaction.channelId !== getXpPanelChannelId() || interaction.user.bot) {
             await interaction.reply({ content: "Use the FN Xp Panel in its designated server channel.", flags: MessageFlags.Ephemeral });
+            return;
+        }
+        if (!isFeatureEnabled("xpCrates")) {
+            await interaction.reply({ content: "XP crates are paused by staff right now.", flags: MessageFlags.Ephemeral });
             return;
         }
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -13452,14 +14235,21 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
             channelId: interaction.channelId,
             durationMs: elapsedMs
         });
-        let parsed: { embed?: APIEmbed; withHelpNav?: boolean; helpPage?: string; components?: unknown[]; xpCrateId?: XpCrateId; bossPortraitName?: string } | null = null;
+        let parsed: { embed?: APIEmbed; embeds?: APIEmbed[]; withHelpNav?: boolean; helpPage?: string; components?: unknown[]; xpCrateId?: XpCrateId; bossPortraitName?: string; profilePayload?: boolean; staffPayload?: boolean } | null = null;
         try {
             parsed = JSON.parse(result);
         } catch {
             parsed = null;
         }
 
-        if (parsed?.embed) {
+        if (parsed?.profilePayload || parsed?.staffPayload) {
+            // Themed panels keep their own colors and controls instead of the generic outcome styling.
+            await interaction.editReply({
+                embeds: parsed.embeds || (parsed.embed ? [parsed.embed] : []),
+                components: Array.isArray(parsed.components) ? parsed.components as any[] : [],
+                allowedMentions: { parse: [] }
+            });
+        } else if (parsed?.embed) {
             try {
                 const embed = embedFromPayload(interaction.commandName, parsed.embed, interaction.user);
                 if (parsed.withHelpNav) {
@@ -13575,13 +14365,26 @@ client.on("messageCreate", message => runAsyncWithBoundary("messageCreate", asyn
         Boolean(message.reference) ||
         message.attachments.size > 0;
 
-    if (isCommunicationEvent) {
-        const { totalXp: nextXp } = awardEngagementXp(message.guild, message.author.id, MESSAGE_XP_GAIN);
+    if (message.guild && isFeatureEnabled("antiRaid") && !isStaffMember(message.member)) {
+        const detection = antiRaidDetector.recordMessage({
+            guildId: message.guild.id,
+            userId: message.author.id,
+            channelId: message.channelId,
+            messageId: message.id,
+            content: message.content,
+            mentionCount: message.mentions.users.filter(user => user.id !== message.author.id).size + message.mentions.roles.size + (message.mentions.everyone ? 1 : 0)
+        });
+        if (detection) runAsyncWithBoundary("antiRaidAlert", () => raiseAntiRaidAlert(message.guild!, detection));
+    }
+
+    const messageXpGain = getMessageXpGain();
+    if (isCommunicationEvent && messageXpGain > 0 && isFeatureEnabled("messageXp")) {
+        const { totalXp: nextXp } = awardEngagementXp(message.guild, message.author.id, messageXpGain);
         appendAuditEvent("engagement_xp", {
             userId: message.author.id,
             guildId: message.guildId,
             channelId: message.channelId,
-            xpDelta: MESSAGE_XP_GAIN,
+            xpDelta: messageXpGain,
             totalXp: nextXp,
             reference: Boolean(message.reference),
             mentionCount: message.mentions.users.size,

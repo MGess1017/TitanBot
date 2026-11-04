@@ -3,6 +3,10 @@ import path from "path";
 import { getNewProgressAchievements, type ProgressAchievement } from "./game/achievements";
 import { isXpCrateReward, type XpCrateReward } from "./game/xpCrates";
 import { normalizeCheckpointProfile, type CheckpointProfile } from "./game/checkpointRating";
+import {
+    defaultCosmeticState, defaultProfilePreferences, normalizeCosmeticState, normalizeProfilePreferences,
+    type CosmeticState, type ProfilePreferences
+} from "./game/cosmetics";
 
 export type UserState = {
     modPoints: number;
@@ -24,6 +28,8 @@ export type UserState = {
     lastDaily: number;
     latestXpCrate: XpCrateReward | null;
     checkpointProfile: CheckpointProfile | null;
+    cosmetics: CosmeticState;
+    preferences: ProfilePreferences;
     dailyStreak: number;
     achievements: string[];
     achievementIds: string[];
@@ -350,6 +356,8 @@ function defaultUserState(): UserState {
         lastDaily: 0,
         latestXpCrate: null,
         checkpointProfile: null,
+        cosmetics: defaultCosmeticState(),
+        preferences: defaultProfilePreferences(),
         dailyStreak: 0,
         achievements: [],
         achievementIds: [],
@@ -461,6 +469,7 @@ function shouldSkipPointsPersistence(): boolean {
 let pointsSaveBatchDepth = 0;
 let pointsSaveBatchDirty = false;
 let deferredPointsSaves = 0;
+const pointsSaveHealth = { failures: 0, lastFailureAt: 0, lastSuccessAt: 0, lastError: "" };
 
 export function savePoints(): void {
     if (pointsSaveBatchDepth > 0) {
@@ -470,7 +479,19 @@ export function savePoints(): void {
     }
     // Runtime tests can disable disk writes to avoid polluting live JSON stores.
     if (shouldSkipPointsPersistence()) return;
-    writePointsFileAtomic({ users: points });
+    try {
+        writePointsFileAtomic({ users: points });
+        pointsSaveHealth.lastSuccessAt = Date.now();
+    } catch (error) {
+        pointsSaveHealth.failures += 1;
+        pointsSaveHealth.lastFailureAt = Date.now();
+        pointsSaveHealth.lastError = error instanceof Error ? error.message : String(error);
+        throw error;
+    }
+}
+
+export function getPointsSaveHealth(): Readonly<typeof pointsSaveHealth> {
+    return pointsSaveHealth;
 }
 
 export function withDeferredPointsSave<T>(fn: () => T): T {
@@ -534,6 +555,8 @@ export function getXpPersistenceSnapshot(userId: string): XpPersistenceSnapshot 
 }
 
 const validatedCheckpointProfiles = new WeakSet<CheckpointProfile>();
+const validatedCosmetics = new WeakSet<CosmeticState>();
+const validatedPreferences = new WeakSet<ProfilePreferences>();
 
 export function ensureUser(userId: string): UserState {
     if (!points[userId]) {
@@ -574,6 +597,14 @@ export function ensureUser(userId: string): UserState {
     } else if (user.checkpointProfile !== null && !validatedCheckpointProfiles.has(user.checkpointProfile)) {
         user.checkpointProfile = normalizeCheckpointProfile(user.checkpointProfile);
         if (user.checkpointProfile) validatedCheckpointProfiles.add(user.checkpointProfile);
+    }
+    if (!user.cosmetics || !validatedCosmetics.has(user.cosmetics)) {
+        user.cosmetics = normalizeCosmeticState(user.cosmetics);
+        validatedCosmetics.add(user.cosmetics);
+    }
+    if (!user.preferences || !validatedPreferences.has(user.preferences)) {
+        user.preferences = normalizeProfilePreferences(user.preferences);
+        validatedPreferences.add(user.preferences);
     }
     if (user.dailyStreak === undefined) user.dailyStreak = 0;
     if (!Array.isArray(user.achievements)) user.achievements = [];
