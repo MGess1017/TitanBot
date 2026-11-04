@@ -10,8 +10,8 @@ exports.VOICE_XP_DOUBLE_AFTER_MS = 2 * 60 * MS_PER_VOICE_XP_MINUTE;
 function getVoiceXpMultiplier(connectedAt, now) {
     return now - connectedAt > exports.VOICE_XP_DOUBLE_AFTER_MS ? 2 : 1;
 }
-function isVoiceXpEligible(channelId, afkChannelId, isBot) {
-    return Boolean(channelId) && channelId !== afkChannelId && !isBot;
+function isVoiceXpEligible(channelId, isBot) {
+    return Boolean(channelId) && !isBot;
 }
 function accrueVoiceXp(state, now) {
     const lastAccruedAt = Math.max(0, Math.floor(state.lastAccruedAt));

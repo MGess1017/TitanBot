@@ -12,8 +12,8 @@ export function getVoiceXpMultiplier(connectedAt: number, now: number): 1 | 2 {
     return now - connectedAt > VOICE_XP_DOUBLE_AFTER_MS ? 2 : 1;
 }
 
-export function isVoiceXpEligible(channelId: string | null, afkChannelId: string | null, isBot: boolean): boolean {
-    return Boolean(channelId) && channelId !== afkChannelId && !isBot;
+export function isVoiceXpEligible(channelId: string | null, isBot: boolean): boolean {
+    return Boolean(channelId) && !isBot;
 }
 
 export function accrueVoiceXp(state: VoiceXpAccrualState, now: number): { state: VoiceXpAccrualState; xp: number; minutes: number } {

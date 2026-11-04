@@ -61,6 +61,7 @@ exports.rollSirGruRaidAssist = rollSirGruRaidAssist;
 const fs_extra_1 = __importDefault(require("fs-extra"));
 const path_1 = __importDefault(require("path"));
 const achievements_1 = require("./game/achievements");
+const xpCrates_1 = require("./game/xpCrates");
 exports.FOLLOWER_SUPPORT_ROLES = {
     balanced: { label: "Balanced", description: "Standard support across all raid bonuses." },
     scout: { label: "Scout", description: "25% stronger follower extraction bonus; 25% less follower token bonus." },
@@ -257,6 +258,7 @@ function defaultUserState() {
         lastXP: 0,
         prestige: 0,
         lastDaily: 0,
+        latestXpCrate: null,
         dailyStreak: 0,
         achievements: [],
         achievementIds: [],
@@ -456,6 +458,11 @@ function ensureUser(userId) {
         user.prestige = 0;
     if (user.lastDaily === undefined)
         user.lastDaily = 0;
+    if (user.latestXpCrate === undefined)
+        user.latestXpCrate = null;
+    if (user.latestXpCrate !== null && !(0, xpCrates_1.isXpCrateReward)(user.latestXpCrate)) {
+        throw new Error(`Invalid persisted XP crate for user ${userId}`);
+    }
     if (user.dailyStreak === undefined)
         user.dailyStreak = 0;
     if (!Array.isArray(user.achievements))

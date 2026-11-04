@@ -19,18 +19,32 @@ assert.equal(payload.flags, MessageFlags.IsComponentsV2);
 assert.deepEqual(payload.allowedMentions.parse, []);
 const panel = payload.components[0].toJSON();
 assert.equal(panel.type, ComponentType.Container);
+assert.equal(panel.accent_color, 0x9b59b6, "the live panel must use a purple accent");
 const text = panel.components.filter(component => component.type === ComponentType.TextDisplay).map(component => component.content).join("\n");
 assert.ok(text.includes("test\\_user"), "the actual username must be rendered and Markdown escaped");
-assert.ok(!text.includes(`<@${entries[0].id}>`), "a mention alone must not replace the username");
-assert.ok(text.includes("12,200 XP | Prestige 2 | Voice 2x"));
-assert.ok(text.includes("Disconnecting or entering AFK resets it to 1x"));
+assert.ok(text.includes(`### #1  <@${entries[0].id}>`), "each rank must display the user's mention");
+assert.ok(text.includes("**XP** `12,200`  |  **Prestige** `2`  |  **Voice XP** `2x`"));
+assert.ok(text.includes("Disconnecting from any VC resets it to 1x"));
+assert.ok(!text.includes("AFK"), "the panel must not describe an AFK reset or penalty");
 assert.ok(text.includes("<t:60:T>"));
 const empty = JSON.stringify(buildXpLeaderboardPanel([]).components[0].toJSON());
 assert.ok(empty.includes("No XP earned yet"));
-const many = Array.from({ length: 20 }, (_, index) => ({ ...entries[0], username: `player${index}` }));
-const limited = JSON.stringify(buildXpLeaderboardPanel(many).components[0].toJSON());
+const many = Array.from({ length: 20 }, (_, index) => ({ ...entries[0], id: String(BigInt(entries[0].id) + BigInt(index)), username: `player${index}` }));
+const limitedPanel = buildXpLeaderboardPanel(many).components[0].toJSON();
+const limited = JSON.stringify(limitedPanel);
 assert.ok(limited.includes("player9"));
 assert.ok(!limited.includes("player10"), "panel must stay within the top-10 limit");
+const rankComponents = limitedPanel.components.filter(component =>
+    component.type === ComponentType.TextDisplay && component.content.startsWith("### #")
+);
+assert.equal(rankComponents.length, 10, "each rank must have its own organized text component");
+rankComponents.forEach((component, index) => {
+    assert.equal(component.type, ComponentType.TextDisplay);
+    if (component.type === ComponentType.TextDisplay) {
+        assert.ok(component.content.includes(`### #${index + 1}  <@${many[index].id}>`));
+    }
+});
+assert.equal(limitedPanel.components.filter(component => component.type === ComponentType.Separator).length, 11);
 
 type FakeMessage = {
     id: string;

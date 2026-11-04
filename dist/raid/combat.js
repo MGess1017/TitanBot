@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getBossBattlePhase = getBossBattlePhase;
 exports.isBossBattleFinished = isBossBattleFinished;
+exports.getBossAttackIntent = getBossAttackIntent;
 exports.resolveBossTurn = resolveBossTurn;
 const domain_1 = require("./domain");
 function getBossBattlePhase(bossName, hp, maxHp) {
@@ -13,6 +14,12 @@ function getBossBattlePhase(bossName, hp, maxHp) {
 function isBossBattleFinished(state, totalTurns) {
     return state.bossHp <= 0 || state.pmcHp <= 0 || state.turn >= totalTurns;
 }
+function getBossAttackIntent(state) {
+    if (state.bossHp <= 0 || state.pmcHp <= 0 || (state.turn % 3 !== 2 && state.rage < 60))
+        return null;
+    const damage = 12 + Math.floor(Math.max(0, Math.min(100, state.rage)) * 0.16);
+    return { damage, defendedDamage: Math.ceil(damage * 0.25) };
+}
 function resolveBossTurn(input) {
     const state = { ...input.state };
     if (isBossBattleFinished(state, input.totalTurns))
@@ -20,6 +27,7 @@ function resolveBossTurn(input) {
     if (input.action === "heal" && (input.medPatchCount < 1 || state.pmcHp >= input.pmcHpMax)) {
         return { state, medPatchesUsed: 0, log: [input.medPatchCount < 1 ? "No med patches remaining." : "PMC already at full health."], accepted: false };
     }
+    const intent = getBossAttackIntent(state);
     const damageRoll = 30 + Math.floor((input.random || Math.random)() * 36);
     const log = [];
     let medPatchesUsed = 0;
@@ -31,10 +39,12 @@ function resolveBossTurn(input) {
         log.push(`Attack: dealt ${damage} damage. Armor break ${state.armorBreak}%.`);
     }
     else if (input.action === "defend") {
-        const damage = Math.min(state.pmcHp, Math.max(4, Math.floor(damageRoll * 0.28)));
+        const damage = intent ? 0 : Math.min(state.pmcHp, Math.max(4, Math.floor(damageRoll * 0.28)));
         state.pmcHp -= damage;
         state.rage = Math.max(0, state.rage - 14);
-        log.push(`Defend: absorbed pressure, lost ${damage} HP. Rage ${state.rage}%.`);
+        log.push(intent
+            ? `Defend: braced for the countercharge. Rage ${state.rage}%.`
+            : `Defend: absorbed pressure, lost ${damage} HP. Rage ${state.rage}%.`);
     }
     else if (input.action === "heal") {
         const healed = Math.min(70, input.pmcHpMax - state.pmcHp);
@@ -47,11 +57,14 @@ function resolveBossTurn(input) {
         state.armorBreak = Math.min(100, state.armorBreak + 8);
         log.push(`Scan: weak points revealed. Armor break ${state.armorBreak}%.`);
     }
-    if (state.bossHp > 0 && state.pmcHp > 0 && state.rage >= 70 && input.action !== "defend") {
-        const damage = Math.min(state.pmcHp, Math.floor(12 + state.rage * 0.16));
+    if (state.bossHp > 0 && state.pmcHp > 0 && intent) {
+        const damage = Math.min(state.pmcHp, input.action === "defend" ? intent.defendedDamage : intent.damage);
         state.pmcHp -= damage;
-        state.rage = Math.min(100, state.rage + 6);
-        log.push(`Countercharge: lost ${damage} HP.`);
+        if (input.action !== "defend")
+            state.rage = Math.min(100, state.rage + 6);
+        log.push(input.action === "defend"
+            ? `Countercharge blocked: lost ${damage} HP instead of ${intent.damage}.`
+            : `Countercharge: lost ${damage} HP.`);
     }
     state.turn += 1;
     if (state.bossHp <= 0)

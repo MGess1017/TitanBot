@@ -120,13 +120,13 @@ import {
 } from "./game/casinoBalance";
 import { ARMOR_IDS, COLLECTIBLE_ITEM_IDS, getVendorSellPrice, ITEM_DEFS, SHOP_ITEMS, ULTRA_RARE_COLLECTIBLE_IDS, type ItemDef, WEAPON_IDS } from "./game/catalog";
 import { awardBossHeartAchievement, getUnlockedBossHeartNames } from "./game/bossHearts";
-import { getBossPortraitUrl } from "./game/bossPortraits";
+import { getBossPortraitFiles, getBossPortraitUrl } from "./game/bossPortraits";
 import { CRAFT_RECIPES, craftItem, dismantleGear, getDynamicVendorPrice, insureGear, repairGear, resolveGearLoss, saveLoadout, upgradeGear } from "./game/gearEconomy";
 import { buildBossBattlePayload, buildBossIntelPayload, buildBossRosterPayload as buildBossRosterEmbedPayload, buildConsumableUsePayload, buildCrateOpenPayload, buildInventoryPayload, buildRaidBranchDecisionPayload, buildRaidResultPayload, buildRareRouteDecisionPayload, buildSellPickerPayload, buildShopPayload, buildTradeActionPayload, getSellableInventoryOptions, GEAR_UI_IDS, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS, rarityBadge } from "./game/payloads";
 import { getRaidOutcome, getRaidRewards } from "./game/raid";
 import * as RaidDomain from "./raid/domain";
 import * as RaidRuntime from "./raid/runtime";
-import { getBossBattlePhase, isBossBattleFinished, resolveBossTurn, type BossAction, type BossBattleState } from "./raid/combat";
+import { getBossAttackIntent, getBossBattlePhase, isBossBattleFinished, resolveBossTurn, type BossAction, type BossBattleState } from "./raid/combat";
 import { buildTicketTranscriptStub, exportTicketTranscript } from "./services/ticketTranscript";
 import type { TicketTranscriptStub } from "./services/ticketTranscript";
 import { buildTicketCommandHandlers } from "./commands/ticketCommands";
@@ -154,6 +154,8 @@ import {
 } from "./features/temporaryVoice";
 import { adjustPlayerCounts, buildPlayerCountEmbed, countPlayers, type PlayerCounts } from "./runtime/playerCounts";
 import { upsertXpLeaderboardPanel, XP_LEADERBOARD_CHANNEL_ID } from "./features/xpLeaderboard";
+import { addXpCrateProfile, buildXpCrateRewardEmbed, upsertXpCratePanel, xpCrateAttachment, XP_CRATE_BUTTON_ID } from "./features/xpCratePanel";
+import { claimXpCrate, type XpCrateId } from "./game/xpCrates";
 import { rejectIfRateLimited } from "./runtime/rateLimit";
 import { accrueVoiceXp, getVoiceXpMultiplier, isVoiceXpEligible, type VoiceXpAccrualState } from "./runtime/voiceXp";
 import { sanitizeTranscriptLine } from "./services/ticketText";
@@ -222,6 +224,7 @@ type VoiceXpSession = VoiceXpAccrualState & {
     userId: string;
     connected: boolean;
     updatedAt: number;
+    doubleXpNotified?: boolean;
 };
 const VOICE_XP_SESSIONS = new Map<string, VoiceXpSession>();
 const PLAYER_COUNTS_BY_GUILD = new Map<string, PlayerCounts>();
@@ -2070,6 +2073,7 @@ type GuildModerationState = {
         voiceCreator?: string | null;
         playerCount?: string | null;
         xpLeaderboard?: string | null;
+        xpCrate?: string | null;
     };
 };
 
@@ -3163,13 +3167,13 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     return moderationStore.guilds[guildId];
 }
 
-function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount" | "xpLeaderboard"): string | null {
+function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount" | "xpLeaderboard" | "xpCrate"): string | null {
     const cfg = ensureGuildModeration(guildId);
     const value = cfg.panelMessageIds?.[panel];
     return value ? String(value) : null;
 }
 
-function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount" | "xpLeaderboard", messageId: string | null): void {
+function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount" | "xpLeaderboard" | "xpCrate", messageId: string | null): void {
     const cfg = ensureGuildModeration(guildId);
     if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
     cfg.panelMessageIds[panel] = messageId;
@@ -4205,6 +4209,14 @@ function voiceXpSessionKey(guildId: string, userId: string): string {
     return `${guildId}:${userId}`;
 }
 
+function getCurrentVoiceXpMultiplier(guild: Guild | null, userId: string, now = Date.now()): 1 | 2 {
+    if (!guild?.voiceStates.cache.get(userId)?.channelId) return 1;
+    const session = VOICE_XP_SESSIONS.get(voiceXpSessionKey(guild.id, userId));
+    return session?.connected && session.connectedAt !== undefined
+        ? getVoiceXpMultiplier(session.connectedAt, now)
+        : 1;
+}
+
 function trackVoiceXpConnection(guild: Guild, userId: string, connected: boolean, now = Date.now()): void {
     const key = voiceXpSessionKey(guild.id, userId);
     const session = VOICE_XP_SESSIONS.get(key);
@@ -4214,6 +4226,7 @@ function trackVoiceXpConnection(guild: Guild, userId: string, connected: boolean
             session.guild = guild;
             session.connected = true;
             session.connectedAt = now;
+            session.doubleXpNotified = false;
             session.lastAccruedAt = now;
             session.updatedAt = now;
         } else {
@@ -4246,6 +4259,10 @@ function awardConnectedVoiceXp(session: VoiceXpSession, now = Date.now()): void 
     session.remainderMs = accrued.state.remainderMs;
     session.connectedAt = accrued.state.connectedAt;
     session.updatedAt = now;
+    if (!session.doubleXpNotified && getCurrentVoiceXpMultiplier(session.guild, session.userId, now) === 2) {
+        session.doubleXpNotified = true;
+        runAsyncWithBoundary("voiceDoubleXpNotification", () => notifyVoiceDoubleXpUnlock(session));
+    }
     if (accrued.xp <= 0) return;
 
     const award = awardEngagementXp(session.guild, session.userId, accrued.xp, accrued.minutes);
@@ -4258,11 +4275,25 @@ function awardConnectedVoiceXp(session: VoiceXpSession, now = Date.now()): void 
     });
 }
 
+async function notifyVoiceDoubleXpUnlock(session: VoiceXpSession): Promise<void> {
+    const user = await client.users.fetch(session.userId);
+    await user.send({
+        embeds: [new EmbedBuilder()
+            .setColor(0x9b59b6)
+            .setTitle("Double Voice XP Unlocked!")
+            .setDescription(`You've stayed in voice for over 2 continuous hours in **${session.guild.name}**.\n`
+                + "**2x voice XP is active: 200 XP/minute.**\n"
+                + "Switching VCs keeps your bonus. Disconnecting resets it to 1x. Message XP is unchanged.")],
+        allowedMentions: { parse: [] }
+    });
+    appendAuditEvent("voice_double_xp_notified", { guildId: session.guild.id, userId: session.userId });
+}
+
 function processVoiceXpSessions(now = Date.now()): void {
     for (const [key, session] of VOICE_XP_SESSIONS.entries()) {
         if (session.connected) {
             const channelId = session.guild.voiceStates.cache.get(session.userId)?.channelId || null;
-            if (!isVoiceXpEligible(channelId, session.guild.afkChannelId, false)) {
+            if (!isVoiceXpEligible(channelId, false)) {
                 awardConnectedVoiceXp(session, now);
                 session.connected = false;
                 session.lastAccruedAt = now;
@@ -4280,7 +4311,7 @@ function seedConnectedVoiceXpSessions(): void {
     const now = Date.now();
     for (const guild of client.guilds.cache.values()) {
         for (const state of guild.voiceStates.cache.values()) {
-            if (isVoiceXpEligible(state.channelId, guild.afkChannelId, Boolean(state.member?.user.bot)) && state.member) {
+            if (isVoiceXpEligible(state.channelId, Boolean(state.member?.user.bot)) && state.member) {
                 trackVoiceXpConnection(guild, state.member.id, true, now);
             }
         }
@@ -4662,13 +4693,13 @@ function getOpsBroadcastChannelId(guildId: string): string {
     return ACTIVITY_CHANNEL_ID || HEALTH_REPORT_CHANNEL_ID || ensureGuildModeration(guildId).modLogChannelId || "";
 }
 
-async function sendOpsBroadcastEmbed(guild: Guild, embed: EmbedBuilder): Promise<void> {
+async function sendOpsBroadcastEmbed(guild: Guild, embed: EmbedBuilder, bossName?: string): Promise<void> {
     const channelId = getOpsBroadcastChannelId(guild.id);
     if (!channelId) return;
 
     const channel = await guild.channels.fetch(channelId).catch(() => null);
     if (!channel || !channel.isTextBased() || !("send" in channel)) return;
-    await channel.send({ embeds: [embed] }).catch(() => undefined);
+    await channel.send({ embeds: [embed], files: getBossPortraitFiles(bossName) });
 }
 
 function buildRaidUnlockBroadcastEmbed(input: {
@@ -4677,7 +4708,6 @@ function buildRaidUnlockBroadcastEmbed(input: {
         mapLabel?: string;
         bossName?: string;
         bossTitle?: string;
-        bossImageUrl?: string;
         bossHeartUnlockedName?: string;
         pmcTierUnlockedLabel?: string;
         pmcTierUnlockedBadge?: string;
@@ -4707,7 +4737,7 @@ function buildRaidUnlockBroadcastEmbed(input: {
         .setColor(0xf59e0b)
         .setTitle("🌟 Premium Unlock Broadcast")
         .setDescription(`${user.username} completed a standout raid operation on **${result.mapLabel || "Unknown AO"}**.`)
-        .setThumbnail(result.bossImageUrl || ARMY_ICON_URL)
+        .setThumbnail(getBossPortraitUrl(result.bossName) || ARMY_ICON_URL)
         .addFields(
             {
                 name: "Operator",
@@ -5886,7 +5916,6 @@ function performRaidUnbatched(userId: string, bet: number, tension: string, mapK
     bossFerocity?: number;
     bossBonusXp?: number;
     bossKillChance?: number;
-    bossImageUrl?: string;
     pmcHpMax?: number;
     pmcHpRemaining?: number;
     bossHpMax?: number;
@@ -6271,7 +6300,6 @@ function performRaidUnbatched(userId: string, bet: number, tension: string, mapK
         alternateBossForm,
         bossBonusXp,
         bossKillChance: Math.round(bossKillChance * 100),
-        bossImageUrl: bossSpawned ? getBossPortraitUrl(boss?.name || mapCfg.bossName, boss?.title) || undefined : undefined,
         pmcHpMax: bossSpawned ? pmcHpMax : undefined,
         pmcHpRemaining: bossSpawned ? pmcHpRemaining : undefined,
         bossHpMax: bossSpawned ? bossHpMax : undefined,
@@ -6359,7 +6387,6 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
     success?: boolean;
     bossName?: string;
     bossTitle?: string;
-    bossImageUrl?: string;
     bossFerocity?: number;
     bossTraitLabels?: string[];
     bossCounteredTraits?: string[];
@@ -6385,6 +6412,7 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
     let action: BossAction | undefined;
     let state: BossBattleState = { turn: 0, bossHp: bossHpMax, pmcHp: pmcHpMax, rage: 0, armorBreak: 0, scanRevealed: false };
     let battleLog: string[] = [];
+    let portraitUploaded = false;
     const actionIds = new Map<string, BossAction>([
         [RAID_ENCOUNTER_IDS.attack, "attack"],
         [RAID_ENCOUNTER_IDS.defend, "defend"],
@@ -6393,43 +6421,52 @@ async function presentBossBattle(interaction: ChatInputCommandInteraction, resul
     ]);
     const renderFrame = async (finished: boolean) => {
         const phase = getBossBattlePhase(bossName, state.bossHp, bossHpMax);
+        const intent = finished ? null : getBossAttackIntent(state);
         const payload = JSON.parse(buildBossBattlePayload({
             bossName,
             bossTitle: result.bossTitle,
-            bossImageUrl: result.bossImageUrl,
             bossFerocity: result.bossFerocity,
             bossTraitLabels: result.bossTraitLabels,
-            bossPhaseNames: result.bossPhaseNames,
             bossCurrentPhase: phase.name,
             phaseMechanic: phase.mechanic,
             counteredTraits: result.bossCounteredTraits,
-            bossDefeated: state.bossHp <= 0,
             bossKillChance: result.bossKillChance,
             bossHpMax,
-            bossHpFinal: result.bossHpRemaining || 0,
             pmcLevel: result.pmcLevel,
             pmcPrestige: result.pmcPrestige,
             pmcHpMax,
-            pmcHpFinal: result.pmcHpRemaining || 0,
             weaponName: result.selectedWeaponName,
             armorName: result.selectedArmorName,
             turn: state.turn,
             totalTurns,
             action,
-            animationFrame: state.turn === 0 ? 0 : 3,
             interactive: !finished,
             finished,
             bossHpCurrent: state.bossHp,
             pmcHpCurrent: state.pmcHp,
             rage: state.rage,
             armorBreak: state.armorBreak,
-            specialAttack: state.rage >= 60 ? "Countercharge imminent" : undefined,
+            specialAttack: intent
+                ? `Countercharge this turn: ${intent.damage} damage. Defend reduces it to ${intent.defendedDamage}.`
+                : undefined,
             scanRevealed: state.scanRevealed,
             medPatchCount: getInventoryCount(interaction.user.id, "med_patch"),
             decisionDeadline: finished ? undefined : Date.now() + 8_000,
             battleLog
         }));
-        return interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components }).catch(() => null);
+        try {
+            const message = await interaction.editReply({
+                embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
+                components: payload.components,
+                ...(!portraitUploaded ? { attachments: [], files: getBossPortraitFiles(bossName) } : {})
+            });
+            portraitUploaded = true;
+            return message;
+        } catch (error) {
+            console.error(`[raid] Could not render battle frame for ${bossName}:`, error);
+            appendAuditEvent("raid_battle_render_failed", { userId: interaction.user.id, bossName, reason: toSafeString(error) });
+            return null;
+        }
     };
     if (result.bossDefeated || result.success === false) {
         state.bossHp = result.bossHpRemaining ?? bossHpMax;
@@ -8681,10 +8718,7 @@ async function refreshXpLeaderboardPanel(): Promise<void> {
         const now = Date.now();
         const entries = await Promise.all(getLeaderboard().map(async row => {
             const user = await client.users.fetch(row.id);
-            const session = VOICE_XP_SESSIONS.get(voiceXpSessionKey(channel.guild.id, row.id));
-            const voiceMultiplier = session?.connected && session.connectedAt !== undefined
-                ? getVoiceXpMultiplier(session.connectedAt, now)
-                : 1;
+            const voiceMultiplier = getCurrentVoiceXpMultiplier(channel.guild, row.id, now);
             return { ...row, username: user.username, voiceMultiplier };
         }));
         const previousId = getGuildPanelMessageId(channel.guild.id, "xpLeaderboard");
@@ -8693,6 +8727,18 @@ async function refreshXpLeaderboardPanel(): Promise<void> {
     } finally {
         xpLeaderboardUpdateInFlight = false;
     }
+}
+
+async function ensureXpCratePanel(): Promise<void> {
+    if (!client.isReady()) return;
+    const channel = client.channels.cache.get(XP_LEADERBOARD_CHANNEL_ID)
+        || await client.channels.fetch(XP_LEADERBOARD_CHANNEL_ID);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+        throw new Error(`XP crate panel channel ${XP_LEADERBOARD_CHANNEL_ID} is missing or is not a text channel.`);
+    }
+    const previousId = getGuildPanelMessageId(channel.guild.id, "xpCrate");
+    const messageId = await upsertXpCratePanel(channel, client.user.id, previousId);
+    if (previousId !== messageId) setGuildPanelMessageId(channel.guild.id, "xpCrate", messageId);
 }
 
 function scheduleXpLeaderboardUpdate(): void {
@@ -9823,6 +9869,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
     },
     xp: async interaction => {
         const userId = interaction.user.id;
+        const voiceMultiplier = getCurrentVoiceXpMultiplier(interaction.guild, userId);
         const user = ensureUser(userId);
         const accessPoints = getPoints(userId);
         const badge = getAccessPointBadge(accessPoints);
@@ -9862,6 +9909,11 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
             ].join("\n"))
             .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4c8.png")
             .addFields(
+                {
+                    name: "XP Status",
+                    value: `Voice XP: **${voiceMultiplier}x** (${voiceMultiplier * 100} XP/minute)\n2x after 2 continuous hours in any VC. Disconnecting resets to 1x. Message XP is unchanged.`,
+                    inline: false
+                },
                 {
                     name: "🎯 Engagement",
                     value: [
@@ -9925,7 +9977,8 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                 }
             )
             .setFooter({ text: "Live data is pulled from persisted XP state." });
-        return JSON.stringify({ embed: embed.toJSON() });
+        addXpCrateProfile(embed, user.latestXpCrate);
+        return JSON.stringify({ embed: embed.toJSON(), xpCrateId: user.latestXpCrate?.crateId });
     },
     pmc: async interaction => buildPmcProfilePayload(interaction.user),
     xpstats: async interaction => {
@@ -11328,7 +11381,7 @@ const commandHandlers: Record<string, (interaction: ChatInputCommandInteraction)
                 ? buildRaidUnlockBroadcastEmbed({ user: interaction.user, result })
                 : null;
             if (interaction.guild && raidBroadcast) {
-                runAsyncWithBoundary("raidUnlockBroadcast", () => sendOpsBroadcastEmbed(interaction.guild!, raidBroadcast));
+                runAsyncWithBoundary("raidUnlockBroadcast", () => sendOpsBroadcastEmbed(interaction.guild!, raidBroadcast, result.bossName));
                 appendAuditEvent("raid_unlock_broadcast", {
                     guildId: interaction.guild.id,
                     userId: interaction.user.id,
@@ -11703,6 +11756,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
     updateBotPresence();
     seedConnectedVoiceXpSessions();
     runAsyncWithBoundary("xpLeaderboardInit", refreshXpLeaderboardPanel);
+    runAsyncWithBoundary("xpCratePanelInit", ensureXpCratePanel);
     console.log(`[startup] ${buildStartupSummary(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {
         userTag: client.user?.tag,
@@ -11970,6 +12024,38 @@ process.on("beforeExit", () => {
 });
 
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
+    if (interaction.isButton() && interaction.customId === XP_CRATE_BUTTON_ID) {
+        if (!interaction.guild || interaction.channelId !== XP_LEADERBOARD_CHANNEL_ID || interaction.user.bot) {
+            await interaction.reply({ content: "Use the FN Xp Panel in its designated server channel.", flags: MessageFlags.Ephemeral });
+            return;
+        }
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        try {
+            const result = withDeferredPointsSave(() => {
+                const user = ensureUser(interaction.user.id);
+                const claim = claimXpCrate(user);
+                if (!claim.ok) return claim;
+                awardEngagementXp(interaction.guild, interaction.user.id, claim.reward.xp);
+                savePoints();
+                return claim;
+            });
+            if (!result.ok) {
+                await interaction.editReply({ content: "Daily limit exceeded" });
+                return;
+            }
+            appendAuditEvent("daily_xp_crate_claimed", { userId: interaction.user.id, guildId: interaction.guildId, ...result.reward });
+            await interaction.editReply({
+                embeds: [buildXpCrateRewardEmbed(result.reward)],
+                files: [xpCrateAttachment(result.reward.crateId)],
+                allowedMentions: { parse: [] }
+            });
+        } catch (error) {
+            console.error("[xpCrateClaim]", error);
+            appendAuditEvent("xp_crate_claim_failed", { userId: interaction.user.id, reason: toSafeString(error) });
+            await interaction.editReply({ content: "Could not complete the crate response. Check /xp for any saved reward before retrying." });
+        }
+        return;
+    }
     if (interaction.isAutocomplete()) {
         const focused = interaction.options.getFocused(true);
 
@@ -13015,7 +13101,11 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
             return;
         }
         const payload = JSON.parse(buildBossIntelPayload({ bossName, progress: getBossProgressEntry(interaction.user.id, bossName) }));
-        await interaction.reply({ embeds: [embedFromPayload("bosses", payload.embed, interaction.user)], flags: MessageFlags.Ephemeral }).catch(() => undefined);
+        await interaction.reply({
+            embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
+            files: getBossPortraitFiles(bossName),
+            flags: MessageFlags.Ephemeral
+        });
         return;
     }
 
@@ -13205,7 +13295,7 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
             channelId: interaction.channelId,
             durationMs: elapsedMs
         });
-        let parsed: { embed?: APIEmbed; withHelpNav?: boolean; helpPage?: string; components?: unknown[] } | null = null;
+        let parsed: { embed?: APIEmbed; withHelpNav?: boolean; helpPage?: string; components?: unknown[]; xpCrateId?: XpCrateId; bossPortraitName?: string } | null = null;
         try {
             parsed = JSON.parse(result);
         } catch {
@@ -13228,6 +13318,10 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
                     await interaction.editReply({
                         embeds: [embed],
                         components: Array.isArray(parsed.components) ? parsed.components as any[] : [],
+                        files: interaction.commandName === "xp" && parsed.xpCrateId
+                            ? [xpCrateAttachment(parsed.xpCrateId)]
+                            : getBossPortraitFiles(parsed.bossPortraitName),
+                        ...(interaction.commandName === "raid" ? { attachments: [] } : {}),
                         allowedMentions: { parse: ["roles"] }
                     });
                 }
@@ -13282,8 +13376,8 @@ client.on("voiceStateUpdate", (oldState, newState) => {
     const member = newState.member || oldState.member;
     if (!member || member.user.bot) return;
     const key = voiceXpSessionKey(member.guild.id, member.id);
-    const oldEligible = isVoiceXpEligible(oldState.channelId, member.guild.afkChannelId, false);
-    const newEligible = isVoiceXpEligible(newState.channelId, member.guild.afkChannelId, false);
+    const oldEligible = isVoiceXpEligible(oldState.channelId, false);
+    const newEligible = isVoiceXpEligible(newState.channelId, false);
     if (oldEligible && !newEligible) trackVoiceXpConnection(member.guild, member.id, false);
     if (newEligible && (!oldEligible || !VOICE_XP_SESSIONS.get(key)?.connected)) trackVoiceXpConnection(member.guild, member.id, true);
 });

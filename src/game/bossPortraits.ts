@@ -1,43 +1,46 @@
-function normalizeBossName(raw: string | null | undefined): string {
-    return String(raw || "").trim();
-}
+import path from "node:path";
+import { AttachmentBuilder } from "discord.js";
 
-const BOSS_VISUAL_PROFILES: Record<string, string> = {
-    "The Grave Warden": "skeletal crypt marshal in black iron plate, pale corpse fire in the eye sockets, cemetery chains and cracked tombstone armor",
-    "Sister Vell": "tall bone oracle demoness with antlered skull crown, torn funeral veil, bone runes, and cold blue witchfire",
-    "Morrow Fang": "massive horned pit reaper with obsidian fangs, scarred charcoal hide, hooked cleaver, and red furnace eyes",
-    "Butcher Prime": "towering butcher demon in blood-stained industrial armor, iron mask, chained cleaver, and furnace smoke",
-    Shardjaw: "crystalline jawed war beast with steel-plated hide, jagged quartz teeth, and electric blue fissures",
-    "Hexline Rook": "chess-themed execution demon in angular black armor, glowing hex sigils, crown-like helm, and surgical blade",
-    "Booger King Omega": "enormous grotesque swamp demon king with mossy armor, asymmetrical horns, toxic green vapor, and royal ruin ornaments",
-    "Queen Sumphex": "ancient toxic swamp queen demon with crown of hooked limbs, lacquered chitin armor, emerald venom glow, and ceremonial staff",
-    "Warlord Nullhide": "void-armored demon warlord with featureless obsidian hide, purple-black cannon, torn banners, and a collapsing halo",
-    "Dreadwake Morvane": "drowned leviathan demon admiral with barnacle armor, kelp mantle, naval iron mask, and seawater pouring from its mouth",
-    "Kraghoss the Ashen Standard": "colossal ash demon khan in scorched siege armor, ember horns, war standard, molten eyes, and battlefield smoke",
-    "Thalrex Mourntide": "ancient drowned god demon with coral crown, deep-sea plate armor, enormous tentacle mantle, and abyssal blue eyes",
-    "Acid Wraith": "translucent spectral demon wrapped in dripping acid mist, exposed rib-like armor, elongated claws, and neon chartreuse eyes",
-    DogMeat: "feral three-headed hellhound demon fused with a scarred armored war beast, ember saliva, iron muzzle plates, and predatory eyes",
-    "Queen Of Doom": "regal female demon queen in black cathedral armor, four swept horns, doom sigils, veil of ravens, and crimson crown fire",
-    "Wizard Of Chaos": "towering reality-warping archdemon wizard with multiple horns, fractured porcelain face, floating spell shards, six burning eyes, and a storm of impossible colors"
+const BOSS_PORTRAITS: Record<string, string> = {
+    "The Grave Warden": "grave-warden",
+    "Sister Vell": "sister-vell",
+    "Morrow Fang": "morrow-fang",
+    DogMeat: "dogmeat",
+    "Butcher Prime": "butcher-prime",
+    Shardjaw: "shardjaw",
+    "Hexline Rook": "hexline-rook",
+    "Acid Wraith": "acid-wraith",
+    "Queen Of Doom": "queen-of-doom",
+    "Booger King Omega": "booger-king-omega",
+    "Queen Sumphex": "queen-sumphex",
+    "Warlord Nullhide": "warlord-nullhide",
+    "Wizard Of Chaos": "wizard-of-chaos",
+    "Dreadwake Morvane": "dreadwake-morvane",
+    "Kraghoss the Ashen Standard": "kraghoss",
+    "Thalrex Mourntide": "thalrex-mourntide",
+    "Veyra the Blackglass Matriarch": "veyra",
+    "Nullforge Archon": "nullforge-archon",
+    "Cardinal Voss Bloodwake": "cardinal-voss",
+    "Eclipse Praetor Nyx": "eclipse-praetor-nyx",
+    "Asterion the Titanbreaker": "asterion"
 };
 
-export function getBossPortraitUrl(bossName: string | null | undefined, bossTitle?: string | null): string | null {
-    const name = normalizeBossName(bossName);
+function getBossPortraitFilename(bossName: string | null | undefined): string | null {
+    const name = bossName?.trim();
     if (!name) return null;
+    const slug = BOSS_PORTRAITS[name];
+    if (!slug) throw new Error(`Missing portrait mapping for raid boss: ${name}`);
+    return `boss-${slug}.jpg`;
+}
 
-    const title = String(bossTitle || "").trim();
-    const seed = `${name}|${title}`;
-    const encodedSeed = encodeURIComponent(seed);
-    const visualProfile = BOSS_VISUAL_PROFILES[name] || "terrifying horned demon warlord with distinctive armor and supernatural eyes";
-    const prompt = encodeURIComponent([
-        `photorealistic dark fantasy demon boss portrait of ${name}${title ? `, ${title}` : ""}`,
-        visualProfile,
-        "realistic anatomy, detailed skin, practical armor materials, cinematic creature concept photography",
-        "ominous battlefield ruins, ash, smoke, faint firelight, cursed atmosphere",
-        "dramatic rim lighting, high contrast, centered bust portrait, sharp facial detail",
-        "no text, no logo, no watermark, no extra characters"
-    ].join(", "));
+export function getBossPortraitUrl(bossName: string | null | undefined): string | null {
+    const filename = getBossPortraitFilename(bossName);
+    return filename ? `attachment://${filename}` : null;
+}
 
-    // Pollinations image endpoint creates deterministic portraits by seed while allowing dark style prompts.
-    return `https://image.pollinations.ai/prompt/${prompt}?width=512&height=512&seed=${encodedSeed}&nologo=true`;
+export function getBossPortraitFiles(bossName: string | null | undefined): AttachmentBuilder[] {
+    const filename = getBossPortraitFilename(bossName);
+    if (!filename) return [];
+    const assetName = filename.slice("boss-".length);
+    return [new AttachmentBuilder(path.resolve(__dirname, `../../assets/bosses/${assetName}`), { name: filename })];
 }

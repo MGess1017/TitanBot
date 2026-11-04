@@ -24,22 +24,30 @@ export type XpLeaderboardEntry = {
 
 export function buildXpLeaderboardPanel(entries: XpLeaderboardEntry[], now = Date.now()) {
     const rows = entries.slice(0, 10).map((entry, index) =>
-        `**${index + 1}. ${escapeMarkdown(entry.username)}**\n`
-        + `${entry.xp.toLocaleString("en-US")} XP | Prestige ${entry.prestige} | Voice ${entry.voiceMultiplier}x`
+        `### #${index + 1}  <@${entry.id}>\n`
+        + `-# Username: ${escapeMarkdown(entry.username)}\n`
+        + `**XP** \`${entry.xp.toLocaleString("en-US")}\`  |  **Prestige** \`${entry.prestige}\`  |  **Voice XP** \`${entry.voiceMultiplier}x\``
     );
     const panel = new ContainerBuilder()
-        .setAccentColor(0xf59e0b)
+        .setAccentColor(0x9b59b6)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(
             `${PANEL_HEADING}\nTop 10 engagement XP players`
         ))
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-            rows.join("\n\n") || "No XP earned yet. Chat or join a voice channel to get started."
-        ))
-        .addSeparatorComponents(new SeparatorBuilder())
+        .addSeparatorComponents(new SeparatorBuilder());
+    if (rows.length) {
+        rows.forEach((row, index) => {
+            if (index > 0) panel.addSeparatorComponents(new SeparatorBuilder());
+            panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(row));
+        });
+    } else {
+        panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+            "No XP earned yet. Chat or join a voice channel to get started."
+        ));
+    }
+    panel.addSeparatorComponents(new SeparatorBuilder())
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(
             "### Voice XP Bonus\n100 XP/minute, then 200 XP/minute after 2 continuous hours.\n"
-            + "Normal VC switches keep your bonus. Disconnecting or entering AFK resets it to 1x; earned XP stays.\n"
+            + "All VCs earn XP. Switching VCs keeps your bonus. Disconnecting from any VC resets it to 1x; earned XP stays.\n"
             + `-# Updates within 15 seconds | Updated <t:${Math.floor(now / 1000)}:T>`
         ));
     return {

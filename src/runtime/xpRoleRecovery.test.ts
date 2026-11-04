@@ -65,6 +65,7 @@ async function verifyThresholdRoleApplication(botSource: string): Promise<void> 
         notifyXpThresholdUnlock: async () => undefined,
         scheduleXpLeaderboardUpdate: () => undefined,
         accrueVoiceXp,
+        getCurrentVoiceXpMultiplier: () => 1,
         appendAuditEvent: () => undefined,
         updateXpRoleSyncMetrics: (update: (metrics: typeof syncMetrics) => void) => update(syncMetrics)
     });
@@ -151,9 +152,10 @@ async function runXpRoleRecoveryTests(): Promise<void> {
     assert.equal(resumedVoiceMinute.state.remainderMs, 0, "awarded voice minutes must clear their remainder");
     const longVoiceSession = accrueVoiceXp({ lastAccruedAt: 0, remainderMs: 0 }, 180_000);
     assert.equal(longVoiceSession.xp, 300, "voice accrual must award every complete minute");
-    assert.equal(isVoiceXpEligible("voice-1", null, false), true);
-    assert.equal(isVoiceXpEligible("afk-1", "afk-1", false), false, "AFK voice channel must not accrue XP");
-    assert.equal(isVoiceXpEligible("voice-1", null, true), false, "bot accounts must not accrue voice XP");
+    assert.equal(isVoiceXpEligible("voice-1", false), true);
+    assert.equal(isVoiceXpEligible("afk-1", false), true, "all voice channels must accrue XP without an AFK penalty");
+    assert.equal(isVoiceXpEligible(null, false), false, "disconnected users must not accrue voice XP");
+    assert.equal(isVoiceXpEligible("voice-1", true), false, "bot accounts must not accrue voice XP");
 
     const tierMatches = Array.from(botSource.matchAll(/\{ xp: (\d+), roleId: "(\d+)", name: "([^"]+)" \}/g));
     assert.equal(tierMatches.length, 43, "expected 31 existing and 12 new XP role tiers");

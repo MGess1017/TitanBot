@@ -3,12 +3,33 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import ts from "typescript";
-import { getBossBattlePhase, isBossBattleFinished, resolveBossTurn, type BossBattleState } from "../raid/combat";
+import crypto from "node:crypto";
+import { EmbedBuilder } from "discord.js";
+import { getBossAttackIntent, getBossBattlePhase, isBossBattleFinished, resolveBossTurn, type BossBattleState } from "../raid/combat";
+import { getBossPortraitFiles, getBossPortraitUrl } from "../game/bossPortraits";
 import { RAID_BOSS_ROSTER, getBossCombatProfile } from "../raid/domain";
 import { buildBossBattlePayload, buildBossIntelPayload, buildBossRosterPayload, buildRaidBranchDecisionPayload, buildRareRouteDecisionPayload, buildRaidResultPayload, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
 import { ITEM_DEFS } from "../game/catalog";
 
 const initial: BossBattleState = { turn: 0, bossHp: 800, pmcHp: 600, rage: 0, armorBreak: 0, scanRevealed: false };
+const portraitDigests = new Set<string>();
+const portraitNames = new Set<string>();
+for (const boss of RAID_BOSS_ROSTER) {
+    const files = getBossPortraitFiles(boss.name);
+    assert.equal(files.length, 1);
+    assert.equal(getBossPortraitUrl(boss.name), `attachment://${files[0].name}`);
+    assert.equal(typeof files[0].attachment, "string");
+    const bytes = fs.readFileSync(String(files[0].attachment));
+    assert.equal(bytes.subarray(0, 3).toString("hex"), "ffd8ff", "every boss must have a real bundled JPEG");
+    assert.ok(bytes.length > 10_000 && bytes.length < 1_000_000, "portraits must stay comfortably below attachment limits");
+    portraitNames.add(files[0].name!);
+    portraitDigests.add(crypto.createHash("sha256").update(bytes).digest("hex"));
+}
+assert.equal(portraitDigests.size, 21, "all 21 bosses must have individually generated, distinct art");
+assert.equal(portraitNames.size, RAID_BOSS_ROSTER.length);
+assert.equal(getBossPortraitUrl(null), null);
+assert.deepEqual(getBossPortraitFiles(undefined), []);
+assert.throws(() => getBossPortraitUrl("Unmapped boss"), /Missing portrait mapping/);
 const base = { totalTurns: 8, pmcHpMax: 600, medPatchCount: 2, random: () => 0 };
 const attack = resolveBossTurn({ ...base, state: initial, action: "attack" });
 assert.equal(attack.state.bossHp, 770);
@@ -33,7 +54,25 @@ assert.equal(isBossBattleFinished({ ...initial, pmcHp: 0 }, 8), true);
 assert.equal(isBossBattleFinished({ ...initial, turn: 8 }, 8), true);
 const defend = resolveBossTurn({ ...base, state: { ...initial, rage: 80 }, action: "defend" });
 assert.equal(defend.state.rage, 66);
-assert.equal(defend.state.pmcHp, 592);
+assert.equal(defend.state.pmcHp, 594);
+assert.equal(getBossAttackIntent(initial), null);
+assert.equal(getBossAttackIntent({ ...initial, turn: 1 }), null);
+assert.deepEqual(getBossAttackIntent({ ...initial, turn: 2 }), { damage: 12, defendedDamage: 3 });
+assert.deepEqual(getBossAttackIntent({ ...initial, rage: 60 }), { damage: 21, defendedDamage: 6 });
+assert.deepEqual(getBossAttackIntent({ ...initial, rage: 100 }), { damage: 28, defendedDamage: 7 });
+assert.equal(getBossAttackIntent({ ...initial, bossHp: 0, turn: 2 }), null);
+for (const state of [{ ...initial, turn: 2 }, { ...initial, turn: 5, rage: 50 }, { ...initial, rage: 60 }]) {
+    const intent = getBossAttackIntent(state)!;
+    for (const action of ["attack", "defend", "scan", "heal"] as const) {
+        const before = { ...state, pmcHp: 400 };
+        const resolved = resolveBossTurn({ ...base, state: before, action });
+        const healed = action === "heal" ? 70 : 0;
+        const expectedDamage = action === "defend" ? intent.defendedDamage : intent.damage;
+        assert.equal(resolved.state.pmcHp, 400 + healed - expectedDamage, "telegraphed damage must match actual damage, with no duplicate Defend penalty");
+        assert.equal(resolved.state.turn, state.turn + 1);
+        assert.match(resolved.log.join(" "), /Countercharge/);
+    }
+}
 const scan = resolveBossTurn({ ...base, state: initial, action: "scan" });
 assert.equal(scan.state.scanRevealed, true);
 assert.equal(scan.state.armorBreak, 8);
@@ -47,7 +86,7 @@ for (const boss of RAID_BOSS_ROSTER) {
 assert.equal(getBossBattlePhase("Wizard Of Chaos", 550, 1000).name, "Chaos Ascension");
 assert.equal(getBossBattlePhase("Wizard Of Chaos", 200, 1000).name, "Apocalypse Cast");
 
-const payloadInput = { bossName: "The Grave Warden", bossHpMax: 800, bossHpFinal: 0, pmcHpMax: 600, pmcHpFinal: 100, turn: 1, totalTurns: 8, bossHpCurrent: 400, pmcHpCurrent: 500 };
+const payloadInput = { bossName: "The Grave Warden", bossHpMax: 800, pmcHpMax: 600, turn: 1, totalTurns: 8, bossHpCurrent: 400, pmcHpCurrent: 500 };
 const noHeal = JSON.parse(buildBossBattlePayload({ ...payloadInput, medPatchCount: 0, bossCurrentPhase: "Enraged", phaseMechanic: "Signature attack incoming.", decisionDeadline: 20000, counteredTraits: ["Reactive Armor"] }));
 assertDiscordEmbed(noHeal.embed);
 assert.equal(noHeal.components[0].components.find((button: { custom_id: string }) => button.custom_id === RAID_ENCOUNTER_IDS.heal).disabled, true);
@@ -55,6 +94,10 @@ assert.match(noHeal.embed.description, /Enraged/);
 assert.match(noHeal.embed.fields[0].value, /Signature attack incoming/);
 assert.match(noHeal.embed.fields[0].value, /Countered: Reactive Armor/);
 assert.match(noHeal.embed.fields.at(-1).value, /<t:20:R>/);
+assert.equal(noHeal.embed.image.url, getBossPortraitUrl(payloadInput.bossName));
+const fullHpLateTurn = JSON.parse(buildBossBattlePayload({ ...payloadInput, turn: 7, bossHpCurrent: 800 }));
+assert.match(fullHpLateTurn.embed.description, /Contact/, "phase must follow actual HP, not simulated turn progress");
+assert.match(fullHpLateTurn.embed.fields[0].value, /800\/800/, "late turns must not synthesize boss damage");
 const canHeal = JSON.parse(buildBossBattlePayload({ ...payloadInput, medPatchCount: 2 }));
 assertDiscordEmbed(canHeal.embed);
 assert.equal(canHeal.components[0].components.find((button: { custom_id: string }) => button.custom_id === RAID_ENCOUNTER_IDS.heal).disabled, false);
@@ -79,7 +122,8 @@ const routeDecision = JSON.parse(buildRareRouteDecisionPayload({ route: {
     key: "test_route",
     label: "Test Exit",
     description: "A concealed extraction route.",
-    mapKey: "plagued_cemetary",
+    mapKeys: ["plagued_cemetary"],
+    baseDiscoveryChance: 0.045,
     requiredItemId: "boneway_key",
     safeSuccessBonus: 0.12,
     cacheSuccessPenalty: 0.06,
@@ -95,6 +139,7 @@ for (const boss of RAID_BOSS_ROSTER) {
     const combat = intel.embed.fields.find((field: { name: string }) => field.name === "Combat");
     assert.ok(combat?.value.includes("Traits:"));
     assert.ok(combat?.value.includes("Phases:"));
+    assert.equal(intel.embed.image.url, getBossPortraitUrl(boss.name));
 }
 const progressIntel = JSON.parse(buildBossIntelPayload({ bossName: "The Grave Warden", progress: { encounters: 6, kills: 4, currentStreak: 2, bestStreak: 3, intelLevel: 1, heartUpgradeLevel: 1, alternateFormUnlocked: false } }));
 assert.match(progressIntel.embed.fields.at(-1).value, /4\/6 kills • Best streak 3/);
@@ -111,6 +156,10 @@ assert.ok(result.components[0].components.some((button: { custom_id: string }) =
 const largeResult = JSON.parse(buildRaidResultPayload({ ...resultInput, result: { loot: Object.keys(ITEM_DEFS).map(id => ({ id, qty: 1 })) } }));
 assertDiscordEmbed(largeResult.embed);
 assert.match(largeResult.embed.fields.find((field: { name: string }) => field.name === "Recovered Loot").value, /more stacks in inventory/);
+const bossResult = JSON.parse(buildRaidResultPayload({ ...resultInput, result: { bossSpawned: true, bossName: "Sister Vell" } }));
+assert.equal(bossResult.bossPortraitName, "Sister Vell");
+assert.equal(bossResult.embed.thumbnail.url, getBossPortraitUrl("Sister Vell"));
+assert.equal(result.bossPortraitName, undefined, "a raid without a boss must not attach an unrelated portrait");
 async function runInteractionTests(): Promise<void> {
     const sourceText = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
     const source = ts.createSourceFile("bot.ts", sourceText, ts.ScriptTarget.ES2020, true);
@@ -120,7 +169,8 @@ async function runInteractionTests(): Promise<void> {
     async function simulate(input: { actions?: string[]; medPatches?: number; result?: Record<string, unknown>; failEdit?: number }) {
         const decisions = new Map();
         const actions = [...(input.actions || [])];
-        const frames: Array<{ components: unknown[] }> = [];
+        const frames: Array<{ components: unknown[]; embeds: Array<{ fields: Array<{ name: string; value: string }> }>; files?: unknown[]; attachments?: unknown[] }> = [];
+        const renderFailures: string[] = [];
         let waits = 0;
         let edits = 0;
         let consumed = 0;
@@ -131,12 +181,17 @@ async function runInteractionTests(): Promise<void> {
             ComponentType: { Button: 2 },
             RAID_ENCOUNTER_IDS,
             getBossBattlePhase,
+            getBossAttackIntent,
+            getBossPortraitFiles,
             isBossBattleFinished,
             resolveBossTurn,
             buildBossBattlePayload,
             embedFromPayload: (_command: string, embed: unknown) => embed,
             getInventoryCount: () => supplies,
-            removeInventoryItem: (_userId: string, _item: string, count: number) => { supplies -= count; consumed += count; }
+            removeInventoryItem: (_userId: string, _item: string, count: number) => { supplies -= count; consumed += count; },
+            console: { error: (message: string) => renderFailures.push(message) },
+            appendAuditEvent: () => undefined,
+            toSafeString: String
         });
         vm.runInContext(compiled, context);
         const message = {
@@ -157,7 +212,7 @@ async function runInteractionTests(): Promise<void> {
         };
         const interaction = {
             user: { id: "owner" },
-            editReply: async (frame: { components: unknown[] }) => {
+            editReply: async (frame: typeof frames[number]) => {
                 edits += 1;
                 if (edits === input.failEdit) throw new Error("Discord edit failed");
                 frames.push(frame);
@@ -166,7 +221,7 @@ async function runInteractionTests(): Promise<void> {
         };
         const battle = await context.presentBossBattle(interaction, { success: true, bossName: "The Grave Warden", bossHpMax: 10000, bossHpRemaining: 300, pmcHpMax: 600, pmcHpRemaining: 100, bossPhaseNames: ["Contact", "Enraged"], ...input.result });
         assert.equal(decisions.size, 0);
-        return { battle, frames, waits, consumed, acknowledged };
+        return { battle, frames, waits, consumed, acknowledged, renderFailures };
     }
     const extracted = await simulate({ actions: [RAID_ENCOUNTER_IDS.extract] });
     assert.equal(extracted.waits, 1);
@@ -175,6 +230,9 @@ async function runInteractionTests(): Promise<void> {
     assert.equal(extracted.consumed, 0);
     assert.equal(extracted.battle.defeated, false);
     assert.equal(extracted.frames.at(-1)?.components.length, 0);
+    assert.equal(extracted.frames[0].files?.length, 1, "first battle frame must upload the bundled portrait");
+    assert.equal(extracted.frames[0].attachments?.length, 0, "first battle frame must discard stale attachments");
+    assert.equal(extracted.frames[1].files, undefined, "later turns must reuse the uploaded portrait");
     for (const result of [{ bossDefeated: true, bossHpRemaining: 0 }, { success: false }]) {
         const settled = await simulate({ result });
         assert.equal(settled.waits, 0);
@@ -186,6 +244,9 @@ async function runInteractionTests(): Promise<void> {
     assert.equal(timeout.waits, 6);
     assert.equal(timeout.frames.length, 7);
     assert.equal(timeout.battle.defeated, false);
+    assert.ok(timeout.frames.some(frame => frame.embeds[0].fields.some(field =>
+        field.value.includes("Countercharge this turn:")
+    )), "players must see the attack warning before choosing");
     const killed = await simulate({ result: { bossHpMax: 1 }, actions: [RAID_ENCOUNTER_IDS.attack] });
     assert.equal(killed.waits, 1);
     assert.equal(killed.battle.defeated, true);
@@ -201,6 +262,40 @@ async function runInteractionTests(): Promise<void> {
     assert.equal(incapacitated.battle.pmcHp, 0);
     const failedFinalEdit = await simulate({ result: { bossHpMax: 1 }, actions: [RAID_ENCOUNTER_IDS.attack], failEdit: 2 });
     assert.equal(failedFinalEdit.battle.defeated, true);
+    assert.equal(failedFinalEdit.renderFailures.length, 1, "battle rendering failures must be surfaced");
+    const broadcastHelpers = source.statements.filter(statement =>
+        ts.isFunctionDeclaration(statement) && ["sendOpsBroadcastEmbed", "buildRaidUnlockBroadcastEmbed"].includes(statement.name?.text || "")
+    );
+    assert.equal(broadcastHelpers.length, 2);
+    const sent: Array<{ embeds: EmbedBuilder[]; files: ReturnType<typeof getBossPortraitFiles> }> = [];
+    const broadcastContext = vm.createContext({
+        EmbedBuilder,
+        getBossPortraitUrl,
+        getBossPortraitFiles,
+        getOpsBroadcastChannelId: () => "broadcast-channel",
+        ARMY_ICON_URL: "https://example.com/army.png",
+        ITEM_DEFS,
+        brandLiveEmbed: (embed: EmbedBuilder) => embed
+    });
+    vm.runInContext(ts.transpileModule(broadcastHelpers.map(statement => statement.getText(source)).join("\n"), {
+        compilerOptions: { target: ts.ScriptTarget.ES2020 }
+    }).outputText, broadcastContext);
+    const broadcast = broadcastContext as {
+        buildRaidUnlockBroadcastEmbed: (input: { user: { id: string; username: string }; result: { bossName: string; bossHeartUnlockedName: string } }) => EmbedBuilder;
+        sendOpsBroadcastEmbed: (guild: unknown, embed: EmbedBuilder, bossName: string) => Promise<void>;
+    };
+    const bossName = "Asterion the Titanbreaker";
+    const embed = broadcast.buildRaidUnlockBroadcastEmbed({
+        user: { id: "player", username: "player" }, result: { bossName, bossHeartUnlockedName: "Titan Heart" }
+    });
+    await broadcast.sendOpsBroadcastEmbed({
+        id: "guild", channels: { fetch: async () => ({
+            isTextBased: () => true,
+            send: async (payload: typeof sent[number]) => { sent.push(payload); }
+        }) }
+    }, embed, bossName);
+    assert.equal(sent[0].embeds[0].toJSON().thumbnail?.url, getBossPortraitUrl(bossName));
+    assert.equal(sent[0].files[0].name, getBossPortraitFiles(bossName)[0].name, "broadcast must include the image it references");
 }
 
 runInteractionTests().then(() => console.log("raid quality-of-life and interaction tests passed")).catch(error => {

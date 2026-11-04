@@ -325,14 +325,14 @@ function runEconomyAndRaidTests(): void {
         assert.deepEqual(routePayload.components[0].components.map((component: { custom_id: string }) => component.custom_id), [RAID_ENCOUNTER_IDS.hiddenExit, RAID_ENCOUNTER_IDS.routeCache, RAID_ENCOUNTER_IDS.stayCourse]);
         const branchPayload = JSON.parse(buildRaidBranchDecisionPayload({ mapLabel: "FN Plagued Cemetery", tension: "high" }));
         assert.deepEqual(branchPayload.components[0].components.map((component: { custom_id: string }) => component.custom_id), [RAID_ENCOUNTER_IDS.securePerimeter, RAID_ENCOUNTER_IDS.pushObjective, RAID_ENCOUNTER_IDS.surveySite, RAID_ENCOUNTER_IDS.rescuePatrol, RAID_ENCOUNTER_IDS.stayCourse]);
-        const battleOpening = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 0, totalTurns: 3 }));
-        const battleFinal = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossPhaseNames: ["Contact", "Enraged"], bossCurrentPhase: "Enraged", bossDefeated: true, bossKillChance: 60, bossHpMax: 800, bossHpFinal: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpFinal: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 3, totalTurns: 3 }));
+        const battleOpening = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossCurrentPhase: "Enraged", bossKillChance: 60, bossHpMax: 800, bossHpCurrent: 800, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpCurrent: 600, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 0, totalTurns: 3 }));
+        const battleFinal = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossFerocity: 1.2, bossTraitLabels: ["Reactive Armor"], bossCurrentPhase: "Enraged", bossKillChance: 60, bossHpMax: 800, bossHpCurrent: 0, pmcLevel: 1200, pmcPrestige: 2, pmcHpMax: 600, pmcHpCurrent: 240, weaponName: "Pulse Rifle", armorName: "Guardian Plate", turn: 3, totalTurns: 3 }));
         assert.equal(battleOpening.components[0].components.length, 5);
         assert.equal(battleOpening.embed.fields[2].name, "Action");
         assert.match(battleOpening.embed.fields[2].value, /entered the combat zone/);
         assert.ok(battleOpening.embed.fields[0].value.includes("800/800"));
         assert.match(battleOpening.embed.description, /Enraged/);
-        const battleAction = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossHpMax: 800, bossHpFinal: 0, pmcHpMax: 600, pmcHpFinal: 240, turn: 1, totalTurns: 3, action: "scan", bossHpCurrent: 760, pmcHpCurrent: 600, rage: 20, armorBreak: 30, scanRevealed: true }));
+        const battleAction = JSON.parse(buildBossBattlePayload({ bossName: "The Grave Warden", bossHpMax: 800, pmcHpMax: 600, turn: 1, totalTurns: 3, action: "scan", bossHpCurrent: 760, pmcHpCurrent: 600, rage: 20, armorBreak: 30, scanRevealed: true }));
         assert.ok(battleAction.embed.fields[0].value.includes("Armor break 30%"));
         assert.match(battleAction.embed.fields[1].value, /intel revealed/i);
         assert.ok(battleFinal.embed.fields[0].value.includes("0/800"));
@@ -384,10 +384,9 @@ function runEconomyAndRaidTests(): void {
         assert.ok((ITEM_DEFS.chaos_staff.raidAttack || 0) >= 0.15);
         assert.ok((ITEM_DEFS.chaos_mantle.raidDefense || 0) >= 0.17);
         for (const boss of RAID_BOSS_ROSTER) {
-            const portrait = getBossPortraitUrl(boss.name, boss.title);
-            assert.ok(portrait?.includes("photorealistic"));
-            assert.ok(portrait?.includes(encodeURIComponent(boss.name)));
-            assert.equal(portrait, getBossPortraitUrl(boss.name, boss.title));
+            const portrait = getBossPortraitUrl(boss.name);
+            assert.ok(portrait?.startsWith("attachment://boss-"));
+            assert.equal(portrait, getBossPortraitUrl(boss.name));
         }
         const assaultCounter = getBossCombatModifiers("The Grave Warden", "assault");
         const reconMatch = getBossCombatModifiers("The Grave Warden", "recon");

@@ -1,6 +1,7 @@
 import fs from "fs-extra";
 import path from "path";
 import { getNewProgressAchievements, type ProgressAchievement } from "./game/achievements";
+import { isXpCrateReward, type XpCrateReward } from "./game/xpCrates";
 
 export type UserState = {
     modPoints: number;
@@ -20,6 +21,7 @@ export type UserState = {
     lastXP: number;
     prestige: number;
     lastDaily: number;
+    latestXpCrate: XpCrateReward | null;
     dailyStreak: number;
     achievements: string[];
     achievementIds: string[];
@@ -344,6 +346,7 @@ function defaultUserState(): UserState {
         lastXP: 0,
         prestige: 0,
         lastDaily: 0,
+        latestXpCrate: null,
         dailyStreak: 0,
         achievements: [],
         achievementIds: [],
@@ -557,6 +560,10 @@ export function ensureUser(userId: string): UserState {
     if (user.lastXP === undefined) user.lastXP = 0;
     if (user.prestige === undefined) user.prestige = 0;
     if (user.lastDaily === undefined) user.lastDaily = 0;
+    if (user.latestXpCrate === undefined) user.latestXpCrate = null;
+    if (user.latestXpCrate !== null && !isXpCrateReward(user.latestXpCrate)) {
+        throw new Error(`Invalid persisted XP crate for user ${userId}`);
+    }
     if (user.dailyStreak === undefined) user.dailyStreak = 0;
     if (!Array.isArray(user.achievements)) user.achievements = [];
     if (!Array.isArray(user.achievementIds)) user.achievementIds = [];

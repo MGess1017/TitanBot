@@ -7,16 +7,26 @@ const discord_js_1 = require("discord.js");
 exports.XP_LEADERBOARD_CHANNEL_ID = "1527571592320651285";
 const PANEL_HEADING = "## Live XP Leaderboard";
 function buildXpLeaderboardPanel(entries, now = Date.now()) {
-    const rows = entries.slice(0, 10).map((entry, index) => `**${index + 1}. ${(0, discord_js_1.escapeMarkdown)(entry.username)}**\n`
-        + `${entry.xp.toLocaleString("en-US")} XP | Prestige ${entry.prestige} | Voice ${entry.voiceMultiplier}x`);
+    const rows = entries.slice(0, 10).map((entry, index) => `### #${index + 1}  <@${entry.id}>\n`
+        + `-# Username: ${(0, discord_js_1.escapeMarkdown)(entry.username)}\n`
+        + `**XP** \`${entry.xp.toLocaleString("en-US")}\`  |  **Prestige** \`${entry.prestige}\`  |  **Voice XP** \`${entry.voiceMultiplier}x\``);
     const panel = new discord_js_1.ContainerBuilder()
-        .setAccentColor(0xf59e0b)
+        .setAccentColor(0x9b59b6)
         .addTextDisplayComponents(new discord_js_1.TextDisplayBuilder().setContent(`${PANEL_HEADING}\nTop 10 engagement XP players`))
-        .addSeparatorComponents(new discord_js_1.SeparatorBuilder())
-        .addTextDisplayComponents(new discord_js_1.TextDisplayBuilder().setContent(rows.join("\n\n") || "No XP earned yet. Chat or join a voice channel to get started."))
-        .addSeparatorComponents(new discord_js_1.SeparatorBuilder())
+        .addSeparatorComponents(new discord_js_1.SeparatorBuilder());
+    if (rows.length) {
+        rows.forEach((row, index) => {
+            if (index > 0)
+                panel.addSeparatorComponents(new discord_js_1.SeparatorBuilder());
+            panel.addTextDisplayComponents(new discord_js_1.TextDisplayBuilder().setContent(row));
+        });
+    }
+    else {
+        panel.addTextDisplayComponents(new discord_js_1.TextDisplayBuilder().setContent("No XP earned yet. Chat or join a voice channel to get started."));
+    }
+    panel.addSeparatorComponents(new discord_js_1.SeparatorBuilder())
         .addTextDisplayComponents(new discord_js_1.TextDisplayBuilder().setContent("### Voice XP Bonus\n100 XP/minute, then 200 XP/minute after 2 continuous hours.\n"
-        + "Normal VC switches keep your bonus. Disconnecting or entering AFK resets it to 1x; earned XP stays.\n"
+        + "All VCs earn XP. Switching VCs keeps your bonus. Disconnecting from any VC resets it to 1x; earned XP stays.\n"
         + `-# Updates within 15 seconds | Updated <t:${Math.floor(now / 1000)}:T>`));
     return {
         components: [panel],

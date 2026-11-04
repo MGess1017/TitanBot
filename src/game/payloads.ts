@@ -1,5 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } from "discord.js";
 import { getVendorSellPrice, ITEM_DEFS, type ItemDef } from "./catalog";
+import { getBossPortraitUrl } from "./bossPortraits";
+import { getBossBattlePhase } from "../raid/combat";
 import { BOSS_TRAITS, RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_MAPS, RAID_MAP_SHORT_LABELS, RAID_TACTICAL_OBJECTIVES, getBossCombatProfile, type RareExtractionRoute } from "../raid/domain";
 
 export const RAID_RESULT_ACTION_IDS = {
@@ -500,7 +502,6 @@ export function buildRaidResultPayload(input: {
         bossFerocity?: number;
         bossBonusXp?: number;
         bossKillChance?: number;
-        bossImageUrl?: string;
         pmcHpMax?: number;
         pmcHpRemaining?: number;
         bossHpMax?: number;
@@ -585,7 +586,7 @@ export function buildRaidResultPayload(input: {
             `${result.mapLabel || mapCfg.label}`,
             `${tensionLabel || fallbackTension} • ${conditionLabel || "Standard"}`
         ].join("\n"))
-        .setThumbnail(result.bossSpawned && result.bossImageUrl ? result.bossImageUrl : armyIconUrl)
+        .setThumbnail(result.bossSpawned ? getBossPortraitUrl(result.bossName || mapCfg.bossName) || armyIconUrl : armyIconUrl)
         .addFields(
             {
                 name: "Outcome",
@@ -661,7 +662,11 @@ export function buildRaidResultPayload(input: {
             .setStyle(ButtonStyle.Secondary)
     );
 
-    return JSON.stringify({ embed: embed.toJSON(), components: [actionRow.toJSON()] });
+    return JSON.stringify({
+        embed: embed.toJSON(),
+        components: [actionRow.toJSON()],
+        bossPortraitName: result.bossSpawned ? result.bossName || mapCfg.bossName : undefined
+    });
 }
 
 export function buildBossIntelPayload(input: {
@@ -679,6 +684,7 @@ export function buildBossIntelPayload(input: {
     const embed = new EmbedBuilder()
         .setColor(0xd97706)
         .setTitle(boss.name)
+        .setImage(getBossPortraitUrl(boss.name))
         .setDescription(`${boss.homeMapLabel} • ${ferocityLabel(boss.ferocity)} ${boss.ferocity.toFixed(2)}x`)
         .addFields(
             { name: "Combat", value: [
@@ -726,28 +732,22 @@ export function buildRareRouteDecisionPayload(input: {
 export function buildBossBattlePayload(input: {
     bossName: string;
     bossTitle?: string;
-    bossImageUrl?: string;
     bossFerocity?: number;
     bossTraitLabels?: string[];
-    bossPhaseNames?: string[];
     bossCurrentPhase?: string;
-    bossDefeated?: boolean;
     bossKillChance?: number;
     bossHpMax: number;
-    bossHpFinal: number;
     pmcLevel?: number;
     pmcPrestige?: number;
     pmcHpMax: number;
-    pmcHpFinal: number;
     weaponName?: string;
     armorName?: string;
     turn: number;
     totalTurns: number;
     action?: "attack" | "defend" | "heal" | "scan";
-    animationFrame?: number;
     interactive?: boolean;
-    bossHpCurrent?: number;
-    pmcHpCurrent?: number;
+    bossHpCurrent: number;
+    pmcHpCurrent: number;
     rage?: number;
     armorBreak?: number;
     specialAttack?: string;
@@ -761,19 +761,10 @@ export function buildBossBattlePayload(input: {
 }): string {
     const totalTurns = Math.max(1, Math.floor(input.totalTurns));
     const turn = Math.max(0, Math.min(totalTurns, Math.floor(input.turn)));
-    const progress = turn / totalTurns;
-    const bossHp = input.bossHpCurrent === undefined
-        ? Math.max(0, Math.round(input.bossHpMax - ((input.bossHpMax - input.bossHpFinal) * progress)))
-        : Math.max(0, Math.min(input.bossHpMax, Math.floor(input.bossHpCurrent)));
-    const pmcHp = input.pmcHpCurrent === undefined
-        ? Math.max(0, Math.round(input.pmcHpMax - ((input.pmcHpMax - input.pmcHpFinal) * progress)))
-        : Math.max(0, Math.min(input.pmcHpMax, Math.floor(input.pmcHpCurrent)));
-    const phaseNames = input.bossPhaseNames?.length ? input.bossPhaseNames : ["Contact"];
-    const phaseIndex = Math.min(phaseNames.length - 1, Math.floor(progress * phaseNames.length));
-    const phase = input.bossCurrentPhase || phaseNames[phaseIndex];
+    const bossHp = Math.max(0, Math.min(input.bossHpMax, Math.floor(input.bossHpCurrent)));
+    const pmcHp = Math.max(0, Math.min(input.pmcHpMax, Math.floor(input.pmcHpCurrent)));
+    const phase = input.bossCurrentPhase || getBossBattlePhase(input.bossName, bossHp, input.bossHpMax).name;
     const finished = input.finished === true || turn >= totalTurns || bossHp <= 0 || pmcHp <= 0;
-    const animationFrame = Math.max(0, Math.floor(input.animationFrame || 0)) % 4;
-    const animationGlyph = ["◆", "◇", "✦", "◆"][animationFrame];
     const actionLabel = input.action === "defend" ? "Defend" : input.action === "heal" ? "Heal" : input.action === "scan" ? "Scan" : "Attack";
     const actionEffect = input.action === "defend"
         ? "Defending"
@@ -783,23 +774,20 @@ export function buildBossBattlePayload(input: {
                 ? `Scanning ${phase}`
                 : "Direct strike";
     const status = finished
-        ? bossHp <= 0 || input.bossDefeated
+        ? bossHp <= 0
             ? `${input.bossName} was neutralized. The PMC holds the field.`
             : pmcHp <= 0
                 ? "PMC incapacitated. Combat ended."
                 : `The PMC disengaged. ${input.bossName} remains active.`
         : turn === 0
-            ? `${animationGlyph} ${input.bossName} entered the combat zone.`
-        : turn < totalTurns
-            ? `Turn ${turn}: ${actionLabel}. ${actionEffect} ${input.bossName} counters from ${phase}.`
-            : input.bossDefeated
-                ? `${input.bossName} was neutralized. The PMC holds the field.`
-                : `The PMC disengaged. ${input.bossName} remains active.`;
+            ? `${input.bossName} entered the combat zone.`
+            : `Turn ${turn}: ${actionLabel}. ${actionEffect}.`;
 
     const embed = new EmbedBuilder()
-        .setColor(finished ? (bossHp <= 0 || input.bossDefeated ? 0x16a34a : 0xdc2626) : 0xef4444)
+        .setColor(finished ? (bossHp <= 0 ? 0x16a34a : 0xdc2626) : 0xef4444)
         .setTitle(`Boss Battle • ${finished ? "Complete" : `Turn ${turn + 1}/${totalTurns}`}`)
-        .setDescription(`**${input.bossName}** • ${phase}`)
+        .setDescription(`**${input.bossName}**${input.bossTitle ? ` • ${input.bossTitle}` : ""}\n${phase}`)
+        .setImage(getBossPortraitUrl(input.bossName))
         .addFields(
             {
                 name: `Boss • ${ferocityLabel(input.bossFerocity)} ${(input.bossFerocity || 1).toFixed(2)}x`,
@@ -829,7 +817,6 @@ export function buildBossBattlePayload(input: {
             ...(!finished && input.decisionDeadline ? [{ name: "Decision", value: `<t:${Math.floor(input.decisionDeadline / 1000)}:R>`, inline: false }] : [])
         )
         .setFooter({ text: `${turn}/${totalTurns} turns` });
-    if (input.bossImageUrl) embed.setThumbnail(input.bossImageUrl);
     const components = !finished && input.interactive !== false
         ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(RAID_ENCOUNTER_IDS.attack).setLabel("Attack").setStyle(ButtonStyle.Danger),

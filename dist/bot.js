@@ -69,6 +69,8 @@ const achievementTitles_1 = require("./features/achievementTitles");
 const temporaryVoice_1 = require("./features/temporaryVoice");
 const playerCounts_1 = require("./runtime/playerCounts");
 const xpLeaderboard_1 = require("./features/xpLeaderboard");
+const xpCratePanel_1 = require("./features/xpCratePanel");
+const xpCrates_1 = require("./game/xpCrates");
 const rateLimit_1 = require("./runtime/rateLimit");
 const voiceXp_1 = require("./runtime/voiceXp");
 const ticketText_1 = require("./services/ticketText");
@@ -3394,6 +3396,14 @@ function formatVoiceDuration(totalMs) {
 function voiceXpSessionKey(guildId, userId) {
     return `${guildId}:${userId}`;
 }
+function getCurrentVoiceXpMultiplier(guild, userId, now = Date.now()) {
+    if (!guild?.voiceStates.cache.get(userId)?.channelId)
+        return 1;
+    const session = VOICE_XP_SESSIONS.get(voiceXpSessionKey(guild.id, userId));
+    return session?.connected && session.connectedAt !== undefined
+        ? (0, voiceXp_1.getVoiceXpMultiplier)(session.connectedAt, now)
+        : 1;
+}
 function trackVoiceXpConnection(guild, userId, connected, now = Date.now()) {
     const key = voiceXpSessionKey(guild.id, userId);
     const session = VOICE_XP_SESSIONS.get(key);
@@ -3404,6 +3414,7 @@ function trackVoiceXpConnection(guild, userId, connected, now = Date.now()) {
             session.guild = guild;
             session.connected = true;
             session.connectedAt = now;
+            session.doubleXpNotified = false;
             session.lastAccruedAt = now;
             session.updatedAt = now;
         }
@@ -3437,6 +3448,10 @@ function awardConnectedVoiceXp(session, now = Date.now()) {
     session.remainderMs = accrued.state.remainderMs;
     session.connectedAt = accrued.state.connectedAt;
     session.updatedAt = now;
+    if (!session.doubleXpNotified && getCurrentVoiceXpMultiplier(session.guild, session.userId, now) === 2) {
+        session.doubleXpNotified = true;
+        runAsyncWithBoundary("voiceDoubleXpNotification", () => notifyVoiceDoubleXpUnlock(session));
+    }
     if (accrued.xp <= 0)
         return;
     const award = awardEngagementXp(session.guild, session.userId, accrued.xp, accrued.minutes);
@@ -3448,11 +3463,24 @@ function awardConnectedVoiceXp(session, now = Date.now()) {
         totalXp: award.totalXp
     });
 }
+async function notifyVoiceDoubleXpUnlock(session) {
+    const user = await client.users.fetch(session.userId);
+    await user.send({
+        embeds: [new discord_js_1.EmbedBuilder()
+                .setColor(0x9b59b6)
+                .setTitle("Double Voice XP Unlocked!")
+                .setDescription(`You've stayed in voice for over 2 continuous hours in **${session.guild.name}**.\n`
+                + "**2x voice XP is active: 200 XP/minute.**\n"
+                + "Switching VCs keeps your bonus. Disconnecting resets it to 1x. Message XP is unchanged.")],
+        allowedMentions: { parse: [] }
+    });
+    appendAuditEvent("voice_double_xp_notified", { guildId: session.guild.id, userId: session.userId });
+}
 function processVoiceXpSessions(now = Date.now()) {
     for (const [key, session] of VOICE_XP_SESSIONS.entries()) {
         if (session.connected) {
             const channelId = session.guild.voiceStates.cache.get(session.userId)?.channelId || null;
-            if (!(0, voiceXp_1.isVoiceXpEligible)(channelId, session.guild.afkChannelId, false)) {
+            if (!(0, voiceXp_1.isVoiceXpEligible)(channelId, false)) {
                 awardConnectedVoiceXp(session, now);
                 session.connected = false;
                 session.lastAccruedAt = now;
@@ -3471,7 +3499,7 @@ function seedConnectedVoiceXpSessions() {
     const now = Date.now();
     for (const guild of client.guilds.cache.values()) {
         for (const state of guild.voiceStates.cache.values()) {
-            if ((0, voiceXp_1.isVoiceXpEligible)(state.channelId, guild.afkChannelId, Boolean(state.member?.user.bot)) && state.member) {
+            if ((0, voiceXp_1.isVoiceXpEligible)(state.channelId, Boolean(state.member?.user.bot)) && state.member) {
                 trackVoiceXpConnection(guild, state.member.id, true, now);
             }
         }
@@ -3799,14 +3827,14 @@ function buildBalanceReportEmbed(reason = "manual") {
 function getOpsBroadcastChannelId(guildId) {
     return ACTIVITY_CHANNEL_ID || HEALTH_REPORT_CHANNEL_ID || ensureGuildModeration(guildId).modLogChannelId || "";
 }
-async function sendOpsBroadcastEmbed(guild, embed) {
+async function sendOpsBroadcastEmbed(guild, embed, bossName) {
     const channelId = getOpsBroadcastChannelId(guild.id);
     if (!channelId)
         return;
     const channel = await guild.channels.fetch(channelId).catch(() => null);
     if (!channel || !channel.isTextBased() || !("send" in channel))
         return;
-    await channel.send({ embeds: [embed] }).catch(() => undefined);
+    await channel.send({ embeds: [embed], files: (0, bossPortraits_1.getBossPortraitFiles)(bossName) });
 }
 function buildRaidUnlockBroadcastEmbed(input) {
     const { user, result } = input;
@@ -3829,7 +3857,7 @@ function buildRaidUnlockBroadcastEmbed(input) {
         .setColor(0xf59e0b)
         .setTitle("🌟 Premium Unlock Broadcast")
         .setDescription(`${user.username} completed a standout raid operation on **${result.mapLabel || "Unknown AO"}**.`)
-        .setThumbnail(result.bossImageUrl || ARMY_ICON_URL)
+        .setThumbnail((0, bossPortraits_1.getBossPortraitUrl)(result.bossName) || ARMY_ICON_URL)
         .addFields({
         name: "Operator",
         value: `<@${user.id}>`,
@@ -5214,7 +5242,6 @@ function performRaidUnbatched(userId, bet, tension, mapKeyRaw, selectedWeaponId,
         alternateBossForm,
         bossBonusXp,
         bossKillChance: Math.round(bossKillChance * 100),
-        bossImageUrl: bossSpawned ? (0, bossPortraits_1.getBossPortraitUrl)(boss?.name || mapCfg.bossName, boss?.title) || undefined : undefined,
         pmcHpMax: bossSpawned ? pmcHpMax : undefined,
         pmcHpRemaining: bossSpawned ? pmcHpRemaining : undefined,
         bossHpMax: bossSpawned ? bossHpMax : undefined,
@@ -5314,6 +5341,7 @@ async function presentBossBattle(interaction, result) {
     let action;
     let state = { turn: 0, bossHp: bossHpMax, pmcHp: pmcHpMax, rage: 0, armorBreak: 0, scanRevealed: false };
     let battleLog = [];
+    let portraitUploaded = false;
     const actionIds = new Map([
         [payloads_1.RAID_ENCOUNTER_IDS.attack, "attack"],
         [payloads_1.RAID_ENCOUNTER_IDS.defend, "defend"],
@@ -5322,43 +5350,53 @@ async function presentBossBattle(interaction, result) {
     ]);
     const renderFrame = async (finished) => {
         const phase = (0, combat_1.getBossBattlePhase)(bossName, state.bossHp, bossHpMax);
+        const intent = finished ? null : (0, combat_1.getBossAttackIntent)(state);
         const payload = JSON.parse((0, payloads_1.buildBossBattlePayload)({
             bossName,
             bossTitle: result.bossTitle,
-            bossImageUrl: result.bossImageUrl,
             bossFerocity: result.bossFerocity,
             bossTraitLabels: result.bossTraitLabels,
-            bossPhaseNames: result.bossPhaseNames,
             bossCurrentPhase: phase.name,
             phaseMechanic: phase.mechanic,
             counteredTraits: result.bossCounteredTraits,
-            bossDefeated: state.bossHp <= 0,
             bossKillChance: result.bossKillChance,
             bossHpMax,
-            bossHpFinal: result.bossHpRemaining || 0,
             pmcLevel: result.pmcLevel,
             pmcPrestige: result.pmcPrestige,
             pmcHpMax,
-            pmcHpFinal: result.pmcHpRemaining || 0,
             weaponName: result.selectedWeaponName,
             armorName: result.selectedArmorName,
             turn: state.turn,
             totalTurns,
             action,
-            animationFrame: state.turn === 0 ? 0 : 3,
             interactive: !finished,
             finished,
             bossHpCurrent: state.bossHp,
             pmcHpCurrent: state.pmcHp,
             rage: state.rage,
             armorBreak: state.armorBreak,
-            specialAttack: state.rage >= 60 ? "Countercharge imminent" : undefined,
+            specialAttack: intent
+                ? `Countercharge this turn: ${intent.damage} damage. Defend reduces it to ${intent.defendedDamage}.`
+                : undefined,
             scanRevealed: state.scanRevealed,
             medPatchCount: (0, utils_1.getInventoryCount)(interaction.user.id, "med_patch"),
             decisionDeadline: finished ? undefined : Date.now() + 8000,
             battleLog
         }));
-        return interaction.editReply({ embeds: [embedFromPayload("raid", payload.embed, interaction.user)], components: payload.components }).catch(() => null);
+        try {
+            const message = await interaction.editReply({
+                embeds: [embedFromPayload("raid", payload.embed, interaction.user)],
+                components: payload.components,
+                ...(!portraitUploaded ? { attachments: [], files: (0, bossPortraits_1.getBossPortraitFiles)(bossName) } : {})
+            });
+            portraitUploaded = true;
+            return message;
+        }
+        catch (error) {
+            console.error(`[raid] Could not render battle frame for ${bossName}:`, error);
+            appendAuditEvent("raid_battle_render_failed", { userId: interaction.user.id, bossName, reason: toSafeString(error) });
+            return null;
+        }
     };
     if (result.bossDefeated || result.success === false) {
         state.bossHp = result.bossHpRemaining ?? bossHpMax;
@@ -7406,10 +7444,7 @@ async function refreshXpLeaderboardPanel() {
         const now = Date.now();
         const entries = await Promise.all((0, economy_1.getLeaderboard)().map(async (row) => {
             const user = await client.users.fetch(row.id);
-            const session = VOICE_XP_SESSIONS.get(voiceXpSessionKey(channel.guild.id, row.id));
-            const voiceMultiplier = session?.connected && session.connectedAt !== undefined
-                ? (0, voiceXp_1.getVoiceXpMultiplier)(session.connectedAt, now)
-                : 1;
+            const voiceMultiplier = getCurrentVoiceXpMultiplier(channel.guild, row.id, now);
             return { ...row, username: user.username, voiceMultiplier };
         }));
         const previousId = getGuildPanelMessageId(channel.guild.id, "xpLeaderboard");
@@ -7420,6 +7455,19 @@ async function refreshXpLeaderboardPanel() {
     finally {
         xpLeaderboardUpdateInFlight = false;
     }
+}
+async function ensureXpCratePanel() {
+    if (!client.isReady())
+        return;
+    const channel = client.channels.cache.get(xpLeaderboard_1.XP_LEADERBOARD_CHANNEL_ID)
+        || await client.channels.fetch(xpLeaderboard_1.XP_LEADERBOARD_CHANNEL_ID);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+        throw new Error(`XP crate panel channel ${xpLeaderboard_1.XP_LEADERBOARD_CHANNEL_ID} is missing or is not a text channel.`);
+    }
+    const previousId = getGuildPanelMessageId(channel.guild.id, "xpCrate");
+    const messageId = await (0, xpCratePanel_1.upsertXpCratePanel)(channel, client.user.id, previousId);
+    if (previousId !== messageId)
+        setGuildPanelMessageId(channel.guild.id, "xpCrate", messageId);
 }
 function scheduleXpLeaderboardUpdate() {
     if (xpLeaderboardUpdateTimer)
@@ -8468,6 +8516,7 @@ const commandHandlers = {
     },
     xp: async (interaction) => {
         const userId = interaction.user.id;
+        const voiceMultiplier = getCurrentVoiceXpMultiplier(interaction.guild, userId);
         const user = (0, utils_1.ensureUser)(userId);
         const accessPoints = (0, utils_1.getPoints)(userId);
         const badge = getAccessPointBadge(accessPoints);
@@ -8507,6 +8556,10 @@ const commandHandlers = {
         ].join("\n"))
             .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4c8.png")
             .addFields({
+            name: "XP Status",
+            value: `Voice XP: **${voiceMultiplier}x** (${voiceMultiplier * 100} XP/minute)\n2x after 2 continuous hours in any VC. Disconnecting resets to 1x. Message XP is unchanged.`,
+            inline: false
+        }, {
             name: "🎯 Engagement",
             value: [
                 `Level: **${engagementLevel.toLocaleString()}**`,
@@ -8562,7 +8615,8 @@ const commandHandlers = {
             inline: true
         })
             .setFooter({ text: "Live data is pulled from persisted XP state." });
-        return JSON.stringify({ embed: embed.toJSON() });
+        (0, xpCratePanel_1.addXpCrateProfile)(embed, user.latestXpCrate);
+        return JSON.stringify({ embed: embed.toJSON(), xpCrateId: user.latestXpCrate?.crateId });
     },
     pmc: async (interaction) => buildPmcProfilePayload(interaction.user),
     xpstats: async (interaction) => {
@@ -9891,7 +9945,7 @@ const commandHandlers = {
                 ? buildRaidUnlockBroadcastEmbed({ user: interaction.user, result })
                 : null;
             if (interaction.guild && raidBroadcast) {
-                runAsyncWithBoundary("raidUnlockBroadcast", () => sendOpsBroadcastEmbed(interaction.guild, raidBroadcast));
+                runAsyncWithBoundary("raidUnlockBroadcast", () => sendOpsBroadcastEmbed(interaction.guild, raidBroadcast, result.bossName));
                 appendAuditEvent("raid_unlock_broadcast", {
                     guildId: interaction.guild.id,
                     userId: interaction.user.id,
@@ -10284,6 +10338,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
     updateBotPresence();
     seedConnectedVoiceXpSessions();
     runAsyncWithBoundary("xpLeaderboardInit", refreshXpLeaderboardPanel);
+    runAsyncWithBoundary("xpCratePanelInit", ensureXpCratePanel);
     console.log(`[startup] ${(0, health_1.buildStartupSummary)(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {
         userTag: client.user?.tag,
@@ -10521,6 +10576,40 @@ process.on("beforeExit", () => {
     releaseInstanceLock();
 });
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
+    if (interaction.isButton() && interaction.customId === xpCratePanel_1.XP_CRATE_BUTTON_ID) {
+        if (!interaction.guild || interaction.channelId !== xpLeaderboard_1.XP_LEADERBOARD_CHANNEL_ID || interaction.user.bot) {
+            await interaction.reply({ content: "Use the FN Xp Panel in its designated server channel.", flags: discord_js_1.MessageFlags.Ephemeral });
+            return;
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const result = (0, utils_1.withDeferredPointsSave)(() => {
+                const user = (0, utils_1.ensureUser)(interaction.user.id);
+                const claim = (0, xpCrates_1.claimXpCrate)(user);
+                if (!claim.ok)
+                    return claim;
+                awardEngagementXp(interaction.guild, interaction.user.id, claim.reward.xp);
+                (0, utils_1.savePoints)();
+                return claim;
+            });
+            if (!result.ok) {
+                await interaction.editReply({ content: "Daily limit exceeded" });
+                return;
+            }
+            appendAuditEvent("daily_xp_crate_claimed", { userId: interaction.user.id, guildId: interaction.guildId, ...result.reward });
+            await interaction.editReply({
+                embeds: [(0, xpCratePanel_1.buildXpCrateRewardEmbed)(result.reward)],
+                files: [(0, xpCratePanel_1.xpCrateAttachment)(result.reward.crateId)],
+                allowedMentions: { parse: [] }
+            });
+        }
+        catch (error) {
+            console.error("[xpCrateClaim]", error);
+            appendAuditEvent("xp_crate_claim_failed", { userId: interaction.user.id, reason: toSafeString(error) });
+            await interaction.editReply({ content: "Could not complete the crate response. Check /xp for any saved reward before retrying." });
+        }
+        return;
+    }
     if (interaction.isAutocomplete()) {
         const focused = interaction.options.getFocused(true);
         let options = [];
@@ -11463,7 +11552,11 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
             return;
         }
         const payload = JSON.parse((0, payloads_1.buildBossIntelPayload)({ bossName, progress: (0, utils_1.getBossProgressEntry)(interaction.user.id, bossName) }));
-        await interaction.reply({ embeds: [embedFromPayload("bosses", payload.embed, interaction.user)], flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+        await interaction.reply({
+            embeds: [embedFromPayload("bosses", payload.embed, interaction.user)],
+            files: (0, bossPortraits_1.getBossPortraitFiles)(bossName),
+            flags: discord_js_1.MessageFlags.Ephemeral
+        });
         return;
     }
     if (interaction.isButton() && interaction.customId === payloads_1.RAID_RESULT_ACTION_IDS.supplies) {
@@ -11660,6 +11753,10 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
                     await interaction.editReply({
                         embeds: [embed],
                         components: Array.isArray(parsed.components) ? parsed.components : [],
+                        files: interaction.commandName === "xp" && parsed.xpCrateId
+                            ? [(0, xpCratePanel_1.xpCrateAttachment)(parsed.xpCrateId)]
+                            : (0, bossPortraits_1.getBossPortraitFiles)(parsed.bossPortraitName),
+                        ...(interaction.commandName === "raid" ? { attachments: [] } : {}),
                         allowedMentions: { parse: ["roles"] }
                     });
                 }
@@ -11717,8 +11814,8 @@ client.on("voiceStateUpdate", (oldState, newState) => {
     if (!member || member.user.bot)
         return;
     const key = voiceXpSessionKey(member.guild.id, member.id);
-    const oldEligible = (0, voiceXp_1.isVoiceXpEligible)(oldState.channelId, member.guild.afkChannelId, false);
-    const newEligible = (0, voiceXp_1.isVoiceXpEligible)(newState.channelId, member.guild.afkChannelId, false);
+    const oldEligible = (0, voiceXp_1.isVoiceXpEligible)(oldState.channelId, false);
+    const newEligible = (0, voiceXp_1.isVoiceXpEligible)(newState.channelId, false);
     if (oldEligible && !newEligible)
         trackVoiceXpConnection(member.guild, member.id, false);
     if (newEligible && (!oldEligible || !VOICE_XP_SESSIONS.get(key)?.connected))

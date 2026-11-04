@@ -17,6 +17,8 @@ exports.buildBossBattlePayload = buildBossBattlePayload;
 exports.buildRaidBranchDecisionPayload = buildRaidBranchDecisionPayload;
 const discord_js_1 = require("discord.js");
 const catalog_1 = require("./catalog");
+const bossPortraits_1 = require("./bossPortraits");
+const combat_1 = require("../raid/combat");
 const domain_1 = require("../raid/domain");
 exports.RAID_RESULT_ACTION_IDS = {
     inventory: "raid_result_inventory",
@@ -450,7 +452,7 @@ function buildRaidResultPayload(input) {
         `${result.mapLabel || mapCfg.label}`,
         `${tensionLabel || fallbackTension} • ${conditionLabel || "Standard"}`
     ].join("\n"))
-        .setThumbnail(result.bossSpawned && result.bossImageUrl ? result.bossImageUrl : armyIconUrl)
+        .setThumbnail(result.bossSpawned ? (0, bossPortraits_1.getBossPortraitUrl)(result.bossName || mapCfg.bossName) || armyIconUrl : armyIconUrl)
         .addFields({
         name: "Outcome",
         value: [
@@ -511,7 +513,11 @@ function buildRaidResultPayload(input) {
         .setCustomId(exports.RAID_RESULT_ACTION_IDS.supplies)
         .setLabel("Supplies")
         .setStyle(discord_js_1.ButtonStyle.Secondary));
-    return JSON.stringify({ embed: embed.toJSON(), components: [actionRow.toJSON()] });
+    return JSON.stringify({
+        embed: embed.toJSON(),
+        components: [actionRow.toJSON()],
+        bossPortraitName: result.bossSpawned ? result.bossName || mapCfg.bossName : undefined
+    });
 }
 function buildBossIntelPayload(input) {
     const boss = domain_1.RAID_BOSS_ROSTER.find(entry => entry.name === input.bossName);
@@ -526,6 +532,7 @@ function buildBossIntelPayload(input) {
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(0xd97706)
         .setTitle(boss.name)
+        .setImage((0, bossPortraits_1.getBossPortraitUrl)(boss.name))
         .setDescription(`${boss.homeMapLabel} • ${ferocityLabel(boss.ferocity)} ${boss.ferocity.toFixed(2)}x`)
         .addFields({ name: "Combat", value: [
             `Traits: ${traits.join("; ") || "Unknown"}`,
@@ -555,19 +562,10 @@ function buildRareRouteDecisionPayload(input) {
 function buildBossBattlePayload(input) {
     const totalTurns = Math.max(1, Math.floor(input.totalTurns));
     const turn = Math.max(0, Math.min(totalTurns, Math.floor(input.turn)));
-    const progress = turn / totalTurns;
-    const bossHp = input.bossHpCurrent === undefined
-        ? Math.max(0, Math.round(input.bossHpMax - ((input.bossHpMax - input.bossHpFinal) * progress)))
-        : Math.max(0, Math.min(input.bossHpMax, Math.floor(input.bossHpCurrent)));
-    const pmcHp = input.pmcHpCurrent === undefined
-        ? Math.max(0, Math.round(input.pmcHpMax - ((input.pmcHpMax - input.pmcHpFinal) * progress)))
-        : Math.max(0, Math.min(input.pmcHpMax, Math.floor(input.pmcHpCurrent)));
-    const phaseNames = input.bossPhaseNames?.length ? input.bossPhaseNames : ["Contact"];
-    const phaseIndex = Math.min(phaseNames.length - 1, Math.floor(progress * phaseNames.length));
-    const phase = input.bossCurrentPhase || phaseNames[phaseIndex];
+    const bossHp = Math.max(0, Math.min(input.bossHpMax, Math.floor(input.bossHpCurrent)));
+    const pmcHp = Math.max(0, Math.min(input.pmcHpMax, Math.floor(input.pmcHpCurrent)));
+    const phase = input.bossCurrentPhase || (0, combat_1.getBossBattlePhase)(input.bossName, bossHp, input.bossHpMax).name;
     const finished = input.finished === true || turn >= totalTurns || bossHp <= 0 || pmcHp <= 0;
-    const animationFrame = Math.max(0, Math.floor(input.animationFrame || 0)) % 4;
-    const animationGlyph = ["◆", "◇", "✦", "◆"][animationFrame];
     const actionLabel = input.action === "defend" ? "Defend" : input.action === "heal" ? "Heal" : input.action === "scan" ? "Scan" : "Attack";
     const actionEffect = input.action === "defend"
         ? "Defending"
@@ -577,22 +575,19 @@ function buildBossBattlePayload(input) {
                 ? `Scanning ${phase}`
                 : "Direct strike";
     const status = finished
-        ? bossHp <= 0 || input.bossDefeated
+        ? bossHp <= 0
             ? `${input.bossName} was neutralized. The PMC holds the field.`
             : pmcHp <= 0
                 ? "PMC incapacitated. Combat ended."
                 : `The PMC disengaged. ${input.bossName} remains active.`
         : turn === 0
-            ? `${animationGlyph} ${input.bossName} entered the combat zone.`
-            : turn < totalTurns
-                ? `Turn ${turn}: ${actionLabel}. ${actionEffect} ${input.bossName} counters from ${phase}.`
-                : input.bossDefeated
-                    ? `${input.bossName} was neutralized. The PMC holds the field.`
-                    : `The PMC disengaged. ${input.bossName} remains active.`;
+            ? `${input.bossName} entered the combat zone.`
+            : `Turn ${turn}: ${actionLabel}. ${actionEffect}.`;
     const embed = new discord_js_1.EmbedBuilder()
-        .setColor(finished ? (bossHp <= 0 || input.bossDefeated ? 0x16a34a : 0xdc2626) : 0xef4444)
+        .setColor(finished ? (bossHp <= 0 ? 0x16a34a : 0xdc2626) : 0xef4444)
         .setTitle(`Boss Battle • ${finished ? "Complete" : `Turn ${turn + 1}/${totalTurns}`}`)
-        .setDescription(`**${input.bossName}** • ${phase}`)
+        .setDescription(`**${input.bossName}**${input.bossTitle ? ` • ${input.bossTitle}` : ""}\n${phase}`)
+        .setImage((0, bossPortraits_1.getBossPortraitUrl)(input.bossName))
         .addFields({
         name: `Boss • ${ferocityLabel(input.bossFerocity)} ${(input.bossFerocity || 1).toFixed(2)}x`,
         value: [
@@ -617,8 +612,6 @@ function buildBossBattlePayload(input) {
         inline: true
     }, { name: "Action", value: (input.battleLog?.[input.battleLog.length - 1] || `${actionLabel}: ${actionEffect}. ${status}`).slice(0, 240), inline: false }, ...(!finished && input.decisionDeadline ? [{ name: "Decision", value: `<t:${Math.floor(input.decisionDeadline / 1000)}:R>`, inline: false }] : []))
         .setFooter({ text: `${turn}/${totalTurns} turns` });
-    if (input.bossImageUrl)
-        embed.setThumbnail(input.bossImageUrl);
     const components = !finished && input.interactive !== false
         ? [new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.attack).setLabel("Attack").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.defend).setLabel("Defend").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.heal).setLabel(input.medPatchCount === undefined ? "Heal" : `Heal (${Math.max(0, input.medPatchCount)})`).setStyle(discord_js_1.ButtonStyle.Success).setDisabled(input.medPatchCount === 0 || pmcHp >= input.pmcHpMax), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.scan).setLabel("Scan").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.RAID_ENCOUNTER_IDS.extract).setLabel("Extract Now").setStyle(discord_js_1.ButtonStyle.Secondary)).toJSON()]
         : [];
