@@ -17,12 +17,15 @@ const config_1 = require("./config");
 exports.SAVE_HEALTH = new Map();
 function recordSaveResult(store, ok, error) {
     const entry = exports.SAVE_HEALTH.get(store) || { failures: 0, lastFailureAt: 0, lastSuccessAt: 0, lastError: "" };
-    if (ok)
+    if (ok) {
         entry.lastSuccessAt = Date.now();
+        entry.lastError = "";
+    }
     else {
         entry.failures += 1;
         entry.lastFailureAt = Date.now();
         entry.lastError = error instanceof Error ? error.message : String(error ?? "unknown error");
+        console.error(`[persistence] ${store} save failed: ${entry.lastError}`);
     }
     exports.SAVE_HEALTH.set(store, entry);
 }

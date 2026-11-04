@@ -61,6 +61,7 @@ exports.getSirGruUnlockedAbilities = getSirGruUnlockedAbilities;
 exports.rollSirGruRaidAssist = rollSirGruRaidAssist;
 const fs_extra_1 = __importDefault(require("fs-extra"));
 const path_1 = __importDefault(require("path"));
+const jsonPersistence_1 = require("./runtime/jsonPersistence");
 const achievements_1 = require("./game/achievements");
 const xpCrates_1 = require("./game/xpCrates");
 const checkpointRating_1 = require("./game/checkpointRating");
@@ -213,7 +214,6 @@ function defaultGameStats() {
 }
 const pointsFile = path_1.default.resolve(__dirname, "../src/data/points.json");
 const pointsBackupFile = `${pointsFile}.bak`;
-const pointsTempFile = `${pointsFile}.tmp`;
 const anomalyLogFile = path_1.default.resolve(__dirname, "../src/data/anomalies.jsonl");
 const TOKEN_SPIKE_THRESHOLD = Math.max(1, Number(process.env.TOKEN_SPIKE_THRESHOLD || 25000));
 const XP_SPIKE_THRESHOLD = Math.max(1, Number(process.env.XP_SPIKE_THRESHOLD || 5000));
@@ -238,8 +238,8 @@ function appendAnomalyEvent(type, payload) {
         const line = JSON.stringify({ ts: new Date().toISOString(), type, ...payload });
         fs_extra_1.default.appendFileSync(anomalyLogFile, `${line}\n`, "utf8");
     }
-    catch {
-        // Never crash state mutations over telemetry append failure.
+    catch (error) {
+        console.error("[persistence] Anomaly log append failed:", error);
     }
 }
 function defaultUserState() {
@@ -299,12 +299,14 @@ function defaultUserState() {
     };
 }
 function parsePointsShape(raw) {
-    if (!raw || typeof raw !== "object")
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
         return null;
     const candidate = raw;
-    if (candidate.users && typeof candidate.users === "object") {
+    if (candidate.users && typeof candidate.users === "object" && !Array.isArray(candidate.users)) {
         return { users: candidate.users };
     }
+    if ("users" in raw)
+        return null;
     // Backward-compat: old format used top-level object as user map.
     return { users: raw };
 }
@@ -315,48 +317,16 @@ function readPointsFileFrom(filePath) {
         const raw = fs_extra_1.default.readJsonSync(filePath);
         return parsePointsShape(raw);
     }
-    catch {
+    catch (error) {
+        console.error(`[persistence] Cannot read XP snapshot ${filePath}:`, error);
         return null;
     }
 }
 function writePointsFileAtomic(data) {
-    fs_extra_1.default.ensureDirSync(path_1.default.dirname(pointsFile));
-    const pointsBackupV1File = `${pointsFile}.bak.1`;
-    const pointsBackupV2File = `${pointsFile}.bak.2`;
-    try {
-        if (fs_extra_1.default.existsSync(pointsBackupV1File))
-            fs_extra_1.default.copyFileSync(pointsBackupV1File, pointsBackupV2File);
-        if (fs_extra_1.default.existsSync(pointsBackupFile))
-            fs_extra_1.default.copyFileSync(pointsBackupFile, pointsBackupV1File);
-    }
-    catch {
-        // Best effort backup chain rotation only.
-    }
-    if (fs_extra_1.default.existsSync(pointsFile)) {
-        fs_extra_1.default.copyFileSync(pointsFile, pointsBackupFile);
-    }
-    fs_extra_1.default.writeJsonSync(pointsTempFile, data, { spaces: 2 });
-    fs_extra_1.default.moveSync(pointsTempFile, pointsFile, { overwrite: true });
-    // Keep backup in sync with the last known-good snapshot.
-    fs_extra_1.default.copyFileSync(pointsFile, pointsBackupFile);
+    (0, jsonPersistence_1.queueJsonWrite)(pointsFile, data);
 }
 function readPointsFile() {
-    const seed = { users: {} };
-    if (!fs_extra_1.default.existsSync(pointsFile) && !fs_extra_1.default.existsSync(pointsBackupFile)) {
-        writePointsFileAtomic(seed);
-        return seed;
-    }
-    const primary = readPointsFileFrom(pointsFile);
-    if (primary)
-        return primary;
-    const backup = readPointsFileFrom(pointsBackupFile);
-    if (backup) {
-        // Self-heal if primary became truncated/corrupt.
-        writePointsFileAtomic(backup);
-        return backup;
-    }
-    writePointsFileAtomic(seed);
-    return seed;
+    return (0, jsonPersistence_1.readJsonSnapshot)(pointsFile, parsePointsShape, { users: {} });
 }
 const store = readPointsFile();
 exports.points = store.users;
@@ -366,7 +336,6 @@ function shouldSkipPointsPersistence() {
 let pointsSaveBatchDepth = 0;
 let pointsSaveBatchDirty = false;
 let deferredPointsSaves = 0;
-const pointsSaveHealth = { failures: 0, lastFailureAt: 0, lastSuccessAt: 0, lastError: "" };
 function savePoints() {
     if (pointsSaveBatchDepth > 0) {
         pointsSaveBatchDirty = true;
@@ -376,19 +345,10 @@ function savePoints() {
     // Runtime tests can disable disk writes to avoid polluting live JSON stores.
     if (shouldSkipPointsPersistence())
         return;
-    try {
-        writePointsFileAtomic({ users: exports.points });
-        pointsSaveHealth.lastSuccessAt = Date.now();
-    }
-    catch (error) {
-        pointsSaveHealth.failures += 1;
-        pointsSaveHealth.lastFailureAt = Date.now();
-        pointsSaveHealth.lastError = error instanceof Error ? error.message : String(error);
-        throw error;
-    }
+    writePointsFileAtomic({ users: exports.points });
 }
 function getPointsSaveHealth() {
-    return pointsSaveHealth;
+    return (0, jsonPersistence_1.getJsonSaveHealth)(pointsFile);
 }
 function withDeferredPointsSave(fn) {
     pointsSaveBatchDepth += 1;

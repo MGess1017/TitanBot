@@ -4,6 +4,7 @@ require("dotenv/config");
 const discord_js_1 = require("discord.js");
 const health_1 = require("./runtime/health");
 const voiceXp_1 = require("./runtime/voiceXp");
+const jsonPersistence_1 = require("./runtime/jsonPersistence");
 const config_1 = require("./bot/core/config");
 const playerCards_1 = require("./bot/panels/playerCards");
 const client_1 = require("./bot/core/client");
@@ -39,6 +40,40 @@ const tickets_1 = require("./bot/interactions/tickets");
 const raids_1 = require("./bot/interactions/raids");
 const commands_1 = require("./bot/interactions/commands");
 // Entry point: wires Discord events, timers, and startup. Feature code lives in src/bot/ (see README "Project layout").
+let shuttingDown = false;
+async function shutdown(reason, exitCode) {
+    if (shuttingDown)
+        return;
+    shuttingDown = true;
+    const deadline = setTimeout(() => {
+        console.error("[shutdown] Persistence flush timed out; pending saves may not be durable.");
+        (0, ops_1.releaseInstanceLock)();
+        process.exit(1);
+    }, 10000);
+    try {
+        (0, engagement_1.processVoiceXpSessions)();
+        (0, metrics_1.recordRuntimeShutdown)(reason);
+        if (!(0, checkpoint_1.checkpointState)(reason))
+            exitCode = 1;
+        await client_1.client.destroy();
+    }
+    catch (error) {
+        console.error("[shutdown] Could not checkpoint or close the client:", error);
+        exitCode = 1;
+    }
+    try {
+        await (0, jsonPersistence_1.flushJsonWrites)();
+    }
+    catch (error) {
+        console.error("[shutdown] Could not flush all state:", error);
+        exitCode = 1;
+    }
+    finally {
+        clearTimeout(deadline);
+        (0, ops_1.releaseInstanceLock)();
+    }
+    process.exit(exitCode);
+}
 client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("clientReady", async () => {
     console.log(`Logged in as ${client_1.client.user?.tag ?? "unknown-user"}`);
     console.log(`[startup] Preparing to register ${registry_1.slashCommands.length} guild slash commands.`);
@@ -182,12 +217,16 @@ client_1.client.on("guildMemberRemove", member => (0, metrics_1.runAsyncWithBoun
     ]);
 }));
 setInterval(() => {
+    if (shuttingDown)
+        return;
     (0, checkpoint_1.checkpointState)("interval_30s");
 }, 30000).unref();
 setInterval(() => {
     (0, ops_1.updateBotPresence)();
 }, 10 * 60 * 1000).unref();
 setInterval(() => {
+    if (shuttingDown)
+        return;
     (0, engagement_1.processVoiceXpSessions)();
     (0, metrics_1.runAsyncWithBoundary)("xpLeaderboardRefresh", xpPanels_1.refreshXpLeaderboardPanel);
 }, config_1.VOICE_XP_TICK_MS).unref();
@@ -229,23 +268,17 @@ setTimeout(() => {
     (0, metrics_1.runAsyncWithBoundary)("startupBalanceReport", () => (0, reports_1.sendAutomatedBalanceReport)("startup_warmup"));
 }, 120000).unref();
 process.on("SIGINT", () => {
-    (0, metrics_1.recordRuntimeShutdown)("sigint");
-    (0, checkpoint_1.checkpointState)("sigint");
-    (0, ops_1.releaseInstanceLock)();
-    process.exit(0);
+    void shutdown("sigint", 0);
 });
 process.on("SIGTERM", () => {
-    (0, metrics_1.recordRuntimeShutdown)("sigterm");
-    (0, checkpoint_1.checkpointState)("sigterm");
-    (0, ops_1.releaseInstanceLock)();
-    process.exit(0);
+    void shutdown("sigterm", 0);
 });
 process.on("beforeExit", () => {
-    (0, metrics_1.recordRuntimeShutdown)("before_exit");
-    (0, checkpoint_1.checkpointState)("before_exit");
-    (0, ops_1.releaseInstanceLock)();
+    void shutdown("before_exit", 0);
 });
 client_1.client.on("interactionCreate", interaction => (0, metrics_1.runAsyncWithBoundary)("interactionCreate", async () => {
+    if (shuttingDown)
+        return;
     if (await (0, profile_1.handleProfileInteraction)(interaction))
         return;
     if (await (0, staffDesk_1.handleStaffInteraction)(interaction))
@@ -267,6 +300,8 @@ client_1.client.on("interactionCreate", interaction => (0, metrics_1.runAsyncWit
     await (0, commands_1.handleChatInputCommand)(interaction);
 }));
 client_1.client.on("voiceStateUpdate", (oldState, newState) => {
+    if (shuttingDown)
+        return;
     if (oldState.channelId && oldState.channelId !== newState.channelId) {
         setTimeout(() => {
             (0, metrics_1.runAsyncWithBoundary)("temporaryVoiceCleanup", () => (0, community_1.cleanupEmptyTemporaryVoiceChannel)(oldState.guild, oldState.channelId));
@@ -284,6 +319,8 @@ client_1.client.on("voiceStateUpdate", (oldState, newState) => {
         (0, engagement_1.trackVoiceXpConnection)(member.guild, member.id, true);
 });
 client_1.client.on("messageCreate", message => (0, metrics_1.runAsyncWithBoundary)("messageCreate", async () => {
+    if (shuttingDown)
+        return;
     if (message.author.bot)
         return;
     if (message.guildId) {
@@ -348,25 +385,20 @@ client_1.client.on("messageCreate", message => (0, metrics_1.runAsyncWithBoundar
 }));
 process.on("unhandledRejection", reason => {
     console.error("Unhandled promise rejection:", reason);
-    (0, metrics_1.recordRuntimeShutdown)("unhandled_rejection_late_handler");
     (0, audit_1.appendAuditEvent)("unhandled_rejection", { reason: (0, ops_1.toSafeString)(reason) });
     (0, checkpoint_1.checkpointState)("unhandled_rejection");
     (0, ops_1.postOpsAlert)("error", "Unhandled promise rejection", {
         reason: (0, ops_1.toSafeString)(reason)
     });
-    (0, ops_1.releaseInstanceLock)();
 });
 process.on("uncaughtException", error => {
     console.error("Uncaught exception:", error);
-    (0, metrics_1.recordRuntimeShutdown)("uncaught_exception_late_handler");
     (0, audit_1.appendAuditEvent)("uncaught_exception", { message: error.message, stack: error.stack });
-    (0, checkpoint_1.checkpointState)("uncaught_exception");
     (0, ops_1.postOpsAlert)("error", "Uncaught exception", {
         name: error.name,
         message: error.message
     });
-    (0, ops_1.releaseInstanceLock)();
-    setTimeout(() => process.exit(1), 250);
+    void shutdown("uncaught_exception", 1);
 });
 async function bootServices() {
     const lock = (0, ops_1.acquireInstanceLock)();
@@ -393,9 +425,8 @@ async function bootServices() {
 }
 void bootServices().catch(error => {
     console.error("Boot failed:", error);
-    (0, metrics_1.recordRuntimeShutdown)("boot_failed");
     (0, ops_1.postOpsAlert)("error", "Boot failed", {
         reason: (0, ops_1.toSafeString)(error)
     });
-    process.exit(1);
+    void shutdown("boot_failed", 1);
 });

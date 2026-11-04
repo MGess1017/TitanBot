@@ -1,6 +1,10 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VOICE_XP_SESSIONS = void 0;
+exports.saveVoiceXpSessions = saveVoiceXpSessions;
 exports.awardEngagementXp = awardEngagementXp;
 exports.getLiveVoiceTimeMs = getLiveVoiceTimeMs;
 exports.formatVoiceDuration = formatVoiceDuration;
@@ -11,6 +15,7 @@ exports.processVoiceXpSessions = processVoiceXpSessions;
 exports.seedConnectedVoiceXpSessions = seedConnectedVoiceXpSessions;
 // Engagement XP and live voice XP sessions (2x after continuous voice time).
 const discord_js_1 = require("discord.js");
+const node_path_1 = __importDefault(require("node:path"));
 const utils_1 = require("../../utils");
 const voiceXp_1 = require("../../runtime/voiceXp");
 const config_1 = require("../core/config");
@@ -20,7 +25,23 @@ const settings_1 = require("../core/settings");
 const metrics_1 = require("../core/metrics");
 const audit_1 = require("../core/audit");
 const roles_1 = require("./roles");
+const paths_1 = require("../core/paths");
+const voiceSessionStore_1 = require("../../runtime/voiceSessionStore");
 exports.VOICE_XP_SESSIONS = new Map();
+const VOICE_SESSION_FILE = node_path_1.default.resolve(paths_1.BOT_SRC_DIR, "..", "src", "data", "voice-sessions.json");
+let voiceSessionsSeeded = false;
+function saveVoiceXpSessions(now = Date.now()) {
+    if (!voiceSessionsSeeded)
+        return;
+    (0, voiceSessionStore_1.saveVoiceSessions)(VOICE_SESSION_FILE, [...exports.VOICE_XP_SESSIONS.values()].map(session => ({
+        guildId: session.guild.id,
+        userId: session.userId,
+        connected: session.connected,
+        elapsedMs: session.connected ? Math.max(0, now - (session.connectedAt ?? now)) : 0,
+        remainderMs: session.remainderMs,
+        doubleXpNotified: Boolean(session.doubleXpNotified)
+    })));
+}
 function awardEngagementXp(guild, userId, xpDelta, voiceMinutesDelta = 0) {
     const user = (0, utils_1.ensureUser)(userId);
     if (voiceMinutesDelta > 0)
@@ -91,6 +112,7 @@ function trackVoiceXpConnection(guild, userId, connected, now = Date.now()) {
             });
         }
         (0, xpPanels_1.scheduleXpLeaderboardUpdate)();
+        saveVoiceXpSessions(now);
         return;
     }
     if (!session || !session.connected)
@@ -100,6 +122,7 @@ function trackVoiceXpConnection(guild, userId, connected, now = Date.now()) {
     session.lastAccruedAt = now;
     session.updatedAt = now;
     (0, xpPanels_1.scheduleXpLeaderboardUpdate)();
+    saveVoiceXpSessions(now);
 }
 function awardConnectedVoiceXp(session, now = Date.now()) {
     if (!session.connected)
@@ -163,9 +186,23 @@ function processVoiceXpSessions(now = Date.now()) {
             exports.VOICE_XP_SESSIONS.delete(key);
         }
     }
+    saveVoiceXpSessions(now);
 }
 function seedConnectedVoiceXpSessions() {
     const now = Date.now();
+    const saved = (0, voiceSessionStore_1.readVoiceSessions)(VOICE_SESSION_FILE);
+    for (const previous of saved) {
+        const guild = client_1.client.guilds.cache.get(previous.guildId);
+        if (!guild)
+            continue;
+        const state = guild.voiceStates.cache.get(previous.userId);
+        const connectedNow = (0, voiceXp_1.isVoiceXpEligible)(state?.channelId ?? null, Boolean(state?.member?.user.bot));
+        exports.VOICE_XP_SESSIONS.set(voiceXpSessionKey(guild.id, previous.userId), {
+            guild, userId: previous.userId,
+            ...(0, voiceSessionStore_1.restoreVoiceSession)(previous, connectedNow, now),
+            updatedAt: now
+        });
+    }
     for (const guild of client_1.client.guilds.cache.values()) {
         for (const state of guild.voiceStates.cache.values()) {
             if ((0, voiceXp_1.isVoiceXpEligible)(state.channelId, Boolean(state.member?.user.bot)) && state.member) {
@@ -173,4 +210,6 @@ function seedConnectedVoiceXpSessions() {
             }
         }
     }
+    voiceSessionsSeeded = true;
+    saveVoiceXpSessions(now);
 }

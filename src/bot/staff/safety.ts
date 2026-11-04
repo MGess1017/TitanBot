@@ -1,6 +1,6 @@
 // Spam alerts and staff health checks.
 import { Guild, MessageFlags, PermissionFlagsBits, type Interaction } from "discord.js";
-import { getPointsSaveHealth } from "../../utils";
+import { getJsonSaveFailures } from "../../runtime/jsonPersistence";
 import { type AntiRaidDetection } from "../../features/antiRaid";
 import { buildHealthPayload, buildIncidentAlert, healthSignature, type HealthIssue } from "../../features/staffHub";
 import { JOIN_WELCOME_CHANNEL_ID, PERMANENT_TICKET_PANEL_CHANNEL_ID, WHATS_NEW_CHANNEL_ID } from "../core/config";
@@ -153,14 +153,16 @@ export async function runStaffHealthCheck(reason: string): Promise<{ issues: Hea
         }
     }
 
-    const pointsHealth = getPointsSaveHealth();
-    if (pointsHealth.lastFailureAt > pointsHealth.lastSuccessAt) {
-        issues.push({ key: "save:points", severity: "critical", message: `Player data saves are failing: ${clampText(pointsHealth.lastError, 120)}` });
-    }
     for (const [store, entry] of SAVE_HEALTH) {
-        if (entry.lastFailureAt > entry.lastSuccessAt) {
+        if (entry.lastError) {
             issues.push({ key: `save:${store}`, severity: "critical", message: `${store} saves are failing: ${clampText(entry.lastError, 120)}` });
         }
+    }
+    for (const failure of getJsonSaveFailures()) {
+        issues.push({
+            key: `save:${failure.file}`, severity: "critical",
+            message: `JSON save failed (${failure.file}): ${clampText(failure.error, 120)}`
+        });
     }
     const now = Date.now();
     const startupFailures = ASYNC_FAILURES.filter(failure => failure.at - PROCESS_STARTED_AT <= 2 * 60_000);

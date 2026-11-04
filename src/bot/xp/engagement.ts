@@ -1,5 +1,6 @@
 // Engagement XP and live voice XP sessions (2x after continuous voice time).
 import { EmbedBuilder, Guild } from "discord.js";
+import path from "node:path";
 import { addXP, ensureUser } from "../../utils";
 import {
     accrueVoiceXp, getVoiceXpConfig, getVoiceXpMultiplier, isVoiceXpEligible, type VoiceXpAccrualState
@@ -11,6 +12,8 @@ import { isFeatureEnabled } from "../core/settings";
 import { runAsyncWithBoundary } from "../core/metrics";
 import { appendAuditEvent } from "../core/audit";
 import { enqueueXpRoleSync, getEffectiveXpRoleEntries, notifyXpThresholdUnlock } from "./roles";
+import { BOT_SRC_DIR } from "../core/paths";
+import { readVoiceSessions, restoreVoiceSession, saveVoiceSessions } from "../../runtime/voiceSessionStore";
 
 type VoiceXpSession = VoiceXpAccrualState & {
     guild: Guild;
@@ -20,6 +23,20 @@ type VoiceXpSession = VoiceXpAccrualState & {
     doubleXpNotified?: boolean;
 };
 export const VOICE_XP_SESSIONS = new Map<string, VoiceXpSession>();
+const VOICE_SESSION_FILE = path.resolve(BOT_SRC_DIR, "..", "src", "data", "voice-sessions.json");
+let voiceSessionsSeeded = false;
+
+export function saveVoiceXpSessions(now = Date.now()): void {
+    if (!voiceSessionsSeeded) return;
+    saveVoiceSessions(VOICE_SESSION_FILE, [...VOICE_XP_SESSIONS.values()].map(session => ({
+        guildId: session.guild.id,
+        userId: session.userId,
+        connected: session.connected,
+        elapsedMs: session.connected ? Math.max(0, now - (session.connectedAt ?? now)) : 0,
+        remainderMs: session.remainderMs,
+        doubleXpNotified: Boolean(session.doubleXpNotified)
+    })));
+}
 
 export function awardEngagementXp(guild: Guild | null, userId: string, xpDelta: number, voiceMinutesDelta = 0): { previousXp: number; totalXp: number } {
     const user = ensureUser(userId);
@@ -90,6 +107,7 @@ export function trackVoiceXpConnection(guild: Guild, userId: string, connected: 
             });
         }
         scheduleXpLeaderboardUpdate();
+        saveVoiceXpSessions(now);
         return;
     }
 
@@ -99,6 +117,7 @@ export function trackVoiceXpConnection(guild: Guild, userId: string, connected: 
     session.lastAccruedAt = now;
     session.updatedAt = now;
     scheduleXpLeaderboardUpdate();
+    saveVoiceXpSessions(now);
 }
 
 function awardConnectedVoiceXp(session: VoiceXpSession, now = Date.now()): void {
@@ -162,10 +181,23 @@ export function processVoiceXpSessions(now = Date.now()): void {
             VOICE_XP_SESSIONS.delete(key);
         }
     }
+    saveVoiceXpSessions(now);
 }
 
 export function seedConnectedVoiceXpSessions(): void {
     const now = Date.now();
+    const saved = readVoiceSessions(VOICE_SESSION_FILE);
+    for (const previous of saved) {
+        const guild = client.guilds.cache.get(previous.guildId);
+        if (!guild) continue;
+        const state = guild.voiceStates.cache.get(previous.userId);
+        const connectedNow = isVoiceXpEligible(state?.channelId ?? null, Boolean(state?.member?.user.bot));
+        VOICE_XP_SESSIONS.set(voiceXpSessionKey(guild.id, previous.userId), {
+            guild, userId: previous.userId,
+            ...restoreVoiceSession(previous, connectedNow, now),
+            updatedAt: now
+        });
+    }
     for (const guild of client.guilds.cache.values()) {
         for (const state of guild.voiceStates.cache.values()) {
             if (isVoiceXpEligible(state.channelId, Boolean(state.member?.user.bot)) && state.member) {
@@ -173,4 +205,6 @@ export function seedConnectedVoiceXpSessions(): void {
             }
         }
     }
+    voiceSessionsSeeded = true;
+    saveVoiceXpSessions(now);
 }

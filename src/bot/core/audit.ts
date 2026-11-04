@@ -21,7 +21,7 @@ export function appendAuditEvent(eventType: string, payload: Record<string, unkn
             ...payload
         });
         fs.appendFileSync(EVENT_LOG_FILE, `${line}\n`, "utf8");
-    } catch {
-        // Never crash runtime due to audit logging.
+    } catch (error) {
+        console.error("[persistence] Audit log append failed:", error);
     }
 }

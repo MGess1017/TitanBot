@@ -15,11 +15,15 @@ export const SAVE_HEALTH = new Map<string, SaveHealthEntry>();
 
 export function recordSaveResult(store: string, ok: boolean, error?: unknown): void {
     const entry = SAVE_HEALTH.get(store) || { failures: 0, lastFailureAt: 0, lastSuccessAt: 0, lastError: "" };
-    if (ok) entry.lastSuccessAt = Date.now();
+    if (ok) {
+        entry.lastSuccessAt = Date.now();
+        entry.lastError = "";
+    }
     else {
         entry.failures += 1;
         entry.lastFailureAt = Date.now();
         entry.lastError = error instanceof Error ? error.message : String(error ?? "unknown error");
+        console.error(`[persistence] ${store} save failed: ${entry.lastError}`);
     }
     SAVE_HEALTH.set(store, entry);
 }

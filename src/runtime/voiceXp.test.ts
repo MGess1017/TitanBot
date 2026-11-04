@@ -7,6 +7,7 @@ import { EmbedBuilder } from "discord.js";
 import { addXpCrateProfile } from "../features/xpCratePanel";
 import type { XpCrateReward } from "../game/xpCrates";
 import { accrueVoiceXp, getVoiceXpConfig, getVoiceXpMultiplier, isVoiceXpEligible, VOICE_XP_DOUBLE_AFTER_MS, type VoiceXpAccrualState } from "./voiceXp";
+import { restoreVoiceSession, type SavedVoiceSession } from "./voiceSessionStore";
 const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 const minute = 60_000;
@@ -72,21 +73,31 @@ const sessions = new Map<string, TestSession>();
 const awards: Array<{ xp: number; minutes: number }> = [];
 let currentTime = 0;
 const unlockNotifications: string[] = [];
+let savedSessions: SavedVoiceSession[] = [];
 let voiceHandler: ((oldState: TestVoiceState, newState: TestVoiceState) => void) | undefined;
 const source = ts.createSourceFile("bot.ts", readBotSource(), ts.ScriptTarget.ES2020, true);
-const helperNames = new Set(["voiceXpSessionKey", "getCurrentVoiceXpMultiplier", "trackVoiceXpConnection", "awardConnectedVoiceXp", "processVoiceXpSessions"]);
+const helperNames = new Set([
+    "voiceXpSessionKey", "getCurrentVoiceXpMultiplier", "trackVoiceXpConnection", "awardConnectedVoiceXp",
+    "processVoiceXpSessions", "saveVoiceXpSessions", "seedConnectedVoiceXpSessions"
+]);
 const helpers = source.statements.filter(node => ts.isFunctionDeclaration(node) && helperNames.has(node.name?.text || ""));
 assert.equal(helpers.length, helperNames.size);
 const voiceEvent = source.statements.find(node => node.getText(source).startsWith('client.on("voiceStateUpdate"'));
 assert.ok(voiceEvent);
 const context = vm.createContext({
     Date: { now: () => currentTime },
+    shuttingDown: false,
     VOICE_XP_SESSIONS: sessions,
     VOICE_XP_REMAINDER_TTL_MS: 24 * 60 * minute,
     accrueVoiceXp,
     getVoiceXpMultiplier,
     isVoiceXpEligible,
     scheduleXpLeaderboardUpdate: () => undefined,
+    VOICE_SESSION_FILE: "voice-test.json",
+    voiceSessionsSeeded: false,
+    readVoiceSessions: () => structuredClone(savedSessions),
+    saveVoiceSessions: (_file: string, value: SavedVoiceSession[]) => { savedSessions = structuredClone(value); },
+    restoreVoiceSession,
     isFeatureEnabled: () => true,
     appendAuditEvent: () => undefined,
     runAsyncWithBoundary: (_name: string, task: () => Promise<void>) => { void task(); },
@@ -96,7 +107,10 @@ const context = vm.createContext({
         return { totalXp: awards.reduce((sum, award) => sum + award.xp, 0) };
     },
     setTimeout: () => ({ unref: () => undefined }),
-    client: { on: (_name: string, handler: typeof voiceHandler) => { voiceHandler = handler; } }
+    client: {
+        guilds: { cache: new Map<string, TestGuild>() },
+        on: (_name: string, handler: typeof voiceHandler) => { voiceHandler = handler; }
+    }
 });
 vm.runInContext(ts.transpileModule(
     [...helpers, voiceEvent].map(node => node.getText(source)).join("\n"),
@@ -106,8 +120,12 @@ const runtime = context as {
     trackVoiceXpConnection: (guild: TestGuild, id: string, connected: boolean, now: number) => void;
     processVoiceXpSessions: (now: number) => void;
     getCurrentVoiceXpMultiplier: (guild: TestGuild | null, userId: string, now: number) => 1 | 2;
+    seedConnectedVoiceXpSessions: () => void;
+    saveVoiceXpSessions: (now: number) => void;
 };
 const guild: TestGuild = { id: "guild", afkChannelId: "afk", voiceStates: { cache: new Map() } };
+context.client.guilds.cache.set(guild.id, guild);
+runtime.seedConnectedVoiceXpSessions();
 const member = { id: "user", guild, user: { bot: false } };
 function moveVoice(oldChannel: string | null, newChannel: string | null, now: number): void {
     currentTime = now;
@@ -117,7 +135,7 @@ function moveVoice(oldChannel: string | null, newChannel: string | null, now: nu
 }
 
 moveVoice(null, "vc-1", 0);
-const session = sessions.get("guild:user")!;
+let session = sessions.get("guild:user")!;
 assert.equal(runtime.getCurrentVoiceXpMultiplier(guild, member.id, threshold), 1);
 assert.equal(runtime.getCurrentVoiceXpMultiplier(guild, member.id, threshold + 1), 2);
 assert.equal(runtime.getCurrentVoiceXpMultiplier(null, member.id, threshold + 1), 1);
@@ -165,6 +183,26 @@ runtime.processVoiceXpSessions(threshold * 4 + minute);
 assert.deepEqual(unlockNotifications, ["user", "user"], "a fresh continuous session must unlock one new DM");
 runtime.processVoiceXpSessions(threshold * 4 + 2 * minute);
 assert.equal(unlockNotifications.length, 2);
+const restartAt = threshold * 8;
+const awardsBeforeRestart = awards.length;
+sessions.clear();
+currentTime = restartAt;
+runtime.seedConnectedVoiceXpSessions();
+session = sessions.get("guild:user")!;
+assert.equal(runtime.getCurrentVoiceXpMultiplier(guild, member.id, restartAt), 2, "startup seeding must restore the saved bonus");
+runtime.processVoiceXpSessions(restartAt);
+assert.equal(awards.length, awardsBeforeRestart, "startup seeding must not award offline XP");
+runtime.processVoiceXpSessions(restartAt + minute);
+assert.equal(awards[awards.length - 1]?.xp, 200, "post-restart connected time must earn double XP");
+assert.equal(unlockNotifications.length, 2, "startup seeding must not duplicate the unlock notification");
+moveVoice("vc-4", null, restartAt + minute);
+sessions.clear();
+currentTime = restartAt + 2 * minute;
+runtime.seedConnectedVoiceXpSessions();
+session = sessions.get("guild:user")!;
+assert.equal(session.connected, false, "an observed disconnect must remain disconnected after startup");
+moveVoice(null, "vc-5", restartAt + 2 * minute);
+assert.equal(runtime.getCurrentVoiceXpMultiplier(guild, member.id, restartAt + 2 * minute), 1);
 console.log("voice XP bonus and connection lifecycle tests passed");
 
 async function verifyXpStatus(): Promise<void> {

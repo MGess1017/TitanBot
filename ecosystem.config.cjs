@@ -3,9 +3,9 @@ module.exports = {
     {
       name: "titan-raid-bot",
       cwd: __dirname,
-      script: "npm",
-      args: "run start",
-      interpreter: "none",
+      script: "dist/bot.js",
+      interpreter: "node",
+      kill_timeout: 15000,
       autorestart: true,
       watch: false,
       max_restarts: 10,

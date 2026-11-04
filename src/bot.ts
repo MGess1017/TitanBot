@@ -2,6 +2,7 @@ import "dotenv/config";
 import { AuditLogEvent, ChannelType, EmbedBuilder, PermissionFlagsBits } from "discord.js";
 import { buildStartupSummary } from "./runtime/health";
 import { isVoiceXpEligible } from "./runtime/voiceXp";
+import { flushJsonWrites } from "./runtime/jsonPersistence";
 import {
     COMMAND_IDEMPOTENCY_WINDOW_MS, DAILY_HEALTH_REPORT_MS, DISCORD_GUILD_ID, ENABLE_STARTUP_AUTOPANELS,
     ENABLE_STARTUP_DEPLOYMENT_SUMMARY, HEALTH_WATCHDOG_INTERVAL_MS, IN_MEMORY_STATE_PRUNE_INTERVAL_MS,
@@ -53,6 +54,36 @@ import { handleRaidInteraction } from "./bot/interactions/raids";
 import { handleChatInputCommand } from "./bot/interactions/commands";
 
 // Entry point: wires Discord events, timers, and startup. Feature code lives in src/bot/ (see README "Project layout").
+let shuttingDown = false;
+
+async function shutdown(reason: string, exitCode: number): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const deadline = setTimeout(() => {
+        console.error("[shutdown] Persistence flush timed out; pending saves may not be durable.");
+        releaseInstanceLock();
+        process.exit(1);
+    }, 10_000);
+    try {
+        processVoiceXpSessions();
+        recordRuntimeShutdown(reason);
+        if (!checkpointState(reason)) exitCode = 1;
+        await client.destroy();
+    } catch (error) {
+        console.error("[shutdown] Could not checkpoint or close the client:", error);
+        exitCode = 1;
+    }
+    try {
+        await flushJsonWrites();
+    } catch (error) {
+        console.error("[shutdown] Could not flush all state:", error);
+        exitCode = 1;
+    } finally {
+        clearTimeout(deadline);
+        releaseInstanceLock();
+    }
+    process.exit(exitCode);
+}
 
 client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () => {
     console.log(`Logged in as ${client.user?.tag ?? "unknown-user"}`);
@@ -210,6 +241,7 @@ client.on("guildMemberRemove", member => runAsyncWithBoundary("guildMemberRemove
 }));
 
 setInterval(() => {
+    if (shuttingDown) return;
     checkpointState("interval_30s");
 }, 30_000).unref();
 
@@ -218,6 +250,7 @@ setInterval(() => {
 }, 10 * 60 * 1000).unref();
 
 setInterval(() => {
+    if (shuttingDown) return;
     processVoiceXpSessions();
     runAsyncWithBoundary("xpLeaderboardRefresh", refreshXpLeaderboardPanel);
 }, VOICE_XP_TICK_MS).unref();
@@ -271,26 +304,19 @@ setTimeout(() => {
 }, 120_000).unref();
 
 process.on("SIGINT", () => {
-    recordRuntimeShutdown("sigint");
-    checkpointState("sigint");
-    releaseInstanceLock();
-    process.exit(0);
+    void shutdown("sigint", 0);
 });
 
 process.on("SIGTERM", () => {
-    recordRuntimeShutdown("sigterm");
-    checkpointState("sigterm");
-    releaseInstanceLock();
-    process.exit(0);
+    void shutdown("sigterm", 0);
 });
 
 process.on("beforeExit", () => {
-    recordRuntimeShutdown("before_exit");
-    checkpointState("before_exit");
-    releaseInstanceLock();
+    void shutdown("before_exit", 0);
 });
 
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
+    if (shuttingDown) return;
     if (await handleProfileInteraction(interaction)) return;
     if (await handleStaffInteraction(interaction)) return;
     if (await handleCheckpointInteraction(interaction)) return;
@@ -304,6 +330,7 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
 }));
 
 client.on("voiceStateUpdate", (oldState, newState) => {
+    if (shuttingDown) return;
     if (oldState.channelId && oldState.channelId !== newState.channelId) {
         setTimeout(() => {
             runAsyncWithBoundary("temporaryVoiceCleanup", () => cleanupEmptyTemporaryVoiceChannel(oldState.guild, oldState.channelId!));
@@ -320,6 +347,7 @@ client.on("voiceStateUpdate", (oldState, newState) => {
 });
 
 client.on("messageCreate", message => runAsyncWithBoundary("messageCreate", async () => {
+    if (shuttingDown) return;
     if (message.author.bot) return;
 
     if (message.guildId) {
@@ -389,26 +417,21 @@ client.on("messageCreate", message => runAsyncWithBoundary("messageCreate", asyn
 
 process.on("unhandledRejection", reason => {
     console.error("Unhandled promise rejection:", reason);
-    recordRuntimeShutdown("unhandled_rejection_late_handler");
     appendAuditEvent("unhandled_rejection", { reason: toSafeString(reason) });
     checkpointState("unhandled_rejection");
     postOpsAlert("error", "Unhandled promise rejection", {
         reason: toSafeString(reason)
     });
-    releaseInstanceLock();
 });
 
 process.on("uncaughtException", error => {
     console.error("Uncaught exception:", error);
-    recordRuntimeShutdown("uncaught_exception_late_handler");
     appendAuditEvent("uncaught_exception", { message: error.message, stack: error.stack });
-    checkpointState("uncaught_exception");
     postOpsAlert("error", "Uncaught exception", {
         name: error.name,
         message: error.message
     });
-    releaseInstanceLock();
-    setTimeout(() => process.exit(1), 250);
+    void shutdown("uncaught_exception", 1);
 });
 
 async function bootServices(): Promise<void> {
@@ -440,9 +463,8 @@ async function bootServices(): Promise<void> {
 
 void bootServices().catch(error => {
     console.error("Boot failed:", error);
-    recordRuntimeShutdown("boot_failed");
     postOpsAlert("error", "Boot failed", {
         reason: toSafeString(error)
     });
-    process.exit(1);
+    void shutdown("boot_failed", 1);
 });

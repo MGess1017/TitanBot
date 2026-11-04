@@ -3,9 +3,17 @@ import fs from "fs-extra";
 import crypto from "node:crypto";
 import path from "path";
 import { METRICS_DATA_FILE } from "./config";
-import { appendAuditEvent } from "./audit";
+import { queueJsonWrite, readJsonSnapshot } from "../../runtime/jsonPersistence";
 
 export function writeJsonAtomic(filePath: string, data: unknown): void {
+    const output = filePath === METRICS_DATA_FILE && data && typeof data === "object"
+        ? { ...(data as Record<string, unknown>), checksum: crypto.createHash("sha256").update(JSON.stringify(data)).digest("hex") }
+        : data;
+    queueJsonWrite(filePath, output);
+}
+
+// Ticket version checks require a durable write before acknowledging the mutation.
+export function writeJsonAtomicSync(filePath: string, data: unknown): void {
     const backupPath = `${filePath}.bak`;
     const backupV1Path = `${filePath}.bak.1`;
     const backupV2Path = `${filePath}.bak.2`;
@@ -13,32 +21,20 @@ export function writeJsonAtomic(filePath: string, data: unknown): void {
     fs.ensureDirSync(path.dirname(filePath));
 
     try {
+        const handle = fs.openSync(tempPath, "wx");
+        try {
+            fs.writeFileSync(handle, JSON.stringify(data, null, 2), "utf8");
+            fs.fsyncSync(handle);
+        } finally {
+            fs.closeSync(handle);
+        }
         if (fs.existsSync(backupV1Path)) fs.copyFileSync(backupV1Path, backupV2Path);
         if (fs.existsSync(backupPath)) fs.copyFileSync(backupPath, backupV1Path);
-    } catch {
-        // Best effort backup chain rotation only.
-    }
-
-    if (fs.existsSync(filePath)) {
-        try {
-            fs.copyFileSync(filePath, backupPath);
-        } catch {
-            // Best-effort backup pre-write.
-        }
-    }
-
-    try {
-        const checksum = crypto.createHash("sha256").update(JSON.stringify(data)).digest("hex");
-        const output = filePath === METRICS_DATA_FILE && data && typeof data === "object"
-            ? { ...(data as Record<string, unknown>), checksum }
-            : data;
-        fs.writeJsonSync(tempPath, output, { spaces: 2 });
-        fs.moveSync(tempPath, filePath, { overwrite: true });
-        try {
-            fs.copyFileSync(filePath, backupPath);
-        } catch {
-            // Best-effort backup post-write.
-        }
+        if (fs.existsSync(filePath)) fs.copyFileSync(filePath, backupPath);
+        fs.renameSync(tempPath, filePath);
+    } catch (error) {
+        console.error(`[persistence] Synchronous save failed for ${filePath}:`, error);
+        throw error;
     } finally {
         if (fs.existsSync(tempPath)) {
             fs.removeSync(tempPath);
@@ -47,34 +43,5 @@ export function writeJsonAtomic(filePath: string, data: unknown): void {
 }
 
 export function readJsonWithBackup<T>(filePath: string, parse: (raw: unknown) => T | null, seed: T): T {
-    const backupPath = `${filePath}.bak`;
-
-    if (!fs.existsSync(filePath) && !fs.existsSync(backupPath)) {
-        writeJsonAtomic(filePath, seed);
-        return seed;
-    }
-
-    const readParsed = (candidatePath: string): T | null => {
-        if (!fs.existsSync(candidatePath)) return null;
-        try {
-            const raw = fs.readJsonSync(candidatePath) as unknown;
-            return parse(raw);
-        } catch {
-            return null;
-        }
-    };
-
-    const primary = readParsed(filePath);
-    if (primary) return primary;
-
-    const backup = readParsed(backupPath);
-    if (backup) {
-        writeJsonAtomic(filePath, backup);
-        appendAuditEvent("data_store_recovered_from_backup", { filePath });
-        return backup;
-    }
-
-    writeJsonAtomic(filePath, seed);
-    appendAuditEvent("data_store_reinitialized", { filePath });
-    return seed;
+    return readJsonSnapshot(filePath, parse, seed);
 }

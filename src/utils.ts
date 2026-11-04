@@ -1,5 +1,6 @@
 import fs from "fs-extra";
 import path from "path";
+import { getJsonSaveHealth, queueJsonWrite, readJsonSnapshot } from "./runtime/jsonPersistence";
 import { getNewProgressAchievements, type ProgressAchievement } from "./game/achievements";
 import { isXpCrateReward, type XpCrateReward } from "./game/xpCrates";
 import { normalizeCheckpointProfile, type CheckpointProfile } from "./game/checkpointRating";
@@ -306,7 +307,6 @@ type PointsFileShape = {
 
 const pointsFile = path.resolve(__dirname, "../src/data/points.json");
 const pointsBackupFile = `${pointsFile}.bak`;
-const pointsTempFile = `${pointsFile}.tmp`;
 const anomalyLogFile = path.resolve(__dirname, "../src/data/anomalies.jsonl");
 const TOKEN_SPIKE_THRESHOLD = Math.max(1, Number(process.env.TOKEN_SPIKE_THRESHOLD || 25000));
 const XP_SPIKE_THRESHOLD = Math.max(1, Number(process.env.XP_SPIKE_THRESHOLD || 5000));
@@ -330,8 +330,8 @@ function appendAnomalyEvent(type: string, payload: Record<string, unknown>): voi
         fs.ensureDirSync(path.dirname(anomalyLogFile));
         const line = JSON.stringify({ ts: new Date().toISOString(), type, ...payload });
         fs.appendFileSync(anomalyLogFile, `${line}\n`, "utf8");
-    } catch {
-        // Never crash state mutations over telemetry append failure.
+    } catch (error) {
+        console.error("[persistence] Anomaly log append failed:", error);
     }
 }
 
@@ -393,12 +393,13 @@ function defaultUserState(): UserState {
 }
 
 function parsePointsShape(raw: unknown): PointsFileShape | null {
-    if (!raw || typeof raw !== "object") return null;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
 
     const candidate = raw as Partial<PointsFileShape>;
-    if (candidate.users && typeof candidate.users === "object") {
+    if (candidate.users && typeof candidate.users === "object" && !Array.isArray(candidate.users)) {
         return { users: candidate.users as Record<string, UserState> };
     }
+    if ("users" in raw) return null;
 
     // Backward-compat: old format used top-level object as user map.
     return { users: raw as Record<string, UserState> };
@@ -409,54 +410,18 @@ function readPointsFileFrom(filePath: string): PointsFileShape | null {
     try {
         const raw = fs.readJsonSync(filePath) as unknown;
         return parsePointsShape(raw);
-    } catch {
+    } catch (error) {
+        console.error(`[persistence] Cannot read XP snapshot ${filePath}:`, error);
         return null;
     }
 }
 
 function writePointsFileAtomic(data: PointsFileShape): void {
-    fs.ensureDirSync(path.dirname(pointsFile));
-
-    const pointsBackupV1File = `${pointsFile}.bak.1`;
-    const pointsBackupV2File = `${pointsFile}.bak.2`;
-    try {
-        if (fs.existsSync(pointsBackupV1File)) fs.copyFileSync(pointsBackupV1File, pointsBackupV2File);
-        if (fs.existsSync(pointsBackupFile)) fs.copyFileSync(pointsBackupFile, pointsBackupV1File);
-    } catch {
-        // Best effort backup chain rotation only.
-    }
-
-    if (fs.existsSync(pointsFile)) {
-        fs.copyFileSync(pointsFile, pointsBackupFile);
-    }
-
-    fs.writeJsonSync(pointsTempFile, data, { spaces: 2 });
-    fs.moveSync(pointsTempFile, pointsFile, { overwrite: true });
-
-    // Keep backup in sync with the last known-good snapshot.
-    fs.copyFileSync(pointsFile, pointsBackupFile);
+    queueJsonWrite(pointsFile, data);
 }
 
 function readPointsFile(): PointsFileShape {
-    const seed: PointsFileShape = { users: {} };
-
-    if (!fs.existsSync(pointsFile) && !fs.existsSync(pointsBackupFile)) {
-        writePointsFileAtomic(seed);
-        return seed;
-    }
-
-    const primary = readPointsFileFrom(pointsFile);
-    if (primary) return primary;
-
-    const backup = readPointsFileFrom(pointsBackupFile);
-    if (backup) {
-        // Self-heal if primary became truncated/corrupt.
-        writePointsFileAtomic(backup);
-        return backup;
-    }
-
-    writePointsFileAtomic(seed);
-    return seed;
+    return readJsonSnapshot(pointsFile, parsePointsShape, { users: {} });
 }
 
 const store = readPointsFile();
@@ -469,7 +434,6 @@ function shouldSkipPointsPersistence(): boolean {
 let pointsSaveBatchDepth = 0;
 let pointsSaveBatchDirty = false;
 let deferredPointsSaves = 0;
-const pointsSaveHealth = { failures: 0, lastFailureAt: 0, lastSuccessAt: 0, lastError: "" };
 
 export function savePoints(): void {
     if (pointsSaveBatchDepth > 0) {
@@ -479,19 +443,11 @@ export function savePoints(): void {
     }
     // Runtime tests can disable disk writes to avoid polluting live JSON stores.
     if (shouldSkipPointsPersistence()) return;
-    try {
-        writePointsFileAtomic({ users: points });
-        pointsSaveHealth.lastSuccessAt = Date.now();
-    } catch (error) {
-        pointsSaveHealth.failures += 1;
-        pointsSaveHealth.lastFailureAt = Date.now();
-        pointsSaveHealth.lastError = error instanceof Error ? error.message : String(error);
-        throw error;
-    }
+    writePointsFileAtomic({ users: points });
 }
 
-export function getPointsSaveHealth(): Readonly<typeof pointsSaveHealth> {
-    return pointsSaveHealth;
+export function getPointsSaveHealth(): ReturnType<typeof getJsonSaveHealth> {
+    return getJsonSaveHealth(pointsFile);
 }
 
 export function withDeferredPointsSave<T>(fn: () => T): T {

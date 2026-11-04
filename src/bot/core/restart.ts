@@ -2,8 +2,14 @@
 import { execFile } from "node:child_process";
 import "./env";
 import { appendAuditEvent } from "./audit";
+import { checkpointState } from "./checkpoint";
+import { flushJsonWrites } from "../../runtime/jsonPersistence";
 
 export async function requestManagedRestart(trigger: string, requestedByUserId: string | null = null): Promise<void> {
+    if (!checkpointState(`managed_restart:${trigger}`)) {
+        throw new Error("Restart cancelled: one or more state stores failed to checkpoint");
+    }
+    await flushJsonWrites();
     const pm2IdRaw = String(process.env.pm_id || "").trim();
     const pm2Name = String(process.env.name || process.env.PM2_PROCESS_NAME || "").trim();
     const restartTargets: string[] = [];
@@ -42,12 +48,12 @@ export async function requestManagedRestart(trigger: string, requestedByUserId: 
         }
     }
 
-    // Fallback: crash-exit so supervisors configured to auto-restart on failures still recover.
+    // Let the signal handler checkpoint and flush before the supervisor restarts us.
     appendAuditEvent("process_restart_fallback_exit", {
         trigger,
         requestedByUserId,
-        strategy: "exit_code_1"
+        strategy: "graceful_sigterm"
     });
-    console.warn(`[restart] PM2 restart target unavailable for ${trigger}; exiting with code 1.`);
-    setTimeout(() => process.exit(1), 100).unref();
+    console.warn(`[restart] PM2 restart target unavailable for ${trigger}; requesting graceful shutdown.`);
+    process.kill(process.pid, "SIGTERM");
 }

@@ -18,7 +18,7 @@
     "test:runtime:staff-profile": "node -r ts-node/register/transpile-only src/runtime/staffProfile.test.ts",
     "test:runtime:live-xp": "node -r ts-node/register/transpile-only src/runtime/voiceXp.test.ts && node -r ts-node/register/transpile-only src/runtime/xpLeaderboard.test.ts && node -r ts-node/register/transpile-only src/runtime/xpCrates.test.ts",
     "test:runtime:checkpoint-card": "node -r ts-node/register/transpile-only src/runtime/checkpointCard.test.ts",
-    "test:runtime:health": "node -r ts-node/register/transpile-only src/runtime/health.test.ts",
+    "test:runtime:health": "node -r ts-node/register/transpile-only src/runtime/health.test.ts && node -r ts-node/register/transpile-only src/runtime/persistence.test.ts",
     "test:runtime:economy-raid": "node -r ts-node/register/transpile-only src/runtime/economyRaid.test.ts",
     "test:runtime:raid-qol": "node -r ts-node/register/transpile-only src/runtime/raidQol.test.ts",
     "test:runtime:pmc-expansion": "node -r ts-node/register/transpile-only src/runtime/pmcExpansion.test.ts",

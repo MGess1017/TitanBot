@@ -21,7 +21,7 @@ import { client } from "../core/client";
 import { recordSaveResult } from "../core/settings";
 import { runAsyncWithBoundary } from "../core/metrics";
 import { appendAuditEvent } from "../core/audit";
-import { readJsonWithBackup, writeJsonAtomic } from "../core/storage";
+import { readJsonWithBackup, writeJsonAtomicSync as writeJsonAtomic } from "../core/storage";
 import { assignTicketToUser } from "./records";
 import { updateTicketOpsPanelMessage } from "./opsPanel";
 
@@ -295,6 +295,7 @@ export function saveTicketStore(): boolean {
             expectedVersion: ticketStore.version,
             diskVersion
         });
+        recordSaveResult("tickets", false, new Error(`Ticket store version conflict: expected ${ticketStore.version}, found ${diskVersion}`));
         return false;
     }
 

@@ -1,6 +1,7 @@
 // Admin health, incident, XP verification, and sanity slash commands.
 import { EmbedBuilder } from "discord.js";
 import { ensureUser, getXpPersistenceSnapshot, getXPLevel, syncProgressAchievements } from "../../utils";
+import { flushJsonWrites } from "../../runtime/jsonPersistence";
 import { VOICE_ACHIEVEMENTS, XP_ACHIEVEMENTS } from "../../game/achievements";
 import { TICKET_DATA_FILE } from "../core/config";
 import { formatVoiceDuration } from "../xp/engagement";
@@ -139,8 +140,9 @@ export const adminCommands: CommandHandlerMap = {
         const target = interaction.options.getUser("user", true);
         const targetState = ensureUser(target.id);
         syncProgressAchievements(target.id);
+        await flushJsonWrites();
         const snapshot = getXpPersistenceSnapshot(target.id);
-        const effectiveXp = Math.max(snapshot.memoryXp, snapshot.primaryXp ?? 0, snapshot.backupXp ?? 0);
+        const effectiveXp = snapshot.memoryXp;
         const level = getXPLevel(effectiveXp);
         const unlocked = getEffectiveXpRoleEntries().filter(entry => effectiveXp >= entry.xp).pop();
 
@@ -161,11 +163,7 @@ export const adminCommands: CommandHandlerMap = {
             ].join("\n");
         }
 
-        const mismatch = (
-            snapshot.primaryXp !== null && snapshot.primaryXp !== snapshot.memoryXp
-        ) || (
-            snapshot.backupXp !== null && snapshot.backupXp !== snapshot.memoryXp
-        );
+        const mismatch = snapshot.primaryXp !== snapshot.memoryXp;
 
         const embed = new EmbedBuilder()
             .setColor(mismatch ? 0xf59e0b : 0x22c55e)
@@ -179,7 +177,7 @@ export const adminCommands: CommandHandlerMap = {
                         `Level: ${level}`,
                         `Memory XP: ${snapshot.memoryXp.toLocaleString()}`,
                         `Primary XP: ${snapshot.primaryXp === null ? "missing" : snapshot.primaryXp.toLocaleString()}`,
-                        `Backup XP: ${snapshot.backupXp === null ? "missing" : snapshot.backupXp.toLocaleString()}`
+                        `Previous snapshot XP: ${snapshot.backupXp === null ? "missing" : snapshot.backupXp.toLocaleString()}`
                     ].join("\n"),
                     inline: false
                 },

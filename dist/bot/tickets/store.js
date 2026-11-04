@@ -213,12 +213,13 @@ function saveTicketStore() {
             expectedVersion: exports.ticketStore.version,
             diskVersion
         });
+        (0, settings_1.recordSaveResult)("tickets", false, new Error(`Ticket store version conflict: expected ${exports.ticketStore.version}, found ${diskVersion}`));
         return false;
     }
     const previousVersion = exports.ticketStore.version;
     exports.ticketStore.version = previousVersion + 1;
     try {
-        (0, storage_1.writeJsonAtomic)(config_1.TICKET_DATA_FILE, exports.ticketStore);
+        (0, storage_1.writeJsonAtomicSync)(config_1.TICKET_DATA_FILE, exports.ticketStore);
         (0, settings_1.recordSaveResult)("tickets", true);
         return true;
     }

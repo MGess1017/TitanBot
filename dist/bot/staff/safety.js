@@ -7,7 +7,7 @@ exports.runStaffHealthCheck = runStaffHealthCheck;
 exports.runStaffHealthMonitor = runStaffHealthMonitor;
 // Spam alerts and staff health checks.
 const discord_js_1 = require("discord.js");
-const utils_1 = require("../../utils");
+const jsonPersistence_1 = require("../../runtime/jsonPersistence");
 const staffHub_1 = require("../../features/staffHub");
 const config_1 = require("../core/config");
 const playerCards_1 = require("../panels/playerCards");
@@ -169,14 +169,16 @@ async function runStaffHealthCheck(reason) {
             }
         }
     }
-    const pointsHealth = (0, utils_1.getPointsSaveHealth)();
-    if (pointsHealth.lastFailureAt > pointsHealth.lastSuccessAt) {
-        issues.push({ key: "save:points", severity: "critical", message: `Player data saves are failing: ${(0, embeds_1.clampText)(pointsHealth.lastError, 120)}` });
-    }
     for (const [store, entry] of settings_1.SAVE_HEALTH) {
-        if (entry.lastFailureAt > entry.lastSuccessAt) {
+        if (entry.lastError) {
             issues.push({ key: `save:${store}`, severity: "critical", message: `${store} saves are failing: ${(0, embeds_1.clampText)(entry.lastError, 120)}` });
         }
+    }
+    for (const failure of (0, jsonPersistence_1.getJsonSaveFailures)()) {
+        issues.push({
+            key: `save:${failure.file}`, severity: "critical",
+            message: `JSON save failed (${failure.file}): ${(0, embeds_1.clampText)(failure.error, 120)}`
+        });
     }
     const now = Date.now();
     const startupFailures = metrics_1.ASYNC_FAILURES.filter(failure => failure.at - metrics_1.PROCESS_STARTED_AT <= 2 * 60000);
