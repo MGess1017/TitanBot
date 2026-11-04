@@ -56,6 +56,25 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
    - `/leaderboard`: View the XP leaderboard.
    - `/addpoints @user amount`: Add mod points to a specified user.
 
+## Project layout
+`src/bot.ts` is now only the entry point: it wires Discord events, timers, and startup. Feature code lives in small modules under `src/bot/`, each starting with a one-line comment describing what it owns.
+
+| Folder | What to edit there |
+| --- | --- |
+| `src/bot/core/` | Env loading (`env.ts`), channel/role IDs and data paths (`config.ts`), settings, storage, metrics, audit log, ops alerts, health reports, restart |
+| `src/bot/commands/` | Slash command handlers, grouped by area (`general`, `admin`, `tickets`, `giveaways`, `raids`, `casino`, `moderation`). `handlers.ts` merges the groups; `registry.ts` holds the slash command list |
+| `src/bot/interactions/` | Button, menu, and modal handlers, grouped by area. `bot.ts` tries each group in order |
+| `src/bot/panels/` | Auto-posted panels (XP leaderboard and crates, player cards, tickets, welcome, member counts, self roles, feature brief) |
+| `src/bot/xp/`, `raid/`, `casino/`, `economy/`, `tickets/`, `giveaways/`, `moderation/` | Feature logic for each system |
+| `src/bot/staff/`, `profile/`, `ui/` | Staff desk and spam alerts, `/profile`, shared embeds, help pages, custom IDs, modals |
+
+Editing tips:
+- To add a slash command, add it to `src/commands/slashCatalog.ts` and add its handler to the matching group in `src/bot/commands/`. `npm run verify:contracts` fails if either side is missing.
+- Modules import what they use directly; never import `src/bot.ts` from a module.
+- Avoid using another module's `const`/`let` values at load time (top-level code). Use them inside functions, which run after every module has loaded.
+- To change a value owned by another module, call a setter exported by that module (for example `setXpRoleSyncPaused`).
+- Run `npx tsc --noEmit -p .` after edits; it catches broken imports and missing exports immediately.
+
 ## Raid Quality of Life
 - All 21 bosses have individually designed horror portraits tied to their names and home maps. Images ship in `assets/bosses` and are attached directly to battle cards, boss intel, extraction results, and rare-unlock broadcasts; no external image-generation endpoint is required. Deploy the assets directory alongside the compiled bot.
 - Boss countercharges are telegraphed before every third turn or when starting rage is at least 60%. The warning shows exact damage (12-28 HP); Defend reduces it by 75% (rounded up) and replaces that turn's normal Defend chip damage. A killing blow prevents retaliation. Rewards, progression, the eight-second timer, and timeout auto-attacks are unchanged.

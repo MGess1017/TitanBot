@@ -1,13 +1,11 @@
 /* eslint-disable no-console */
-const fs = require("fs");
-const path = require("path");
 require("ts-node/register/transpile-only");
 
 const { buildSlashCommands } = require("../src/commands/slashCatalog");
 const { RAID_MAP_CHOICES, RAID_CONDITIONS } = require("../src/raid/domain");
+const { readBotSource } = require("./lib/bot-source");
 
-const BOT_FILE = path.resolve(__dirname, "../src/bot.ts");
-const source = fs.readFileSync(BOT_FILE, "utf8");
+const source = readBotSource();
 
 const adminCommands = [
   "addpoints",

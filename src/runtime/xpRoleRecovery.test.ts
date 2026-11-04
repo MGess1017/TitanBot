@@ -8,6 +8,7 @@ import { getNewProgressAchievements, VOICE_ACHIEVEMENTS, XP_ACHIEVEMENTS } from 
 import { RAID_CONDITIONS, RAID_MAP_CHOICES } from "../raid/domain";
 import { accrueVoiceXp, isVoiceXpEligible } from "./voiceXp";
 import { addXP, ensureUser, points, syncProgressAchievements } from "../utils";
+const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 async function verifyThresholdRoleApplication(botSource: string): Promise<void> {
     const source = ts.createSourceFile("bot.ts", botSource, ts.ScriptTarget.ES2020, true);
@@ -101,7 +102,7 @@ async function verifyThresholdRoleApplication(botSource: string): Promise<void> 
 }
 
 async function runXpRoleRecoveryTests(): Promise<void> {
-    const botSource = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
+    const botSource = readBotSource();
     const temporaryVoiceSource = fs.readFileSync(path.resolve(__dirname, "../features/temporaryVoice.ts"), "utf8");
     const commands = buildSlashCommands({
         raidConditionChoices: RAID_CONDITIONS.map(condition => ({ name: condition.label, value: condition.key })),

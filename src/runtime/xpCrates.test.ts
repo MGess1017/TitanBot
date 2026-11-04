@@ -11,6 +11,7 @@ import {
 import {
     addXpCrateProfile, buildXpCratePanel, buildXpCrateRewardEmbed, xpCrateAttachment, XP_CRATE_BUTTON_ID
 } from "../features/xpCratePanel";
+const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 function draws(...values: number[]): (max: number) => number {
     let position = 0;
@@ -103,7 +104,7 @@ for (const crateId of [...XP_CRATES.map(crate => crate.id), "astral"] as const) 
 assert.ok(addXpCrateProfile(new EmbedBuilder(), null).toJSON().fields?.[0].value.includes("No crate claimed yet"));
 
 async function verifyClaimButton(): Promise<void> {
-    const source = ts.createSourceFile("bot.ts", fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8"), ts.ScriptTarget.ES2020, true);
+    const source = ts.createSourceFile("bot.ts", readBotSource(), ts.ScriptTarget.ES2020, true);
     let buttonBranch: ts.IfStatement | undefined;
     function findBranch(node: ts.Node): void {
         if (ts.isIfStatement(node) && node.expression.getText(source).includes("interaction.customId === XP_CRATE_BUTTON_ID")) {

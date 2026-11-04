@@ -20,6 +20,7 @@ import {
 } from "../game/cosmetics";
 import { ANTI_RAID_SETTINGS, REWARD_SETTINGS } from "../features/botSettings";
 import { buildWhatsNewEmbed, WHATS_NEW_COLOR, WHATS_NEW_RELEASE, WhatsNewStore } from "../features/whatsNew";
+const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 const CHANNELS = { modAlerts: "1500000000000000001", xpPanels: "1527571592320651285", checkpointCards: "1567414626273202286" };
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "titan-staff-"));
@@ -252,7 +253,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "titan-staff-"));
 
 // ---------- bot.ts wiring ----------
 {
-    const botSource = fs.readFileSync(path.join(__dirname, "..", "bot.ts"), "utf8");
+    const botSource = readBotSource();
     assert.match(botSource, /if \(await handleProfileInteraction\(interaction\)\) return;/);
     assert.match(botSource, /if \(await handleStaffInteraction\(interaction\)\) return;/);
     assert.match(botSource, /staff: async interaction => \{\s+if \(!interaction\.guild \|\| !isStaffMember\(interaction\.member\)\)/, "/staff is staff-gated");

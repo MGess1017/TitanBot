@@ -10,6 +10,7 @@ import * as RaidDomain from "../raid/domain";
 import { RAID_RESULT_ACTION_IDS, RAID_ENCOUNTER_IDS, buildRaidBranchDecisionPayload, buildRaidResultPayload } from "../game/payloads";
 import { getRaidLoadoutBonus, rollRaidLoot } from "../raid/runtime";
 import { CRAFT_RECIPES, getDynamicVendorPrice, getGearDurability, repairGear } from "../game/gearEconomy";
+const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 const userId = "__test_pmc_expansion__";
 const previous = Utils.points[userId];
@@ -122,7 +123,7 @@ try {
     state.pmcXP = requirement;
     assert.ok(Utils.performPmcPrestige(userId, 1).error);
 
-    const sourceText = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
+    const sourceText = readBotSource();
     const source = ts.createSourceFile("bot.ts", sourceText, ts.ScriptTarget.ES2020, true);
     const buyFunction = source.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === "buyItem");
     assert.ok(buyFunction);

@@ -68,6 +68,7 @@ import {
     shouldTriggerRaidDecision,
     RAID_APEX_WEAPON_DISCOVERY_TABLE
 } from "../raid/domain";
+const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 function cloneUserState(userId: string) {
     const value = points[userId];
@@ -441,7 +442,7 @@ function runEconomyAndRaidTests(): void {
         assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Outcome")?.value.includes("Catacomb Smuggler Exit"));
         assert.ok(premiumRaidPayload.embed.fields.find((field: { name: string }) => field.name === "Unlocks")?.value.includes("Map rank: Pathfinder"));
         assert.ok(premiumRaidPayload.components[0].components.some((component: { custom_id: string }) => component.custom_id === RAID_RESULT_ACTION_IDS.mastery));
-        const botSource = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
+        const botSource = readBotSource();
         assert.match(botSource, /const totalTurns = Math\.max\(6, Math\.min\(8, phaseCount \+ 4\)\)/);
         assert.match(botSource, /withDeferredPointsSave\(\(\) => performRaidUnbatched\(/);
         const rotationA = getBossRotationTable(RAID_MAPS.sunken_village);

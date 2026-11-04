@@ -10,6 +10,7 @@ import { getBossPortraitFiles, getBossPortraitUrl } from "../game/bossPortraits"
 import { RAID_BOSS_ROSTER, getBossCombatProfile } from "../raid/domain";
 import { buildBossBattlePayload, buildBossIntelPayload, buildBossRosterPayload, buildRaidBranchDecisionPayload, buildRareRouteDecisionPayload, buildRaidResultPayload, RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } from "../game/payloads";
 import { ITEM_DEFS } from "../game/catalog";
+const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 const initial: BossBattleState = { turn: 0, bossHp: 800, pmcHp: 600, rage: 0, armorBreak: 0, scanRevealed: false };
 const portraitDigests = new Set<string>();
@@ -161,7 +162,7 @@ assert.equal(bossResult.bossPortraitName, "Sister Vell");
 assert.equal(bossResult.embed.thumbnail.url, getBossPortraitUrl("Sister Vell"));
 assert.equal(result.bossPortraitName, undefined, "a raid without a boss must not attach an unrelated portrait");
 async function runInteractionTests(): Promise<void> {
-    const sourceText = fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8");
+    const sourceText = readBotSource();
     const source = ts.createSourceFile("bot.ts", sourceText, ts.ScriptTarget.ES2020, true);
     const functions = source.statements.filter(statement => ts.isFunctionDeclaration(statement) && ["awaitRaidDecision", "presentBossBattle"].includes(statement.name?.text || ""));
     assert.equal(functions.length, 2);

@@ -8,10 +8,16 @@ const { BOSS_HEART_DEFS, ITEM_DEFS, SHOP_ITEMS } = require("../src/game/catalog"
 const { RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } = require("../src/game/payloads");
 const { RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_MAPS, RAID_MAP_CHOICES, RAID_CONDITIONS, RARE_EXTRACTION_ROUTES } = require("../src/raid/domain");
 
-const BOT_FILE = path.resolve(__dirname, "../src/bot.ts");
+const { readBotSource, SRC_DIR } = require("./lib/bot-source");
 
-function readBotSource() {
-  return fs.readFileSync(BOT_FILE, "utf8");
+// Slash command handlers live in grouped maps under src/bot/commands (registry.ts and handlers.ts only merge them).
+function readCommandHandlerSource() {
+  const dir = path.join(SRC_DIR, "bot", "commands");
+  return fs.readdirSync(dir)
+    .filter(file => file.endsWith(".ts") && file !== "registry.ts" && file !== "handlers.ts")
+    .sort()
+    .map(file => fs.readFileSync(path.join(dir, file), "utf8"))
+    .join("\n");
 }
 
 function uniq(list) {
@@ -90,7 +96,7 @@ function assertUniqueRegistry(label, values, errors) {
 
 function run() {
   const source = readBotSource();
-  const handlerBlock = source.slice(source.indexOf("const commandHandlers"), source.indexOf("client.once("));
+  const handlerBlock = readCommandHandlerSource();
 
   const commands = parseSlashCommands();
   const handlers = parseCommandHandlers(handlerBlock);

@@ -7,6 +7,7 @@ import { EmbedBuilder } from "discord.js";
 import { addXpCrateProfile } from "../features/xpCratePanel";
 import type { XpCrateReward } from "../game/xpCrates";
 import { accrueVoiceXp, getVoiceXpConfig, getVoiceXpMultiplier, isVoiceXpEligible, VOICE_XP_DOUBLE_AFTER_MS, type VoiceXpAccrualState } from "./voiceXp";
+const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 const minute = 60_000;
 const threshold = VOICE_XP_DOUBLE_AFTER_MS;
@@ -72,7 +73,7 @@ const awards: Array<{ xp: number; minutes: number }> = [];
 let currentTime = 0;
 const unlockNotifications: string[] = [];
 let voiceHandler: ((oldState: TestVoiceState, newState: TestVoiceState) => void) | undefined;
-const source = ts.createSourceFile("bot.ts", fs.readFileSync(path.resolve(__dirname, "../bot.ts"), "utf8"), ts.ScriptTarget.ES2020, true);
+const source = ts.createSourceFile("bot.ts", readBotSource(), ts.ScriptTarget.ES2020, true);
 const helperNames = new Set(["voiceXpSessionKey", "getCurrentVoiceXpMultiplier", "trackVoiceXpConnection", "awardConnectedVoiceXp", "processVoiceXpSessions"]);
 const helpers = source.statements.filter(node => ts.isFunctionDeclaration(node) && helperNames.has(node.name?.text || ""));
 assert.equal(helpers.length, helperNames.size);

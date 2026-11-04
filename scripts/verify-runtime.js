@@ -133,11 +133,14 @@ async function run() {
   }
 
   try {
-    const botSource = fs.readFileSync(path.join(ROOT, "src/bot.ts"), "utf8");
-    if (hasConflictMarkers(botSource)) failures.push("Merge conflict markers found in src/bot.ts");
-    else pass("No conflict markers in src/bot.ts");
+    const { listBotSourceFiles } = require("./lib/bot-source");
+    const conflicted = listBotSourceFiles()
+      .filter(file => hasConflictMarkers(fs.readFileSync(file, "utf8")))
+      .map(file => path.relative(ROOT, file));
+    if (conflicted.length) failures.push(`Merge conflict markers found in: ${conflicted.join(", ")}`);
+    else pass("No conflict markers in src/bot.ts or src/bot/");
   } catch (error) {
-    failures.push(`Unable to read src/bot.ts: ${error.message || String(error)}`);
+    failures.push(`Unable to read bot source: ${error.message || String(error)}`);
   }
 
   const nodeMajor = Number.parseInt((process.versions.node || "0").split(".")[0], 10) || 0;
