@@ -62,6 +62,7 @@ const fs_extra_1 = __importDefault(require("fs-extra"));
 const path_1 = __importDefault(require("path"));
 const achievements_1 = require("./game/achievements");
 const xpCrates_1 = require("./game/xpCrates");
+const checkpointRating_1 = require("./game/checkpointRating");
 exports.FOLLOWER_SUPPORT_ROLES = {
     balanced: { label: "Balanced", description: "Standard support across all raid bonuses." },
     scout: { label: "Scout", description: "25% stronger follower extraction bonus; 25% less follower token bonus." },
@@ -259,6 +260,7 @@ function defaultUserState() {
         prestige: 0,
         lastDaily: 0,
         latestXpCrate: null,
+        checkpointProfile: null,
         dailyStreak: 0,
         achievements: [],
         achievementIds: [],
@@ -411,6 +413,7 @@ function getXpPersistenceSnapshot(userId) {
         pointsBackupSize
     };
 }
+const validatedCheckpointProfiles = new WeakSet();
 function ensureUser(userId) {
     if (!exports.points[userId]) {
         exports.points[userId] = defaultUserState();
@@ -462,6 +465,14 @@ function ensureUser(userId) {
         user.latestXpCrate = null;
     if (user.latestXpCrate !== null && !(0, xpCrates_1.isXpCrateReward)(user.latestXpCrate)) {
         throw new Error(`Invalid persisted XP crate for user ${userId}`);
+    }
+    if (user.checkpointProfile === undefined) {
+        user.checkpointProfile = null;
+    }
+    else if (user.checkpointProfile !== null && !validatedCheckpointProfiles.has(user.checkpointProfile)) {
+        user.checkpointProfile = (0, checkpointRating_1.normalizeCheckpointProfile)(user.checkpointProfile);
+        if (user.checkpointProfile)
+            validatedCheckpointProfiles.add(user.checkpointProfile);
     }
     if (user.dailyStreak === undefined)
         user.dailyStreak = 0;

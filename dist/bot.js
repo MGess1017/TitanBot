@@ -71,6 +71,10 @@ const playerCounts_1 = require("./runtime/playerCounts");
 const xpLeaderboard_1 = require("./features/xpLeaderboard");
 const xpCratePanel_1 = require("./features/xpCratePanel");
 const xpCrates_1 = require("./game/xpCrates");
+const checkpointCard_1 = require("./features/checkpointCard");
+const checkpointRating_1 = require("./game/checkpointRating");
+const CHECKPOINT_CARD_CHANNEL_ID = process.env.CHECKPOINT_CARD_CHANNEL_ID || "1567414626273202286";
+const checkpointCardQueues = new Map();
 const rateLimit_1 = require("./runtime/rateLimit");
 const voiceXp_1 = require("./runtime/voiceXp");
 const ticketText_1 = require("./services/ticketText");
@@ -7469,6 +7473,145 @@ async function ensureXpCratePanel() {
     if (previousId !== messageId)
         setGuildPanelMessageId(channel.guild.id, "xpCrate", messageId);
 }
+async function getCheckpointCardChannel() {
+    const channel = client.channels.cache.get(CHECKPOINT_CARD_CHANNEL_ID)
+        || await client.channels.fetch(CHECKPOINT_CARD_CHANNEL_ID);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+        throw new Error(`Player rating channel ${CHECKPOINT_CARD_CHANNEL_ID} is missing or is not a text channel.`);
+    }
+    return channel;
+}
+async function ensureCheckpointCardPanel() {
+    if (!client.isReady())
+        return;
+    const channel = await getCheckpointCardChannel();
+    const previousId = getGuildPanelMessageId(channel.guild.id, "checkpointCard");
+    const messageId = await (0, checkpointCard_1.upsertCheckpointPanel)(channel, client.user.id, previousId);
+    if (previousId !== messageId)
+        setGuildPanelMessageId(channel.guild.id, "checkpointCard", messageId);
+}
+async function fetchAvatarBuffer(url) {
+    try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        return response.ok ? Buffer.from(await response.arrayBuffer()) : null;
+    }
+    catch {
+        return null;
+    }
+}
+/** Renders and posts/edits the player's public card. Serialized per user so rapid edits cannot race. */
+function publishCheckpointCard(discordUser) {
+    const previous = checkpointCardQueues.get(discordUser.id) || Promise.resolve();
+    let resultUrl = "";
+    const run = previous.catch(() => undefined).then(async () => {
+        const profile = (0, utils_1.ensureUser)(discordUser.id).checkpointProfile;
+        if (!profile || !(0, checkpointRating_1.isCheckpointComplete)(profile.stats))
+            throw new Error("Checkpoint profile is incomplete.");
+        const stats = { ...profile.stats };
+        const avatar = await fetchAvatarBuffer(discordUser.displayAvatarURL({ extension: "png", size: 128 }));
+        const rendered = await (0, checkpointCard_1.renderCheckpointCard)({
+            userId: discordUser.id, username: discordUser.username, stats, updatedAt: profile.updatedAt, avatar
+        });
+        const channel = await getCheckpointCardChannel();
+        const storedId = profile.cardChannelId === channel.id ? profile.cardMessageId : null;
+        const message = await (0, checkpointCard_1.upsertCheckpointCardMessage)(channel, storedId, (0, checkpointCard_1.buildCheckpointCardMessage)(discordUser.id, discordUser.username, rendered.rating, rendered.tier, rendered.buffer));
+        const latest = (0, utils_1.ensureUser)(discordUser.id).checkpointProfile;
+        if (latest && (latest.cardMessageId !== message.id || latest.cardChannelId !== channel.id)) {
+            latest.cardMessageId = message.id;
+            latest.cardChannelId = channel.id;
+            (0, utils_1.savePoints)();
+        }
+        resultUrl = message.url;
+    });
+    const tracked = run.finally(() => {
+        if (checkpointCardQueues.get(discordUser.id) === tracked)
+            checkpointCardQueues.delete(discordUser.id);
+    });
+    checkpointCardQueues.set(discordUser.id, tracked);
+    return tracked.then(() => resultUrl);
+}
+function getCheckpointCardUrl(profile, guildId) {
+    if (!profile.cardChannelId || !profile.cardMessageId || !guildId)
+        return null;
+    return `https://discord.com/channels/${guildId}/${profile.cardChannelId}/${profile.cardMessageId}`;
+}
+async function handleCheckpointInteraction(interaction) {
+    if (interaction.isButton() && interaction.customId.startsWith(checkpointCard_1.CHECKPOINT_EDIT_PREFIX)) {
+        const section = interaction.customId.slice(checkpointCard_1.CHECKPOINT_EDIT_PREFIX.length);
+        if (!(0, checkpointRating_1.isCheckpointSectionId)(section) || interaction.user.bot)
+            return true;
+        const stats = (0, utils_1.ensureUser)(interaction.user.id).checkpointProfile?.stats || {};
+        await interaction.showModal((0, checkpointCard_1.buildCheckpointModal)(section, stats));
+        return true;
+    }
+    if (interaction.isButton() && interaction.customId === checkpointCard_1.CHECKPOINT_VIEW_ID) {
+        const profile = (0, utils_1.ensureUser)(interaction.user.id).checkpointProfile;
+        if (!profile || !(0, checkpointRating_1.isCheckpointComplete)(profile.stats)) {
+            await interaction.reply({
+                content: `Your card unlocks after all four sections are saved.\n${(0, checkpointCard_1.describeCheckpointProgress)(profile?.stats || {})}`,
+                flags: discord_js_1.MessageFlags.Ephemeral
+            });
+            return true;
+        }
+        await interaction.reply({
+            embeds: [(0, checkpointCard_1.buildCheckpointBreakdownEmbed)(profile.stats, getCheckpointCardUrl(profile, interaction.guildId))],
+            flags: discord_js_1.MessageFlags.Ephemeral
+        });
+        return true;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(checkpointCard_1.CHECKPOINT_MODAL_PREFIX)) {
+        const section = interaction.customId.slice(checkpointCard_1.CHECKPOINT_MODAL_PREFIX.length);
+        if (!(0, checkpointRating_1.isCheckpointSectionId)(section))
+            return true;
+        const errors = [];
+        const updates = {};
+        for (const key of checkpointRating_1.CHECKPOINT_SECTIONS[section].keys) {
+            const parsed = (0, checkpointRating_1.parseCheckpointStat)(key, interaction.fields.getTextInputValue(key));
+            if (parsed.ok)
+                updates[key] = parsed.value;
+            else
+                errors.push(parsed.error);
+        }
+        const user = (0, utils_1.ensureUser)(interaction.user.id);
+        const merged = { ...(user.checkpointProfile?.stats || {}), ...updates };
+        if (!errors.length)
+            errors.push(...(0, checkpointRating_1.validateCheckpointStats)(merged));
+        if (errors.length) {
+            await interaction.reply({
+                content: `**${checkpointRating_1.CHECKPOINT_SECTIONS[section].title} was not saved:**\n${errors.map(error => `• ${error}`).join("\n")}`,
+                flags: discord_js_1.MessageFlags.Ephemeral
+            });
+            return true;
+        }
+        user.checkpointProfile = {
+            stats: merged,
+            updatedAt: Date.now(),
+            cardChannelId: user.checkpointProfile?.cardChannelId || null,
+            cardMessageId: user.checkpointProfile?.cardMessageId || null
+        };
+        (0, utils_1.savePoints)();
+        appendAuditEvent("checkpoint_stats_saved", { userId: interaction.user.id, section });
+        if (!(0, checkpointRating_1.isCheckpointComplete)(merged)) {
+            await interaction.reply({
+                content: `**${checkpointRating_1.CHECKPOINT_SECTIONS[section].title} saved.** Finish the remaining sections to generate your card:\n${(0, checkpointCard_1.describeCheckpointProgress)(merged)}`,
+                flags: discord_js_1.MessageFlags.Ephemeral
+            });
+            return true;
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const url = await publishCheckpointCard(interaction.user);
+            await interaction.editReply({ embeds: [(0, checkpointCard_1.buildCheckpointBreakdownEmbed)(merged, url)] });
+        }
+        catch (error) {
+            console.error("[checkpointCard]", error);
+            appendAuditEvent("checkpoint_card_publish_failed", { userId: interaction.user.id, reason: toSafeString(error) });
+            await interaction.editReply({ content: "Your stats were saved, but the card could not be posted. Submit any section again to retry." });
+        }
+        return true;
+    }
+    return false;
+}
 function scheduleXpLeaderboardUpdate() {
     if (xpLeaderboardUpdateTimer)
         return;
@@ -10339,6 +10482,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
     seedConnectedVoiceXpSessions();
     runAsyncWithBoundary("xpLeaderboardInit", refreshXpLeaderboardPanel);
     runAsyncWithBoundary("xpCratePanelInit", ensureXpCratePanel);
+    runAsyncWithBoundary("checkpointCardPanelInit", ensureCheckpointCardPanel);
     console.log(`[startup] ${(0, health_1.buildStartupSummary)(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {
         userTag: client.user?.tag,
@@ -10576,6 +10720,8 @@ process.on("beforeExit", () => {
     releaseInstanceLock();
 });
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
+    if (await handleCheckpointInteraction(interaction))
+        return;
     if (interaction.isButton() && interaction.customId === xpCratePanel_1.XP_CRATE_BUTTON_ID) {
         if (!interaction.guild || interaction.channelId !== xpLeaderboard_1.XP_LEADERBOARD_CHANNEL_ID || interaction.user.bot) {
             await interaction.reply({ content: "Use the FN Xp Panel in its designated server channel.", flags: discord_js_1.MessageFlags.Ephemeral });

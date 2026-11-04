@@ -2,6 +2,7 @@ import fs from "fs-extra";
 import path from "path";
 import { getNewProgressAchievements, type ProgressAchievement } from "./game/achievements";
 import { isXpCrateReward, type XpCrateReward } from "./game/xpCrates";
+import { normalizeCheckpointProfile, type CheckpointProfile } from "./game/checkpointRating";
 
 export type UserState = {
     modPoints: number;
@@ -22,6 +23,7 @@ export type UserState = {
     prestige: number;
     lastDaily: number;
     latestXpCrate: XpCrateReward | null;
+    checkpointProfile: CheckpointProfile | null;
     dailyStreak: number;
     achievements: string[];
     achievementIds: string[];
@@ -347,6 +349,7 @@ function defaultUserState(): UserState {
         prestige: 0,
         lastDaily: 0,
         latestXpCrate: null,
+        checkpointProfile: null,
         dailyStreak: 0,
         achievements: [],
         achievementIds: [],
@@ -530,6 +533,8 @@ export function getXpPersistenceSnapshot(userId: string): XpPersistenceSnapshot 
     };
 }
 
+const validatedCheckpointProfiles = new WeakSet<CheckpointProfile>();
+
 export function ensureUser(userId: string): UserState {
     if (!points[userId]) {
         points[userId] = defaultUserState();
@@ -563,6 +568,12 @@ export function ensureUser(userId: string): UserState {
     if (user.latestXpCrate === undefined) user.latestXpCrate = null;
     if (user.latestXpCrate !== null && !isXpCrateReward(user.latestXpCrate)) {
         throw new Error(`Invalid persisted XP crate for user ${userId}`);
+    }
+    if (user.checkpointProfile === undefined) {
+        user.checkpointProfile = null;
+    } else if (user.checkpointProfile !== null && !validatedCheckpointProfiles.has(user.checkpointProfile)) {
+        user.checkpointProfile = normalizeCheckpointProfile(user.checkpointProfile);
+        if (user.checkpointProfile) validatedCheckpointProfiles.add(user.checkpointProfile);
     }
     if (user.dailyStreak === undefined) user.dailyStreak = 0;
     if (!Array.isArray(user.achievements)) user.achievements = [];

@@ -22,7 +22,8 @@ import {
     TextChannel,
     TextInputBuilder,
     TextInputStyle,
-    User
+    User,
+    type Interaction
 } from "discord.js";
 import fs from "fs-extra";
 import crypto from "node:crypto";
@@ -156,6 +157,18 @@ import { adjustPlayerCounts, buildPlayerCountEmbed, countPlayers, type PlayerCou
 import { upsertXpLeaderboardPanel, XP_LEADERBOARD_CHANNEL_ID } from "./features/xpLeaderboard";
 import { addXpCrateProfile, buildXpCrateRewardEmbed, upsertXpCratePanel, xpCrateAttachment, XP_CRATE_BUTTON_ID } from "./features/xpCratePanel";
 import { claimXpCrate, type XpCrateId } from "./game/xpCrates";
+import {
+    buildCheckpointBreakdownEmbed, buildCheckpointCardMessage, buildCheckpointModal, CHECKPOINT_EDIT_PREFIX,
+    CHECKPOINT_MODAL_PREFIX, CHECKPOINT_VIEW_ID, describeCheckpointProgress, renderCheckpointCard,
+    upsertCheckpointCardMessage, upsertCheckpointPanel
+} from "./features/checkpointCard";
+import {
+    CHECKPOINT_SECTIONS, isCheckpointComplete, isCheckpointSectionId, parseCheckpointStat, validateCheckpointStats,
+    type CheckpointStats
+} from "./game/checkpointRating";
+
+const CHECKPOINT_CARD_CHANNEL_ID = process.env.CHECKPOINT_CARD_CHANNEL_ID || "1567414626273202286";
+const checkpointCardQueues = new Map<string, Promise<void>>();
 import { rejectIfRateLimited } from "./runtime/rateLimit";
 import { accrueVoiceXp, getVoiceXpMultiplier, isVoiceXpEligible, type VoiceXpAccrualState } from "./runtime/voiceXp";
 import { sanitizeTranscriptLine } from "./services/ticketText";
@@ -2074,8 +2087,11 @@ type GuildModerationState = {
         playerCount?: string | null;
         xpLeaderboard?: string | null;
         xpCrate?: string | null;
+        checkpointCard?: string | null;
     };
 };
+
+type GuildPanelKey = keyof NonNullable<GuildModerationState["panelMessageIds"]>;
 
 type ModerationStore = {
     guilds: Record<string, GuildModerationState>;
@@ -3167,13 +3183,13 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     return moderationStore.guilds[guildId];
 }
 
-function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount" | "xpLeaderboard" | "xpCrate"): string | null {
+function getGuildPanelMessageId(guildId: string, panel: GuildPanelKey): string | null {
     const cfg = ensureGuildModeration(guildId);
     const value = cfg.panelMessageIds?.[panel];
     return value ? String(value) : null;
 }
 
-function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount" | "xpLeaderboard" | "xpCrate", messageId: string | null): void {
+function setGuildPanelMessageId(guildId: string, panel: GuildPanelKey, messageId: string | null): void {
     const cfg = ensureGuildModeration(guildId);
     if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
     cfg.panelMessageIds[panel] = messageId;
@@ -8741,6 +8757,145 @@ async function ensureXpCratePanel(): Promise<void> {
     if (previousId !== messageId) setGuildPanelMessageId(channel.guild.id, "xpCrate", messageId);
 }
 
+async function getCheckpointCardChannel(): Promise<TextChannel> {
+    const channel = client.channels.cache.get(CHECKPOINT_CARD_CHANNEL_ID)
+        || await client.channels.fetch(CHECKPOINT_CARD_CHANNEL_ID);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+        throw new Error(`Player rating channel ${CHECKPOINT_CARD_CHANNEL_ID} is missing or is not a text channel.`);
+    }
+    return channel;
+}
+
+async function ensureCheckpointCardPanel(): Promise<void> {
+    if (!client.isReady()) return;
+    const channel = await getCheckpointCardChannel();
+    const previousId = getGuildPanelMessageId(channel.guild.id, "checkpointCard");
+    const messageId = await upsertCheckpointPanel(channel, client.user.id, previousId);
+    if (previousId !== messageId) setGuildPanelMessageId(channel.guild.id, "checkpointCard", messageId);
+}
+
+async function fetchAvatarBuffer(url: string): Promise<Buffer | null> {
+    try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        return response.ok ? Buffer.from(await response.arrayBuffer()) : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Renders and posts/edits the player's public card. Serialized per user so rapid edits cannot race. */
+function publishCheckpointCard(discordUser: User): Promise<string> {
+    const previous = checkpointCardQueues.get(discordUser.id) || Promise.resolve();
+    let resultUrl = "";
+    const run = previous.catch(() => undefined).then(async () => {
+        const profile = ensureUser(discordUser.id).checkpointProfile;
+        if (!profile || !isCheckpointComplete(profile.stats)) throw new Error("Checkpoint profile is incomplete.");
+        const stats = { ...profile.stats };
+        const avatar = await fetchAvatarBuffer(discordUser.displayAvatarURL({ extension: "png", size: 128 }));
+        const rendered = await renderCheckpointCard({
+            userId: discordUser.id, username: discordUser.username, stats, updatedAt: profile.updatedAt, avatar
+        });
+        const channel = await getCheckpointCardChannel();
+        const storedId = profile.cardChannelId === channel.id ? profile.cardMessageId : null;
+        const message = await upsertCheckpointCardMessage(channel, storedId,
+            buildCheckpointCardMessage(discordUser.id, discordUser.username, rendered.rating, rendered.tier, rendered.buffer));
+        const latest = ensureUser(discordUser.id).checkpointProfile;
+        if (latest && (latest.cardMessageId !== message.id || latest.cardChannelId !== channel.id)) {
+            latest.cardMessageId = message.id;
+            latest.cardChannelId = channel.id;
+            savePoints();
+        }
+        resultUrl = message.url;
+    });
+    const tracked = run.finally(() => {
+        if (checkpointCardQueues.get(discordUser.id) === tracked) checkpointCardQueues.delete(discordUser.id);
+    });
+    checkpointCardQueues.set(discordUser.id, tracked);
+    return tracked.then(() => resultUrl);
+}
+
+function getCheckpointCardUrl(profile: { cardChannelId: string | null; cardMessageId: string | null }, guildId: string | null): string | null {
+    if (!profile.cardChannelId || !profile.cardMessageId || !guildId) return null;
+    return `https://discord.com/channels/${guildId}/${profile.cardChannelId}/${profile.cardMessageId}`;
+}
+
+async function handleCheckpointInteraction(interaction: Interaction): Promise<boolean> {
+    if (interaction.isButton() && interaction.customId.startsWith(CHECKPOINT_EDIT_PREFIX)) {
+        const section = interaction.customId.slice(CHECKPOINT_EDIT_PREFIX.length);
+        if (!isCheckpointSectionId(section) || interaction.user.bot) return true;
+        const stats = ensureUser(interaction.user.id).checkpointProfile?.stats || {};
+        await interaction.showModal(buildCheckpointModal(section, stats));
+        return true;
+    }
+
+    if (interaction.isButton() && interaction.customId === CHECKPOINT_VIEW_ID) {
+        const profile = ensureUser(interaction.user.id).checkpointProfile;
+        if (!profile || !isCheckpointComplete(profile.stats)) {
+            await interaction.reply({
+                content: `Your card unlocks after all four sections are saved.\n${describeCheckpointProgress(profile?.stats || {})}`,
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+        await interaction.reply({
+            embeds: [buildCheckpointBreakdownEmbed(profile.stats, getCheckpointCardUrl(profile, interaction.guildId))],
+            flags: MessageFlags.Ephemeral
+        });
+        return true;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(CHECKPOINT_MODAL_PREFIX)) {
+        const section = interaction.customId.slice(CHECKPOINT_MODAL_PREFIX.length);
+        if (!isCheckpointSectionId(section)) return true;
+        const errors: string[] = [];
+        const updates: CheckpointStats = {};
+        for (const key of CHECKPOINT_SECTIONS[section].keys) {
+            const parsed = parseCheckpointStat(key, interaction.fields.getTextInputValue(key));
+            if (parsed.ok) updates[key] = parsed.value;
+            else errors.push(parsed.error);
+        }
+        const user = ensureUser(interaction.user.id);
+        const merged: CheckpointStats = { ...(user.checkpointProfile?.stats || {}), ...updates };
+        if (!errors.length) errors.push(...validateCheckpointStats(merged));
+        if (errors.length) {
+            await interaction.reply({
+                content: `**${CHECKPOINT_SECTIONS[section].title} was not saved:**\n${errors.map(error => `• ${error}`).join("\n")}`,
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+
+        user.checkpointProfile = {
+            stats: merged,
+            updatedAt: Date.now(),
+            cardChannelId: user.checkpointProfile?.cardChannelId || null,
+            cardMessageId: user.checkpointProfile?.cardMessageId || null
+        };
+        savePoints();
+        appendAuditEvent("checkpoint_stats_saved", { userId: interaction.user.id, section });
+
+        if (!isCheckpointComplete(merged)) {
+            await interaction.reply({
+                content: `**${CHECKPOINT_SECTIONS[section].title} saved.** Finish the remaining sections to generate your card:\n${describeCheckpointProgress(merged)}`,
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        try {
+            const url = await publishCheckpointCard(interaction.user);
+            await interaction.editReply({ embeds: [buildCheckpointBreakdownEmbed(merged, url)] });
+        } catch (error) {
+            console.error("[checkpointCard]", error);
+            appendAuditEvent("checkpoint_card_publish_failed", { userId: interaction.user.id, reason: toSafeString(error) });
+            await interaction.editReply({ content: "Your stats were saved, but the card could not be posted. Submit any section again to retry." });
+        }
+        return true;
+    }
+    return false;
+}
+
 function scheduleXpLeaderboardUpdate(): void {
     if (xpLeaderboardUpdateTimer) return;
     xpLeaderboardUpdateTimer = setTimeout(() => {
@@ -11757,6 +11912,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
     seedConnectedVoiceXpSessions();
     runAsyncWithBoundary("xpLeaderboardInit", refreshXpLeaderboardPanel);
     runAsyncWithBoundary("xpCratePanelInit", ensureXpCratePanel);
+    runAsyncWithBoundary("checkpointCardPanelInit", ensureCheckpointCardPanel);
     console.log(`[startup] ${buildStartupSummary(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {
         userTag: client.user?.tag,
@@ -12024,6 +12180,7 @@ process.on("beforeExit", () => {
 });
 
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
+    if (await handleCheckpointInteraction(interaction)) return;
     if (interaction.isButton() && interaction.customId === XP_CRATE_BUTTON_ID) {
         if (!interaction.guild || interaction.channelId !== XP_LEADERBOARD_CHANNEL_ID || interaction.user.bot) {
             await interaction.reply({ content: "Use the FN Xp Panel in its designated server channel.", flags: MessageFlags.Ephemeral });
