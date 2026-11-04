@@ -8,6 +8,8 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
 - **Raid System**: Initiate raids with random outcomes, where users can earn XP and FN Token$ based on their performance.
 - **Economy Management**: Users can manage their FN Token$ balance, earn daily rewards, and participate in games like crash.
 - **Leaderboard**: Track user progress and achievements through an XP leaderboard.
+- **Live XP Panel**: A modular top-10 engagement XP leaderboard in channel `1527571592320651285` displays usernames, XP, prestige, and current voice multipliers. It posts automatically at startup, reuses its saved message, and refreshes within 15 seconds (including XP earned outside voice).
+- **Continuous Voice Bonus**: Voice earns 100 XP per completed minute, increasing to 200 XP/minute after two continuous hours outside AFK. Normal voice-channel switches preserve the timer; disconnecting or entering AFK resets the bonus to 1x without removing earned XP. Message XP is unchanged. Session timers begin when the bot observes the connection (or starts while users are already connected).
 - **Moderation Points**: Users can earn and manage mod points, which can be used for moderation actions like timeout, kick, and ban.
 
 ## Installation

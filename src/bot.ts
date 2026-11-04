@@ -153,8 +153,9 @@ import {
     TEMP_VOICE_MODAL_PREFIX
 } from "./features/temporaryVoice";
 import { adjustPlayerCounts, buildPlayerCountEmbed, countPlayers, type PlayerCounts } from "./runtime/playerCounts";
+import { upsertXpLeaderboardPanel, XP_LEADERBOARD_CHANNEL_ID } from "./features/xpLeaderboard";
 import { rejectIfRateLimited } from "./runtime/rateLimit";
-import { accrueVoiceXp, isVoiceXpEligible, type VoiceXpAccrualState } from "./runtime/voiceXp";
+import { accrueVoiceXp, getVoiceXpMultiplier, isVoiceXpEligible, type VoiceXpAccrualState } from "./runtime/voiceXp";
 import { sanitizeTranscriptLine } from "./services/ticketText";
 import {
     archiveTicketByChannel as stateArchiveTicketByChannel,
@@ -225,6 +226,8 @@ type VoiceXpSession = VoiceXpAccrualState & {
 const VOICE_XP_SESSIONS = new Map<string, VoiceXpSession>();
 const PLAYER_COUNTS_BY_GUILD = new Map<string, PlayerCounts>();
 const PLAYER_COUNT_UPDATE_TIMERS = new Map<string, ReturnType<typeof setTimeout>>();
+let xpLeaderboardUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+let xpLeaderboardUpdateInFlight = false;
 const MOD_DATA_FILE = path.resolve(__dirname, "../src/data/moderation.json");
 const TRADE_DATA_FILE = path.resolve(__dirname, "../src/data/trades.json");
 const GIVEAWAY_DATA_FILE = path.resolve(__dirname, "../src/data/giveaways.json");
@@ -2066,6 +2069,7 @@ type GuildModerationState = {
         roleSelector?: string | null;
         voiceCreator?: string | null;
         playerCount?: string | null;
+        xpLeaderboard?: string | null;
     };
 };
 
@@ -3159,13 +3163,13 @@ function ensureGuildModeration(guildId: string): GuildModerationState {
     return moderationStore.guilds[guildId];
 }
 
-function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount"): string | null {
+function getGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount" | "xpLeaderboard"): string | null {
     const cfg = ensureGuildModeration(guildId);
     const value = cfg.panelMessageIds?.[panel];
     return value ? String(value) : null;
 }
 
-function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount", messageId: string | null): void {
+function setGuildPanelMessageId(guildId: string, panel: "welcome" | "report" | "reportAdmin" | "featureBrief" | "roleSelector" | "voiceCreator" | "playerCount" | "xpLeaderboard", messageId: string | null): void {
     const cfg = ensureGuildModeration(guildId);
     if (!cfg.panelMessageIds) cfg.panelMessageIds = {};
     cfg.panelMessageIds[panel] = messageId;
@@ -4173,6 +4177,7 @@ function awardEngagementXp(guild: Guild | null, userId: string, xpDelta: number,
         enqueueXpRoleSync(guild, userId, totalXp);
         runAsyncWithBoundary("xpRoleThresholdNotification", () => notifyXpThresholdUnlock(guild, userId, previousXp, totalXp));
     }
+    scheduleXpLeaderboardUpdate();
     return { previousXp, totalXp };
 }
 
@@ -4205,8 +4210,10 @@ function trackVoiceXpConnection(guild: Guild, userId: string, connected: boolean
     const session = VOICE_XP_SESSIONS.get(key);
     if (connected) {
         if (session) {
+            if (session.connected) return;
             session.guild = guild;
             session.connected = true;
+            session.connectedAt = now;
             session.lastAccruedAt = now;
             session.updatedAt = now;
         } else {
@@ -4214,11 +4221,13 @@ function trackVoiceXpConnection(guild: Guild, userId: string, connected: boolean
                 guild,
                 userId,
                 connected: true,
+                connectedAt: now,
                 lastAccruedAt: now,
                 remainderMs: 0,
                 updatedAt: now
             });
         }
+        scheduleXpLeaderboardUpdate();
         return;
     }
 
@@ -4227,6 +4236,7 @@ function trackVoiceXpConnection(guild: Guild, userId: string, connected: boolean
     session.connected = false;
     session.lastAccruedAt = now;
     session.updatedAt = now;
+    scheduleXpLeaderboardUpdate();
 }
 
 function awardConnectedVoiceXp(session: VoiceXpSession, now = Date.now()): void {
@@ -4234,6 +4244,7 @@ function awardConnectedVoiceXp(session: VoiceXpSession, now = Date.now()): void 
     const accrued = accrueVoiceXp(session, now);
     session.lastAccruedAt = accrued.state.lastAccruedAt;
     session.remainderMs = accrued.state.remainderMs;
+    session.connectedAt = accrued.state.connectedAt;
     session.updatedAt = now;
     if (accrued.xp <= 0) return;
 
@@ -8658,6 +8669,41 @@ async function ensureWelcomePanelForGuild(guild: Guild): Promise<void> {
     }
 }
 
+async function refreshXpLeaderboardPanel(): Promise<void> {
+    if (!client.isReady() || xpLeaderboardUpdateInFlight) return;
+    xpLeaderboardUpdateInFlight = true;
+    try {
+        const channel = client.channels.cache.get(XP_LEADERBOARD_CHANNEL_ID)
+            || await client.channels.fetch(XP_LEADERBOARD_CHANNEL_ID);
+        if (!channel || channel.type !== ChannelType.GuildText) {
+            throw new Error(`XP leaderboard channel ${XP_LEADERBOARD_CHANNEL_ID} is missing or is not a text channel.`);
+        }
+        const now = Date.now();
+        const entries = await Promise.all(getLeaderboard().map(async row => {
+            const user = await client.users.fetch(row.id);
+            const session = VOICE_XP_SESSIONS.get(voiceXpSessionKey(channel.guild.id, row.id));
+            const voiceMultiplier = session?.connected && session.connectedAt !== undefined
+                ? getVoiceXpMultiplier(session.connectedAt, now)
+                : 1;
+            return { ...row, username: user.username, voiceMultiplier };
+        }));
+        const previousId = getGuildPanelMessageId(channel.guild.id, "xpLeaderboard");
+        const messageId = await upsertXpLeaderboardPanel(channel, client.user.id, previousId, entries);
+        if (messageId !== previousId) setGuildPanelMessageId(channel.guild.id, "xpLeaderboard", messageId);
+    } finally {
+        xpLeaderboardUpdateInFlight = false;
+    }
+}
+
+function scheduleXpLeaderboardUpdate(): void {
+    if (xpLeaderboardUpdateTimer) return;
+    xpLeaderboardUpdateTimer = setTimeout(() => {
+        xpLeaderboardUpdateTimer = null;
+        runAsyncWithBoundary("xpLeaderboardUpdate", refreshXpLeaderboardPanel);
+    }, 1000);
+    xpLeaderboardUpdateTimer.unref();
+}
+
 async function upsertPlayerCountPanelForGuild(guild: Guild, counts: PlayerCounts): Promise<void> {
     const channel = guild.channels.cache.get(PLAYER_COUNT_CHANNEL_ID)
         || await guild.channels.fetch(PLAYER_COUNT_CHANNEL_ID).catch(() => null);
@@ -11656,6 +11702,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
     }
     updateBotPresence();
     seedConnectedVoiceXpSessions();
+    runAsyncWithBoundary("xpLeaderboardInit", refreshXpLeaderboardPanel);
     console.log(`[startup] ${buildStartupSummary(client.guilds.cache.size, Math.floor(process.uptime()), process.memoryUsage())}`);
     appendAuditEvent("startup", {
         userTag: client.user?.tag,
@@ -11808,6 +11855,7 @@ setInterval(() => {
 
 setInterval(() => {
     processVoiceXpSessions();
+    runAsyncWithBoundary("xpLeaderboardRefresh", refreshXpLeaderboardPanel);
 }, VOICE_XP_TICK_MS).unref();
 
 if (COMMAND_IDEMPOTENCY_WINDOW_MS > 0) {
@@ -13236,9 +13284,8 @@ client.on("voiceStateUpdate", (oldState, newState) => {
     const key = voiceXpSessionKey(member.guild.id, member.id);
     const oldEligible = isVoiceXpEligible(oldState.channelId, member.guild.afkChannelId, false);
     const newEligible = isVoiceXpEligible(newState.channelId, member.guild.afkChannelId, false);
-    const movedChannel = oldState.channelId !== newState.channelId;
-    if (oldEligible && (!newEligible || movedChannel)) trackVoiceXpConnection(member.guild, member.id, false);
-    if (newEligible && (!oldEligible || movedChannel || !VOICE_XP_SESSIONS.has(key))) trackVoiceXpConnection(member.guild, member.id, true);
+    if (oldEligible && !newEligible) trackVoiceXpConnection(member.guild, member.id, false);
+    if (newEligible && (!oldEligible || !VOICE_XP_SESSIONS.get(key)?.connected)) trackVoiceXpConnection(member.guild, member.id, true);
 });
 
 client.on("messageCreate", message => runAsyncWithBoundary("messageCreate", async () => {
