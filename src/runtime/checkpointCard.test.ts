@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import {
     calculateCheckpointRating, CHECKPOINT_SECTION_IDS, CHECKPOINT_SECTIONS, CHECKPOINT_STAT_KEYS, getCheckpointTier,
-    isCheckpointComplete, normalizeCheckpointProfile, parseCheckpointStat, validateCheckpointStats,
+    isCheckpointComplete, normalizeCheckpointProfile, parseCheckpointStat, parseIngameName, validateCheckpointStats,
     type CheckpointStatKey
 } from "../game/checkpointRating";
-import { buildCheckpointModal, buildCheckpointPanel, CHECKPOINT_EDIT_PREFIX, renderCheckpointCard } from "../features/checkpointCard";
+import {
+    buildCheckpointCardMessage, buildCheckpointModal, buildCheckpointNameModal, buildCheckpointPanel, CHECKPOINT_EDIT_PREFIX,
+    CHECKPOINT_NAME_ID, CHECKPOINT_NAME_INPUT_ID, CHECKPOINT_NAME_MODAL_ID, describeCheckpointProgress, renderCheckpointCard
+} from "../features/checkpointCard";
 
 const strong: Record<CheckpointStatKey, number> = {
     kd: 2.14, playerKills: 4210, deaths: 1967, doubleKills: 610, matchesPlayed: 980, victories: 590, winRate: 60.2,
@@ -22,6 +25,24 @@ async function main(): Promise<void> {
     }
     const panelButtons = buildCheckpointPanel().components.flatMap(row => row.toJSON().components) as Array<{ custom_id: string }>;
     assert.equal(panelButtons.filter(button => button.custom_id.startsWith(CHECKPOINT_EDIT_PREFIX)).length, 4);
+    assert.ok(panelButtons.some(button => button.custom_id === CHECKPOINT_NAME_ID), "panel has an In-Game Name button");
+    const nameModal = buildCheckpointNameModal("FNT_Ghost").toJSON();
+    assert.equal(nameModal.custom_id, CHECKPOINT_NAME_MODAL_ID);
+    const nameInput = (nameModal.components[0] as { components: Array<{ custom_id: string; value?: string; max_length?: number }> }).components[0];
+    assert.equal(nameInput.custom_id, CHECKPOINT_NAME_INPUT_ID);
+    assert.equal(nameInput.value, "FNT_Ghost", "existing name is prefilled for editing");
+    assert.equal(nameInput.max_length, 15);
+
+    assert.deepEqual(parseIngameName("  FNT_Ghost-7 "), { ok: true, value: "FNT_Ghost-7" });
+    assert.equal(parseIngameName("ab").ok, false, "too short");
+    assert.equal(parseIngameName("a".repeat(16)).ok, false, "too long");
+    assert.equal(parseIngameName("bad name").ok, false, "no spaces");
+    assert.equal(parseIngameName("@everyone").ok, false, "no mentions or symbols");
+    assert.equal(parseIngameName("**bold**").ok, false, "no markdown");
+    assert.match(describeCheckpointProgress({}, null), /⬜ In-Game Name/);
+    assert.match(describeCheckpointProgress({}, "FNT_Ghost"), /✅ In-Game Name: \*\*FNT\\_Ghost\*\*/);
+    const cardMessage = buildCheckpointCardMessage("1", "FNT_Ghost", 80, getCheckpointTier(80), Buffer.from([0]));
+    assert.equal(cardMessage.embeds[0].toJSON().title, "FNT\\_Ghost • PMC Rating 80", "card title uses the in-game name");
 
     assert.deepEqual(parseCheckpointStat("playerKills", "1,240"), { ok: true, value: 1240 });
     assert.deepEqual(parseCheckpointStat("winRate", "56.1%"), { ok: true, value: 56.1 });
@@ -56,10 +77,13 @@ async function main(): Promise<void> {
     const normalized = normalizeCheckpointProfile({ stats: { kd: 1.2, deaths: -1, bogus: 5, playerKills: "9" }, cardMessageId: 5 });
     assert.deepEqual(normalized?.stats, { kd: 1.2 });
     assert.equal(normalized?.cardMessageId, null);
+    assert.equal(normalized?.ingameName, null, "older saved profiles start without a name");
+    assert.equal(normalizeCheckpointProfile({ ingameName: "FNT_Ghost", stats: {} })?.ingameName, "FNT_Ghost");
+    assert.equal(normalizeCheckpointProfile({ ingameName: "bad name!", stats: {} })?.ingameName, null, "invalid saved names are dropped");
     assert.equal(isCheckpointComplete(strong), true);
     assert.equal(isCheckpointComplete({ kd: 1 }), false);
 
-    const card = await renderCheckpointCard({ userId: "123456789012345678", username: "operator_test", stats: strong, updatedAt: Date.now() });
+    const card = await renderCheckpointCard({ userId: "123456789012345678", ingameName: "FNT_Ghost", stats: strong, updatedAt: Date.now() });
     assert.equal(card.rating, strongRating.rating);
     assert.deepEqual([...card.buffer.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47], "card must be a PNG");
     console.log(`checkpointCard tests passed (sample rating ${card.rating}, ${card.tier.name})`);

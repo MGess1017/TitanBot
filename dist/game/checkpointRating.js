@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CHECKPOINT_TIERS = exports.CHECKPOINT_SECTION_IDS = exports.CHECKPOINT_SECTIONS = exports.CHECKPOINT_STATS = exports.CHECKPOINT_STAT_KEYS = void 0;
+exports.CHECKPOINT_TIERS = exports.CHECKPOINT_SECTION_IDS = exports.CHECKPOINT_SECTIONS = exports.CHECKPOINT_STATS = exports.INGAME_NAME_MAX = exports.INGAME_NAME_MIN = exports.CHECKPOINT_STAT_KEYS = void 0;
+exports.parseIngameName = parseIngameName;
 exports.isCheckpointSectionId = isCheckpointSectionId;
 exports.parseCheckpointStat = parseCheckpointStat;
 exports.validateCheckpointStats = validateCheckpointStats;
@@ -16,6 +17,20 @@ exports.CHECKPOINT_STAT_KEYS = [
     "headshotKills", "headshotRate", "overkills", "meleeKills",
     "highestWinStreak", "highestMatchXp", "moneyEarned", "mvps"
 ];
+exports.INGAME_NAME_MIN = 3;
+exports.INGAME_NAME_MAX = 15;
+const INGAME_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+/** Tarkov Arena nicknames: 3–15 letters, numbers, underscores, or hyphens. */
+function parseIngameName(raw) {
+    const value = raw.trim();
+    if (value.length < exports.INGAME_NAME_MIN || value.length > exports.INGAME_NAME_MAX) {
+        return { ok: false, error: `In-game name must be ${exports.INGAME_NAME_MIN}–${exports.INGAME_NAME_MAX} characters.` };
+    }
+    if (!INGAME_NAME_PATTERN.test(value)) {
+        return { ok: false, error: "In-game name can only use letters, numbers, underscores (_), and hyphens (-)." };
+    }
+    return { ok: true, value };
+}
 exports.CHECKPOINT_STATS = {
     kd: { label: "K/D", short: "K/D", kind: "decimal", placeholder: "e.g. 1.85" },
     playerKills: { label: "Player kills", short: "KILLS", kind: "integer", placeholder: "e.g. 1240" },
@@ -108,7 +123,9 @@ function normalizeCheckpointProfile(raw) {
         if (typeof value === "number" && Number.isFinite(value) && value >= 0)
             stats[key] = value;
     }
+    const parsedName = typeof candidate.ingameName === "string" ? parseIngameName(candidate.ingameName) : null;
     return {
+        ingameName: parsedName?.ok ? parsedName.value : null,
         stats,
         updatedAt: typeof candidate.updatedAt === "number" ? candidate.updatedAt : 0,
         cardChannelId: typeof candidate.cardChannelId === "string" ? candidate.cardChannelId : null,

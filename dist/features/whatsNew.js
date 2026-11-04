@@ -46,8 +46,8 @@ exports.WHATS_NEW_RELEASE = {
         {
             name: "🎯 Arena Player Rating Cards",
             lines: [
-                "Enter your Arena checkpoint stats in <#1567414626273202286> to get your own sports-style PMC card with a rating out of 100.",
-                "Update your stats any time and your card refreshes live."
+                "Enter your Arena in-game name and checkpoint stats in <#1567414626273202286> to get your own sports-style PMC card with a rating out of 100.",
+                "Your card shows your **in-game name**. Already have a card? Tap **In-Game Name** to add yours. Updates refresh your card live."
             ]
         },
         {

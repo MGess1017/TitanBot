@@ -1,19 +1,22 @@
 import path from "node:path";
 import { createCanvas, GlobalFonts, loadImage, type Image, type SKRSContext2D } from "@napi-rs/canvas";
 import {
-    ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, DiscordAPIError, EmbedBuilder, ModalBuilder,
+    ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, DiscordAPIError, EmbedBuilder, escapeMarkdown, ModalBuilder,
     TextInputBuilder, TextInputStyle, type Message, type MessageCreateOptions, type MessageEditOptions, type TextChannel
 } from "discord.js";
 import {
     calculateCheckpointRating, CHECKPOINT_SECTION_IDS, CHECKPOINT_SECTIONS, CHECKPOINT_STAT_KEYS, CHECKPOINT_STATS,
-    formatCheckpointStat, getCheckpointTier, isSectionComplete, type CheckpointSectionId, type CheckpointStatKey,
-    type CheckpointStats, type CheckpointTier
+    formatCheckpointStat, getCheckpointTier, INGAME_NAME_MAX, INGAME_NAME_MIN, isSectionComplete, type CheckpointSectionId,
+    type CheckpointStatKey, type CheckpointStats, type CheckpointTier
 } from "../game/checkpointRating";
 
 export const CHECKPOINT_PANEL_TITLE = "Arena Player Rating";
 export const CHECKPOINT_EDIT_PREFIX = "checkpoint_card:edit:";
 export const CHECKPOINT_MODAL_PREFIX = "checkpoint_card:modal:";
 export const CHECKPOINT_VIEW_ID = "checkpoint_card:view";
+export const CHECKPOINT_NAME_ID = "checkpoint_card:name";
+export const CHECKPOINT_NAME_MODAL_ID = "checkpoint_card:name_modal";
+export const CHECKPOINT_NAME_INPUT_ID = "ingameName";
 export const CHECKPOINT_CARD_FILE = "pmc-card.png";
 
 const ASSET_ROOT = path.resolve(__dirname, "../../assets");
@@ -58,7 +61,7 @@ function fitFont(ctx: SKRSContext2D, text: string, family: string, maxSize: numb
 
 export type CheckpointCardInput = {
     userId: string;
-    username: string;
+    ingameName: string;
     stats: Record<CheckpointStatKey, number>;
     updatedAt: number;
     avatar?: Buffer | null;
@@ -95,7 +98,7 @@ export async function renderCheckpointCard(input: CheckpointCardInput): Promise<
     }
     ctx.restore();
 
-    const name = input.username.toUpperCase();
+    const name = input.ingameName.toUpperCase();
     ctx.save();
     ctx.translate(CARD_WIDTH / 2, 420);
     ctx.rotate(-0.12);
@@ -201,21 +204,39 @@ export function buildCheckpointPanel() {
             .setColor(0x9b59b6)
             .setTitle(CHECKPOINT_PANEL_TITLE)
             .setDescription([
-                "Enter your **Arena CheckPoint statistics** to generate your FNT PMC player card and **rating out of 100**.",
+                "Enter your **Arena in-game name** and **CheckPoint statistics** to generate your FNT PMC player card and **rating out of 100**.",
                 "",
-                "1. Fill all four sections below (each opens a short form).",
-                "2. Your card posts in this channel automatically once every stat is saved.",
-                "3. Edit any section at any time; your card and rating update live."
+                "1. Set your **In-Game Name** — it's the name shown on your card.",
+                "2. Fill all four stat sections below (each opens a short form).",
+                "3. Your card posts in this channel automatically once your name and every stat are saved.",
+                "4. Edit your name or any section at any time; your card and rating update live."
             ].join("\n"))
             .setFooter({ text: "Stats are player-reported. Rating weighs K/D, win rate, headshot rate, MVPs, and consistency." })],
         components: [
             new ActionRowBuilder<ButtonBuilder>().addComponents(sectionButtons),
             new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder().setCustomId(CHECKPOINT_NAME_ID).setLabel("In-Game Name").setEmoji("🪪").setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId(CHECKPOINT_VIEW_ID).setLabel("My Rating Breakdown").setStyle(ButtonStyle.Primary)
             )
         ],
         allowedMentions: { parse: [] }
     } satisfies MessageCreateOptions & MessageEditOptions;
+}
+
+export function buildCheckpointNameModal(current: string | null): ModalBuilder {
+    const input = new TextInputBuilder()
+        .setCustomId(CHECKPOINT_NAME_INPUT_ID)
+        .setLabel("Tarkov Arena in-game name")
+        .setPlaceholder("Exactly as it appears in Arena")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMinLength(INGAME_NAME_MIN)
+        .setMaxLength(INGAME_NAME_MAX);
+    if (current) input.setValue(current);
+    return new ModalBuilder()
+        .setCustomId(CHECKPOINT_NAME_MODAL_ID)
+        .setTitle("Arena In-Game Name")
+        .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
 }
 
 export function buildCheckpointModal(section: CheckpointSectionId, stats: CheckpointStats): ModalBuilder {
@@ -237,10 +258,11 @@ export function buildCheckpointModal(section: CheckpointSectionId, stats: Checkp
     return modal;
 }
 
-export function describeCheckpointProgress(stats: CheckpointStats): string {
-    return CHECKPOINT_SECTION_IDS
-        .map(id => `${isSectionComplete(stats, id) ? "✅" : "⬜"} ${CHECKPOINT_SECTIONS[id].title}`)
-        .join("\n");
+export function describeCheckpointProgress(stats: CheckpointStats, ingameName: string | null): string {
+    return [
+        `${ingameName ? "✅" : "⬜"} In-Game Name${ingameName ? `: **${escapeMarkdown(ingameName)}**` : ""}`,
+        ...CHECKPOINT_SECTION_IDS.map(id => `${isSectionComplete(stats, id) ? "✅" : "⬜"} ${CHECKPOINT_SECTIONS[id].title}`)
+    ].join("\n");
 }
 
 export function buildCheckpointBreakdownEmbed(stats: Record<CheckpointStatKey, number>, cardUrl: string | null): EmbedBuilder {
@@ -255,12 +277,12 @@ export function buildCheckpointBreakdownEmbed(stats: Record<CheckpointStatKey, n
         .setDescription(lines.join("\n") + (cardUrl ? `\n\n[View your card](${cardUrl})` : ""));
 }
 
-export function buildCheckpointCardMessage(userId: string, username: string, rating: number, tier: CheckpointTier, buffer: Buffer) {
+export function buildCheckpointCardMessage(userId: string, ingameName: string, rating: number, tier: CheckpointTier, buffer: Buffer) {
     return {
         content: `<@${userId}>`,
         embeds: [new EmbedBuilder()
             .setColor(tier.color)
-            .setTitle(`${username} • PMC Rating ${rating}`)
+            .setTitle(`${escapeMarkdown(ingameName)} • PMC Rating ${rating}`)
             .setDescription(`Tier: **${tier.name}**`)
             .setImage(`attachment://${CHECKPOINT_CARD_FILE}`)
             .setTimestamp(new Date())],

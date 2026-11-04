@@ -7596,16 +7596,17 @@ function publishCheckpointCard(discordUser) {
     let resultUrl = "";
     const run = previous.catch(() => undefined).then(async () => {
         const profile = (0, utils_1.ensureUser)(discordUser.id).checkpointProfile;
-        if (!profile || !(0, checkpointRating_1.isCheckpointComplete)(profile.stats))
+        if (!profile || !profile.ingameName || !(0, checkpointRating_1.isCheckpointComplete)(profile.stats))
             throw new Error("Checkpoint profile is incomplete.");
         const stats = { ...profile.stats };
+        const ingameName = profile.ingameName;
         const avatar = await fetchAvatarBuffer(discordUser.displayAvatarURL({ extension: "png", size: 128 }));
         const rendered = await (0, checkpointCard_1.renderCheckpointCard)({
-            userId: discordUser.id, username: discordUser.username, stats, updatedAt: profile.updatedAt, avatar
+            userId: discordUser.id, ingameName, stats, updatedAt: profile.updatedAt, avatar
         });
         const channel = await getCheckpointCardChannel();
         const storedId = profile.cardChannelId === channel.id ? profile.cardMessageId : null;
-        const message = await (0, checkpointCard_1.upsertCheckpointCardMessage)(channel, storedId, (0, checkpointCard_1.buildCheckpointCardMessage)(discordUser.id, discordUser.username, rendered.rating, rendered.tier, rendered.buffer));
+        const message = await (0, checkpointCard_1.upsertCheckpointCardMessage)(channel, storedId, (0, checkpointCard_1.buildCheckpointCardMessage)(discordUser.id, ingameName, rendered.rating, rendered.tier, rendered.buffer));
         const latest = (0, utils_1.ensureUser)(discordUser.id).checkpointProfile;
         if (latest && (latest.cardMessageId !== message.id || latest.cardChannelId !== channel.id)) {
             latest.cardMessageId = message.id;
@@ -7626,11 +7627,59 @@ function getCheckpointCardUrl(profile, guildId) {
         return null;
     return `https://discord.com/channels/${guildId}/${profile.cardChannelId}/${profile.cardMessageId}`;
 }
+async function finishCheckpointSave(interaction, savedLabel) {
+    const profile = (0, utils_1.ensureUser)(interaction.user.id).checkpointProfile;
+    const stats = profile?.stats || {};
+    const ingameName = profile?.ingameName || null;
+    if (!ingameName || !(0, checkpointRating_1.isCheckpointComplete)(stats)) {
+        await interaction.reply({
+            content: `**${savedLabel} saved.** Finish the remaining steps to generate your card:\n${(0, checkpointCard_1.describeCheckpointProgress)(stats, ingameName)}`,
+            flags: discord_js_1.MessageFlags.Ephemeral
+        });
+        return;
+    }
+    await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+    try {
+        const url = await publishCheckpointCard(interaction.user);
+        await interaction.editReply({ embeds: [(0, checkpointCard_1.buildCheckpointBreakdownEmbed)(stats, url)] });
+    }
+    catch (error) {
+        console.error("[checkpointCard]", error);
+        appendAuditEvent("checkpoint_card_publish_failed", { userId: interaction.user.id, reason: toSafeString(error) });
+        await interaction.editReply({ content: "Your info was saved, but the card could not be posted. Submit any section again to retry." });
+    }
+}
 async function handleCheckpointInteraction(interaction) {
     const isCheckpointComponent = (interaction.isButton() || interaction.isModalSubmit())
-        && (interaction.customId.startsWith(checkpointCard_1.CHECKPOINT_EDIT_PREFIX) || interaction.customId === checkpointCard_1.CHECKPOINT_VIEW_ID || interaction.customId.startsWith(checkpointCard_1.CHECKPOINT_MODAL_PREFIX));
+        && (interaction.customId.startsWith(checkpointCard_1.CHECKPOINT_EDIT_PREFIX) || interaction.customId === checkpointCard_1.CHECKPOINT_VIEW_ID || interaction.customId.startsWith(checkpointCard_1.CHECKPOINT_MODAL_PREFIX)
+            || interaction.customId === checkpointCard_1.CHECKPOINT_NAME_ID || interaction.customId === checkpointCard_1.CHECKPOINT_NAME_MODAL_ID);
     if (isCheckpointComponent && !isFeatureEnabled("checkpointCards")) {
         await interaction.reply({ content: "Player rating cards are paused by staff right now.", flags: discord_js_1.MessageFlags.Ephemeral });
+        return true;
+    }
+    if (interaction.isButton() && interaction.customId === checkpointCard_1.CHECKPOINT_NAME_ID) {
+        if (interaction.user.bot)
+            return true;
+        await interaction.showModal((0, checkpointCard_1.buildCheckpointNameModal)((0, utils_1.ensureUser)(interaction.user.id).checkpointProfile?.ingameName || null));
+        return true;
+    }
+    if (interaction.isModalSubmit() && interaction.customId === checkpointCard_1.CHECKPOINT_NAME_MODAL_ID) {
+        const parsed = (0, checkpointRating_1.parseIngameName)(interaction.fields.getTextInputValue(checkpointCard_1.CHECKPOINT_NAME_INPUT_ID));
+        if (!parsed.ok) {
+            await interaction.reply({ content: `**In-game name was not saved:** ${parsed.error}`, flags: discord_js_1.MessageFlags.Ephemeral });
+            return true;
+        }
+        const user = (0, utils_1.ensureUser)(interaction.user.id);
+        user.checkpointProfile = {
+            ingameName: parsed.value,
+            stats: user.checkpointProfile?.stats || {},
+            updatedAt: Date.now(),
+            cardChannelId: user.checkpointProfile?.cardChannelId || null,
+            cardMessageId: user.checkpointProfile?.cardMessageId || null
+        };
+        (0, utils_1.savePoints)();
+        appendAuditEvent("checkpoint_name_saved", { userId: interaction.user.id });
+        await finishCheckpointSave(interaction, "In-game name");
         return true;
     }
     if (interaction.isButton() && interaction.customId.startsWith(checkpointCard_1.CHECKPOINT_EDIT_PREFIX)) {
@@ -7643,9 +7692,9 @@ async function handleCheckpointInteraction(interaction) {
     }
     if (interaction.isButton() && interaction.customId === checkpointCard_1.CHECKPOINT_VIEW_ID) {
         const profile = (0, utils_1.ensureUser)(interaction.user.id).checkpointProfile;
-        if (!profile || !(0, checkpointRating_1.isCheckpointComplete)(profile.stats)) {
+        if (!profile || !profile.ingameName || !(0, checkpointRating_1.isCheckpointComplete)(profile.stats)) {
             await interaction.reply({
-                content: `Your card unlocks after all four sections are saved.\n${(0, checkpointCard_1.describeCheckpointProgress)(profile?.stats || {})}`,
+                content: `Your card unlocks after your in-game name and all four sections are saved.\n${(0, checkpointCard_1.describeCheckpointProgress)(profile?.stats || {}, profile?.ingameName || null)}`,
                 flags: discord_js_1.MessageFlags.Ephemeral
             });
             return true;
@@ -7681,6 +7730,7 @@ async function handleCheckpointInteraction(interaction) {
             return true;
         }
         user.checkpointProfile = {
+            ingameName: user.checkpointProfile?.ingameName || null,
             stats: merged,
             updatedAt: Date.now(),
             cardChannelId: user.checkpointProfile?.cardChannelId || null,
@@ -7688,23 +7738,7 @@ async function handleCheckpointInteraction(interaction) {
         };
         (0, utils_1.savePoints)();
         appendAuditEvent("checkpoint_stats_saved", { userId: interaction.user.id, section });
-        if (!(0, checkpointRating_1.isCheckpointComplete)(merged)) {
-            await interaction.reply({
-                content: `**${checkpointRating_1.CHECKPOINT_SECTIONS[section].title} saved.** Finish the remaining sections to generate your card:\n${(0, checkpointCard_1.describeCheckpointProgress)(merged)}`,
-                flags: discord_js_1.MessageFlags.Ephemeral
-            });
-            return true;
-        }
-        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
-        try {
-            const url = await publishCheckpointCard(interaction.user);
-            await interaction.editReply({ embeds: [(0, checkpointCard_1.buildCheckpointBreakdownEmbed)(merged, url)] });
-        }
-        catch (error) {
-            console.error("[checkpointCard]", error);
-            appendAuditEvent("checkpoint_card_publish_failed", { userId: interaction.user.id, reason: toSafeString(error) });
-            await interaction.editReply({ content: "Your stats were saved, but the card could not be posted. Submit any section again to retry." });
-        }
+        await finishCheckpointSave(interaction, checkpointRating_1.CHECKPOINT_SECTIONS[section].title);
         return true;
     }
     return false;

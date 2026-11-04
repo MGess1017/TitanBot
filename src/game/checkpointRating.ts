@@ -10,11 +10,28 @@ export type CheckpointStats = Partial<Record<CheckpointStatKey, number>>;
 export type CheckpointSectionId = "combat" | "matches" | "precision" | "records";
 
 export type CheckpointProfile = {
+    ingameName: string | null;
     stats: CheckpointStats;
     updatedAt: number;
     cardChannelId: string | null;
     cardMessageId: string | null;
 };
+
+export const INGAME_NAME_MIN = 3;
+export const INGAME_NAME_MAX = 15;
+const INGAME_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/** Tarkov Arena nicknames: 3–15 letters, numbers, underscores, or hyphens. */
+export function parseIngameName(raw: string): { ok: true; value: string } | { ok: false; error: string } {
+    const value = raw.trim();
+    if (value.length < INGAME_NAME_MIN || value.length > INGAME_NAME_MAX) {
+        return { ok: false, error: `In-game name must be ${INGAME_NAME_MIN}–${INGAME_NAME_MAX} characters.` };
+    }
+    if (!INGAME_NAME_PATTERN.test(value)) {
+        return { ok: false, error: "In-game name can only use letters, numbers, underscores (_), and hyphens (-)." };
+    }
+    return { ok: true, value };
+}
 
 type StatDefinition = { label: string; short: string; kind: "integer" | "decimal" | "percent"; placeholder: string };
 
@@ -111,7 +128,9 @@ export function normalizeCheckpointProfile(raw: unknown): CheckpointProfile | nu
         const value = sourceStats[key];
         if (typeof value === "number" && Number.isFinite(value) && value >= 0) stats[key] = value;
     }
+    const parsedName = typeof candidate.ingameName === "string" ? parseIngameName(candidate.ingameName) : null;
     return {
+        ingameName: parsedName?.ok ? parsedName.value : null,
         stats,
         updatedAt: typeof candidate.updatedAt === "number" ? candidate.updatedAt : 0,
         cardChannelId: typeof candidate.cardChannelId === "string" ? candidate.cardChannelId : null,
