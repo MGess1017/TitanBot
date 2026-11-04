@@ -11,12 +11,14 @@ import { PRIVATE_SLASH_COMMANDS } from "../ui/ids";
 import { helpDropdown } from "../ui/help";
 import { clampText, embedFromPayload, embedFromText } from "../ui/embeds";
 import { commandHandlers } from "../commands/handlers";
+import { getCommandKey } from "../commands/keys";
 
 /** Runs a slash command handler and renders its reply. */
 export async function handleChatInputCommand(interaction: Interaction): Promise<void> {
     if (!interaction.isChatInputCommand()) return;
 
-    const handler = commandHandlers[interaction.commandName];
+    const commandKey = getCommandKey(interaction);
+    const handler = commandHandlers[commandKey];
     if (!handler) {
         const unknown = embedFromText("unknown", "Unknown command.", interaction.user);
         try {
@@ -38,16 +40,16 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
     try {
         const startedAt = Date.now();
         await interaction.deferReply({
-            flags: PRIVATE_SLASH_COMMANDS.has(interaction.commandName) ? MessageFlags.Ephemeral : undefined
+            flags: PRIVATE_SLASH_COMMANDS.has(commandKey) ? MessageFlags.Ephemeral : undefined
         });
         const rawResult = await handler(interaction);
         const result = typeof rawResult === "string"
             ? rawResult
             : JSON.stringify(rawResult ?? "No response returned.");
         const elapsedMs = Date.now() - startedAt;
-        recordCommandOutcome(interaction.commandName, true, elapsedMs);
+        recordCommandOutcome(commandKey, true, elapsedMs);
         appendAuditEvent("slash_command", {
-            command: interaction.commandName,
+            command: commandKey,
             userId: interaction.user.id,
             guildId: interaction.guildId,
             channelId: interaction.channelId,
@@ -69,7 +71,7 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
             });
         } else if (parsed?.embed) {
             try {
-                const embed = embedFromPayload(interaction.commandName, parsed.embed, interaction.user);
+                const embed = embedFromPayload(commandKey, parsed.embed, interaction.user);
                 if (parsed.withHelpNav) {
                     const page = ["general", "xp", "raids", "shop", "games", "bank", "moderation"].includes(parsed.helpPage || "")
                         ? parsed.helpPage as "general" | "xp" | "raids" | "shop" | "games" | "bank" | "moderation"
@@ -83,22 +85,22 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
                     await interaction.editReply({
                         embeds: [embed],
                         components: Array.isArray(parsed.components) ? parsed.components as any[] : [],
-                        files: interaction.commandName === "xp" && parsed.xpCrateId
+                        files: commandKey === "xp" && parsed.xpCrateId
                             ? [xpCrateAttachment(parsed.xpCrateId)]
                             : getBossPortraitFiles(parsed.bossPortraitName),
-                        ...(interaction.commandName === "raid" ? { attachments: [] } : {}),
+                        ...(commandKey === "raid" ? { attachments: [] } : {}),
                         allowedMentions: { parse: ["roles"] }
                     });
                 }
             } catch (structuredError) {
                 console.error("Structured command response failed:", structuredError);
                 await interaction.editReply({
-                    embeds: [embedFromText(interaction.commandName, "The command completed, but its rich display could not be rendered. Please retry.", interaction.user)],
+                    embeds: [embedFromText(commandKey, "The command completed, but its rich display could not be rendered. Please retry.", interaction.user)],
                     components: []
                 }).catch(() => undefined);
             }
         } else {
-            await interaction.editReply({ embeds: [embedFromText(interaction.commandName, result, interaction.user)] });
+            await interaction.editReply({ embeds: [embedFromText(commandKey, result, interaction.user)] });
         }
     } catch (error) {
         if (isUnknownInteractionError(error)) {
@@ -108,19 +110,19 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
         console.error("Command execution failed:", error);
         const failureReason = clampText(error instanceof Error ? error.message : String(error), 220);
         appendAuditEvent("slash_command_error", {
-            command: interaction.commandName,
+            command: commandKey,
             userId: interaction.user.id,
             guildId: interaction.guildId,
             channelId: interaction.channelId,
             reason: failureReason
         });
-        recordCommandOutcome(interaction.commandName, false, 0);
+        recordCommandOutcome(commandKey, false, 0);
         try {
             const failText = `Command failed: ${failureReason}`;
             if (interaction.deferred || interaction.replied) {
-                await interaction.editReply({ embeds: [embedFromText(interaction.commandName, failText, interaction.user)] });
+                await interaction.editReply({ embeds: [embedFromText(commandKey, failText, interaction.user)] });
             } else {
-                await interaction.reply({ embeds: [embedFromText(interaction.commandName, failText, interaction.user)] });
+                await interaction.reply({ embeds: [embedFromText(commandKey, failText, interaction.user)] });
             }
         } catch (responseError) {
             if (!isUnknownInteractionError(responseError)) {

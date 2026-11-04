@@ -10,58 +10,21 @@ const node_path_1 = __importDefault(require("node:path"));
 const discord_js_1 = require("discord.js");
 exports.WHATS_NEW_COLOR = 0x9b59b6;
 exports.WHATS_NEW_RELEASE = {
-    id: "2026-11-fnt-season-update",
-    title: "✨ What's New with Titan Bot",
-    intro: "A big FNT update just landed. Here's everything new for the squad:",
+    id: "2026-11-casino-commands",
+    title: "🎰 Casino Commands Moved Under /casino",
+    intro: "All casino games now live under one command, which makes room for new features. Your tokens, stats and odds are unchanged.",
     sections: [
         {
-            name: "🏆 Live XP Leaderboard",
+            name: "🎲 How to Play Now",
             lines: [
-                "A purple live leaderboard now ranks everyone with @mentions and updates in real time.",
-                "`/xp` shows your current XP multiplier — **1x** or **2x**."
+                "Type `/casino` and pick a game: `dice`, `roulette`, `blackjack`, `crash`, `slots`, `coinflip`, `baccarat`, `hilo` or `keno`.",
+                "Example: `/casino dice bet:100 choice:high` (was `/dice`). Magic Slots is now `/casino slots`."
             ]
         },
         {
-            name: "🎙️ 2x Voice XP",
+            name: "🏛️ Casino Floor",
             lines: [
-                "Stay in voice for **2 hours straight** to unlock **2x XP** — the bot DMs you when it kicks in.",
-                "Leaving voice resets you to 1x. There's no AFK penalty."
-            ]
-        },
-        {
-            name: "🎁 Daily XP Crates",
-            lines: [
-                "Hit the **FN Xp Panel** button once every 24 hours for a free crate.",
-                "10 color-coded crates up to **100K XP**, plus the super rare **Astral crate worth 1,000,000 XP**.",
-                "Your crates show up live in your `/xp` profile."
-            ]
-        },
-        {
-            name: "💀 Raid Bosses Reworked",
-            lines: [
-                "Every raid boss has new, scarier artwork.",
-                "Bosses now telegraph their big attacks, so watch for warnings and react as a team."
-            ]
-        },
-        {
-            name: "🎯 Arena Player Rating Cards",
-            lines: [
-                "Enter your Arena in-game name and checkpoint stats in <#1567414626273202286> to get your own sports-style PMC card with a rating out of 100.",
-                "Your card shows your **in-game name**. Already have a card? Tap **In-Game Name** to add yours. Updates refresh your card live."
-            ]
-        },
-        {
-            name: "🪪 New /profile",
-            lines: [
-                "One profile for your progression, achievements, collections, activity and preferences.",
-                "Spend tokens in the FNT shop on themes, titles and badges. They're cosmetic only and give no gameplay advantage."
-            ]
-        },
-        {
-            name: "🛡️ Safer Server",
-            lines: [
-                "Everyone is welcome. The bot never kicks or removes anyone for joining, no matter how many people join at once.",
-                "Repeated spam and mass pings are flagged to staff, and any timeout can be undone."
+                "`/casino lobby` opens the button-based game floor, with replay, double and halve on every result."
             ]
         }
     ],

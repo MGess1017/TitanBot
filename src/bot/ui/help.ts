@@ -181,8 +181,8 @@ function helpPageGames() {
         .setTitle("🪖 War Games Command")
         .setDescription("High-risk tactical casino simulations powered by FN Token$ from raids and live operations rewards.")
         .addFields(
-            { name: "Battle Deck", value: "• `/dice` — precision or parity strike\n\n• `/roulette` — sector and color control\n\n• `/blackjack` — safe or aggressive command style\n\n• `/crash` — multiplier extraction window\n\n• `/magicslots` — enchanted reels, jackpot arcs, and bonus magic rounds\n\n• `/coinflip` — rapid binary call\n\n• `/baccarat` — player / banker / tie wagers\n\n• `/hilo` — threat escalation call\n\n• `/keno` — tactical number board" },
-            { name: "Interactive Casino", value: "• `/casino bet:<amount>` opens the full game floor.\n\n• Choose a game with one click, then replay, double, halve, or switch from every result." },
+            { name: "Battle Deck", value: "• `/casino dice` — precision or parity strike\n\n• `/casino roulette` — sector and color control\n\n• `/casino blackjack` — safe or aggressive command style\n\n• `/casino crash` — multiplier extraction window\n\n• `/casino slots` — Magic Slots: enchanted reels, jackpot arcs, and bonus magic rounds\n\n• `/casino coinflip` — rapid binary call\n\n• `/casino baccarat` — player / banker / tie wagers\n\n• `/casino hilo` — threat escalation call\n\n• `/casino keno` — tactical number board" },
+            { name: "Interactive Casino", value: "• `/casino lobby bet:<amount>` opens the full game floor.\n\n• Choose a game with one click, then replay, double, halve, or switch from every result." },
             { name: "Fair Return Profile", value: "• Standard games target roughly 95% long-run return.\n\n• Standard-game wins have a disclosed 6% boost chance that never reduces payouts.\n\n• Magic Slots is calibrated near 94% with measured scatter and ultra-mode chances." },
             { name: "Round Results", value: "• Every result shows bet, payout, net change, wallet, round details, risk, odds, bonus result, and player record.\n\n• WIN=green, LOSS=red, PUSH=yellow." }
         );

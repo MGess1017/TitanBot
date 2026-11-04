@@ -54,6 +54,7 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
    - `/daily`: Claim your daily rewards.
    - `/balance`: Check your FN Token$ balance.
    - `/leaderboard`: View the XP leaderboard.
+   - `/casino <game>`: Play `dice`, `roulette`, `blackjack`, `crash`, `slots`, `coinflip`, `baccarat`, `hilo`, or `keno`; `/casino lobby` opens the button-based game floor.
    - `/addpoints @user amount`: Add mod points to a specified user.
 
 ## Project layout
@@ -70,6 +71,7 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
 
 Editing tips:
 - To add a slash command, add it to `src/commands/slashCatalog.ts` and add its handler to the matching group in `src/bot/commands/`. `npm run verify:contracts` fails if either side is missing.
+- Discord allows at most 100 slash commands (91 are used). To fold related commands into one, list them in `SLASH_COMMAND_GROUPS` in `slashCatalog.ts` (as the casino games are). Their handlers stay keyed by the original names, and the build refuses groups that mix member and admin-only commands.
 - Modules import what they use directly; never import `src/bot.ts` from a module.
 - Avoid using another module's `const`/`let` values at load time (top-level code). Use them inside functions, which run after every module has loaded.
 - To change a value owned by another module, call a setter exported by that module (for example `setXpRoleSyncPaused`).

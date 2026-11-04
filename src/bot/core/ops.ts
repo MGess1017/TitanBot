@@ -14,6 +14,7 @@ import {
     STRICT_ENV_REQUIRED, TICKET_CREATE_LOCK_MAX_AGE_MS, TICKET_DATA_FILE, TRADE_DATA_FILE, XP_ROLE_DATA_FILE
 } from "./config";
 import { client } from "./client";
+import { getCommandKey } from "../commands/keys";
 import { type CasinoGameKey } from "../ui/ids";
 
 const opsAlertLastSent = new Map<string, number>();
@@ -116,7 +117,7 @@ export function pruneRecentCommandExecutions(now = Date.now()): void {
 }
 
 function commandExecutionKey(interaction: ChatInputCommandInteraction, fingerprint: string): string {
-    return `${interaction.guildId || "dm"}:${interaction.user.id}:${interaction.commandName}:${fingerprint}`;
+    return `${interaction.guildId || "dm"}:${interaction.user.id}:${getCommandKey(interaction)}:${fingerprint}`;
 }
 
 export function rejectIfDuplicateCommand(interaction: ChatInputCommandInteraction, fingerprint: string): string | null {
@@ -136,7 +137,7 @@ export function rejectIfDuplicateCommand(interaction: ChatInputCommandInteractio
 
 export function rejectIfRateLimitedForInteraction(interaction: ChatInputCommandInteraction): string | null {
     if (COMMAND_RATE_LIMIT_WINDOW_MS <= 0) return null;
-    const key = `${interaction.guildId || "dm"}:${interaction.user.id}:${interaction.commandName}`;
+    const key = `${interaction.guildId || "dm"}:${interaction.user.id}:${getCommandKey(interaction)}`;
     return rejectIfRateLimited(key, COMMAND_RATE_LIMIT_WINDOW_MS);
 }
 

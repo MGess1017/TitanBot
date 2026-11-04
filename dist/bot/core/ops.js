@@ -38,6 +38,7 @@ const rateLimit_1 = require("../../runtime/rateLimit");
 require("./env");
 const config_1 = require("./config");
 const client_1 = require("./client");
+const keys_1 = require("../commands/keys");
 const opsAlertLastSent = new Map();
 const recentCommandExecutions = new Map();
 exports.inFlightTicketCreates = new Map();
@@ -132,7 +133,7 @@ function pruneRecentCommandExecutions(now = Date.now()) {
     }
 }
 function commandExecutionKey(interaction, fingerprint) {
-    return `${interaction.guildId || "dm"}:${interaction.user.id}:${interaction.commandName}:${fingerprint}`;
+    return `${interaction.guildId || "dm"}:${interaction.user.id}:${(0, keys_1.getCommandKey)(interaction)}:${fingerprint}`;
 }
 function rejectIfDuplicateCommand(interaction, fingerprint) {
     if (config_1.COMMAND_IDEMPOTENCY_WINDOW_MS <= 0)
@@ -150,7 +151,7 @@ function rejectIfDuplicateCommand(interaction, fingerprint) {
 function rejectIfRateLimitedForInteraction(interaction) {
     if (config_1.COMMAND_RATE_LIMIT_WINDOW_MS <= 0)
         return null;
-    const key = `${interaction.guildId || "dm"}:${interaction.user.id}:${interaction.commandName}`;
+    const key = `${interaction.guildId || "dm"}:${interaction.user.id}:${(0, keys_1.getCommandKey)(interaction)}`;
     return (0, rateLimit_1.rejectIfRateLimited)(key, config_1.COMMAND_RATE_LIMIT_WINDOW_MS);
 }
 function rejectIfRateLimitedForCasinoAction(guildId, userId, gameKey) {

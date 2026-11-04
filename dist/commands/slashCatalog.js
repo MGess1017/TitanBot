@@ -1,8 +1,98 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.SLASH_COMMAND_GROUPS = void 0;
+exports.resolveSlashCommandKey = resolveSlashCommandKey;
+exports.slashCommandUsage = slashCommandUsage;
+exports.listSlashCommandKeys = listSlashCommandKeys;
 exports.buildSlashCommands = buildSlashCommands;
 const discord_js_1 = require("discord.js");
+/**
+ * Commands folded into one slash command as subcommands to stay under Discord's 100-command limit.
+ * Keys are subcommand names; values are the internal command keys used by handlers, theming, and metrics.
+ * Each folded command keeps its own definition below, so its options and description carry over unchanged.
+ */
+exports.SLASH_COMMAND_GROUPS = {
+    casino: {
+        description: "FNT casino: open the game floor or play a game directly",
+        subcommands: {
+            lobby: "casino",
+            dice: "dice",
+            roulette: "roulette",
+            blackjack: "blackjack",
+            crash: "crash",
+            slots: "magicslots",
+            coinflip: "coinflip",
+            baccarat: "baccarat",
+            hilo: "hilo",
+            keno: "keno"
+        }
+    }
+};
+const GROUPED_COMMAND_USAGE = new Map(Object.entries(exports.SLASH_COMMAND_GROUPS).flatMap(([group, def]) => Object.entries(def.subcommands).map(([sub, key]) => [key, `${group} ${sub}`])));
+/** Maps an invoked slash command (plus subcommand) to the internal command key its handler is registered under. */
+function resolveSlashCommandKey(commandName, subcommand) {
+    const group = exports.SLASH_COMMAND_GROUPS[commandName];
+    if (!group || !subcommand)
+        return commandName;
+    return group.subcommands[subcommand] || commandName;
+}
+/** What a member types for an internal command key, e.g. "magicslots" → "casino slots". */
+function slashCommandUsage(commandKey) {
+    return GROUPED_COMMAND_USAGE.get(commandKey) || commandKey;
+}
+/** Lists every internal command key a set of registered slash commands can reach (subcommands expanded). */
+function listSlashCommandKeys(commands) {
+    return commands.flatMap(command => {
+        const group = exports.SLASH_COMMAND_GROUPS[command.name];
+        return group ? Object.values(group.subcommands) : [command.name];
+    });
+}
 function buildSlashCommands(input) {
+    const definitions = buildCommandDefinitions(input);
+    const byName = new Map(definitions.map(definition => [definition.name, definition]));
+    const grouped = new Set();
+    const groupBuilders = new Map();
+    for (const [groupName, group] of Object.entries(exports.SLASH_COMMAND_GROUPS)) {
+        const builder = new discord_js_1.SlashCommandBuilder().setName(groupName).setDescription(group.description);
+        let permissions;
+        for (const [subName, key] of Object.entries(group.subcommands)) {
+            const source = byName.get(key);
+            if (!source)
+                throw new Error(`Slash command group ${groupName} references unknown command: ${key}`);
+            const sourcePermissions = source.toJSON().default_member_permissions ?? null;
+            if (permissions !== undefined && permissions !== sourcePermissions) {
+                throw new Error(`Slash command group ${groupName} mixes permission levels (${key}).`);
+            }
+            permissions = sourcePermissions;
+            builder.addSubcommand(sub => {
+                sub.setName(subName).setDescription(source.description);
+                // Top-level commands only hold plain options here, so they can be reused as subcommand options as-is.
+                sub.options.push(...source.options);
+                return sub;
+            });
+            grouped.add(key);
+        }
+        if (permissions)
+            builder.setDefaultMemberPermissions(permissions);
+        groupBuilders.set(groupName, builder);
+    }
+    const result = [];
+    const placed = new Set();
+    for (const definition of definitions) {
+        if (!grouped.has(definition.name)) {
+            result.push(definition);
+            continue;
+        }
+        // Each group takes the position of its first member so the command order stays stable.
+        const groupName = Object.keys(exports.SLASH_COMMAND_GROUPS).find(name => Object.values(exports.SLASH_COMMAND_GROUPS[name].subcommands).includes(definition.name));
+        if (placed.has(groupName))
+            continue;
+        placed.add(groupName);
+        result.push(groupBuilders.get(groupName));
+    }
+    return result;
+}
+function buildCommandDefinitions(input) {
     const { raidConditionChoices, raidMapChoices } = input;
     const raidApproachChoices = input.raidApproachChoices || [
         { name: "Balanced", value: "balanced" },

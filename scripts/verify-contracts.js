@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 require("ts-node/register/transpile-only");
 
-const { buildSlashCommands } = require("../src/commands/slashCatalog");
+const { buildSlashCommands, listSlashCommandKeys, resolveSlashCommandKey } = require("../src/commands/slashCatalog");
 const { BOSS_HEART_DEFS, ITEM_DEFS, SHOP_ITEMS } = require("../src/game/catalog");
 const { RAID_ENCOUNTER_IDS, RAID_RESULT_ACTION_IDS } = require("../src/game/payloads");
 const { RAID_APPROACHES, RAID_BOSS_ROSTER, RAID_MAPS, RAID_MAP_CHOICES, RAID_CONDITIONS, RARE_EXTRACTION_ROUTES } = require("../src/raid/domain");
@@ -29,7 +29,7 @@ function parseSlashCommands() {
     raidConditionChoices: RAID_CONDITIONS.map(condition => ({ name: condition.label, value: condition.key })),
     raidMapChoices: RAID_MAP_CHOICES
   });
-  return uniq(slashCommands.map(command => command.name).filter(Boolean));
+  return uniq(listSlashCommandKeys(slashCommands).filter(Boolean));
 }
 
 function parseCommandHandlers(handlerBlock) {
@@ -53,8 +53,8 @@ function parseHelpGameCommands(source) {
   const fnRegex = /function\s+helpPageGames\(\)\s*\{[\s\S]*?\}/;
   const fnMatch = source.match(fnRegex);
   if (!fnMatch) return [];
-  const cmdRegex = /\/(\w+)/g;
-  return uniq(Array.from(fnMatch[0].matchAll(cmdRegex)).map(m => m[1].toLowerCase()));
+  const cmdRegex = /\/(\w+)(?: (\w+))?/g;
+  return uniq(Array.from(fnMatch[0].matchAll(cmdRegex)).map(m => resolveSlashCommandKey(m[1].toLowerCase(), m[2] ? m[2].toLowerCase() : null)));
 }
 
 function parseIdObjects(source) {

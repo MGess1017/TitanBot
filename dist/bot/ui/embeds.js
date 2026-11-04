@@ -8,6 +8,7 @@ exports.embedFromText = embedFromText;
 exports.embedFromPayload = embedFromPayload;
 // Command theming and embed builders.
 const discord_js_1 = require("discord.js");
+const slashCatalog_1 = require("../../commands/slashCatalog");
 const config_1 = require("../core/config");
 const help_1 = require("./help");
 const RAID_COMMAND_SET = new Set(["raid", "raidintel", "raidhistory", "bosses", "conditions", "gearintel", "loadout", "pmc"]);
@@ -214,7 +215,7 @@ function embedFromText(commandName, text, user) {
         color = 0x0b1f3a;
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(color)
-        .setTitle(`${theme.icon} /${commandName} • ${theme.label}`);
+        .setTitle(`${theme.icon} /${(0, slashCatalog_1.slashCommandUsage)(commandName)} • ${theme.label}`);
     if (compact.length <= 12 && body.length <= 1600) {
         embed.setDescription(body);
     }
@@ -227,7 +228,7 @@ function embedFromText(commandName, text, user) {
             embed.addFields({ name: i === 0 ? "Details" : `Details ${i + 1}`, value: chunks[i] });
         }
     }
-    return brandEmbedForUser(embed, user, `/${commandName}`).toJSON();
+    return brandEmbedForUser(embed, user, `/${(0, slashCatalog_1.slashCommandUsage)(commandName)}`).toJSON();
 }
 function embedFromPayload(commandName, raw, user) {
     const theme = resolveCommandTheme(commandName);
@@ -251,6 +252,6 @@ function embedFromPayload(commandName, raw, user) {
         embed.setColor(0x0b1f3a);
     }
     if (!embed.data.title)
-        embed.setTitle(`${theme.icon} /${commandName} • ${theme.label}`);
-    return brandEmbedForUser(embed, user, `/${commandName}`).toJSON();
+        embed.setTitle(`${theme.icon} /${(0, slashCatalog_1.slashCommandUsage)(commandName)} • ${theme.label}`);
+    return brandEmbedForUser(embed, user, `/${(0, slashCatalog_1.slashCommandUsage)(commandName)}`).toJSON();
 }

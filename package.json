@@ -24,7 +24,7 @@
     "test:runtime:pmc-expansion": "node -r ts-node/register/transpile-only src/runtime/pmcExpansion.test.ts",
     "test:runtime:ticket-system": "node -r ts-node/register/transpile-only src/runtime/ticketSystem.test.ts",
     "test:runtime:ticket-enhancements": "node -r ts-node/register/transpile-only src/runtime/ticketEnhancements.test.ts",
-    "test:runtime:casino-balance": "node -r ts-node/register/transpile-only src/runtime/casinoBalance.test.ts",
+    "test:runtime:casino-balance": "node -r ts-node/register/transpile-only src/runtime/casinoBalance.test.ts && node -r ts-node/register/transpile-only src/runtime/slashGroups.test.ts",
     "test:runtime:xp-role-recovery": "node -r ts-node/register/transpile-only src/runtime/xpRoleRecovery.test.ts",
     "test:runtime:member-tracking": "node -r ts-node/register/transpile-only src/runtime/memberTracking.test.ts",
     "test:runtime:temporary-voice": "node -r ts-node/register/transpile-only src/runtime/temporaryVoice.test.ts",

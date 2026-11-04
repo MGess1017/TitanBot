@@ -1,5 +1,6 @@
 // Command theming and embed builders.
 import { APIEmbed, EmbedBuilder, User } from "discord.js";
+import { slashCommandUsage } from "../../commands/slashCatalog";
 import { ARMY_ICON_URL } from "../core/config";
 import { getAvatar } from "./help";
 
@@ -204,7 +205,7 @@ export function embedFromText(commandName: string, text: string, user: User): AP
 
     const embed = new EmbedBuilder()
         .setColor(color)
-        .setTitle(`${theme.icon} /${commandName} • ${theme.label}`);
+        .setTitle(`${theme.icon} /${slashCommandUsage(commandName)} • ${theme.label}`);
 
     if (compact.length <= 12 && body.length <= 1600) {
         embed.setDescription(body);
@@ -219,7 +220,7 @@ export function embedFromText(commandName: string, text: string, user: User): AP
         }
     }
 
-    return brandEmbedForUser(embed, user, `/${commandName}`).toJSON();
+    return brandEmbedForUser(embed, user, `/${slashCommandUsage(commandName)}`).toJSON();
 }
 
 export function embedFromPayload(commandName: string, raw: APIEmbed, user: User): APIEmbed {
@@ -244,6 +245,6 @@ export function embedFromPayload(commandName: string, raw: APIEmbed, user: User)
     if (cmd === "pmc") {
         embed.setColor(0x0b1f3a);
     }
-    if (!embed.data.title) embed.setTitle(`${theme.icon} /${commandName} • ${theme.label}`);
-    return brandEmbedForUser(embed, user, `/${commandName}`).toJSON();
+    if (!embed.data.title) embed.setTitle(`${theme.icon} /${slashCommandUsage(commandName)} • ${theme.label}`);
+    return brandEmbedForUser(embed, user, `/${slashCommandUsage(commandName)}`).toJSON();
 }

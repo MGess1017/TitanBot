@@ -6,6 +6,7 @@ import { claimXpCrate } from "../../game/xpCrates";
 import { awardEngagementXp } from "../xp/engagement";
 import { getXpPanelChannelId, isFeatureEnabled } from "../core/settings";
 import { toSafeString } from "../core/ops";
+import { getCommandKey } from "../commands/keys";
 import { appendAuditEvent } from "../core/audit";
 import {
     getCatalogItemAutocompleteOptions, getOpenCrateAutocompleteOptions, getRaidGearAutocompleteOptions,
@@ -53,28 +54,29 @@ export async function handleRewardAndAutocompleteInteraction(interaction: Intera
     }
     if (interaction.isAutocomplete()) {
         const focused = interaction.options.getFocused(true);
+        const commandKey = getCommandKey(interaction);
 
         let options: Array<{ name: string; value: string }> = [];
-        if (["raid", "raidintel"].includes(interaction.commandName) && (focused.name === "weapon" || focused.name === "armor")) {
+        if (["raid", "raidintel"].includes(commandKey) && (focused.name === "weapon" || focused.name === "armor")) {
             const kind = focused.name === "weapon" ? "weapon" : "armor";
             options = getRaidGearAutocompleteOptions(interaction.user.id, kind, String(focused.value || ""));
-        } else if (interaction.commandName === "buy" && focused.name === "item") {
+        } else if (commandKey === "buy" && focused.name === "item") {
             options = getShopItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
-        } else if (interaction.commandName === "tradeoffer" && focused.name === "offer_item") {
+        } else if (commandKey === "tradeoffer" && focused.name === "offer_item") {
             options = getTradeOfferItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
-        } else if (interaction.commandName === "tradeoffer" && focused.name === "request_item") {
+        } else if (commandKey === "tradeoffer" && focused.name === "request_item") {
             options = getTradeRequestItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
-        } else if (interaction.commandName === "tradeaccept" && focused.name === "offer_id") {
+        } else if (commandKey === "tradeaccept" && focused.name === "offer_id") {
             options = getTradeOfferAutocompleteOptions(interaction.user.id, String(focused.value || ""), "incoming");
-        } else if (interaction.commandName === "tradedecline" && focused.name === "offer_id") {
+        } else if (commandKey === "tradedecline" && focused.name === "offer_id") {
             options = getTradeOfferAutocompleteOptions(interaction.user.id, String(focused.value || ""), "all");
-        } else if (interaction.commandName === "opencrate" && focused.name === "crate") {
+        } else if (commandKey === "opencrate" && focused.name === "crate") {
             options = getOpenCrateAutocompleteOptions(interaction.user.id, String(focused.value || ""));
-        } else if (interaction.commandName === "useitem" && focused.name === "item") {
+        } else if (commandKey === "useitem" && focused.name === "item") {
             options = getUseItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
-        } else if (interaction.commandName === "sell" && focused.name === "item") {
+        } else if (commandKey === "sell" && focused.name === "item") {
             options = getSellItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
-        } else if (interaction.commandName === "itemgiveaway" && focused.name === "item") {
+        } else if (commandKey === "itemgiveaway" && focused.name === "item") {
             options = getCatalogItemAutocompleteOptions(interaction.user.id, String(focused.value || ""));
         } else {
             return true;
