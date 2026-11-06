@@ -19,9 +19,9 @@ function buildBotFeatureBriefPayload() {
         "• **Start free:** claim FN Token$ with `/daily`.",
         "• **Go raiding:** `/raid` earns loot and PMC XP. Start with a small bet and low risk.",
         "• **Earn server XP:** chat or join voice, then check `/xp`.",
-        "• **Need help?** Browse commands or open a private support ticket below."
+        `• **Need help?** Open a private ticket in <#${config_1.PERMANENT_TICKET_PANEL_CHANNEL_ID}>.`
     ].join("\n")), "FNT", "FNT • Member Guide");
-    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.ONBOARDING_IDS.start).setLabel("Get Started").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(ids_1.ONBOARDING_IDS.commands).setLabel("Command Guide").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.open).setLabel("Open Support Ticket").setStyle(discord_js_1.ButtonStyle.Success));
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.ONBOARDING_IDS.start).setLabel("Get Started").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(ids_1.ONBOARDING_IDS.commands).setLabel("Command Guide").setStyle(discord_js_1.ButtonStyle.Secondary));
     return {
         embed: embed.toJSON(),
         components: [row.toJSON()],

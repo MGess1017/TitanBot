@@ -7,16 +7,19 @@ import {
     ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, DiscordAPIError,
     EmbedBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle, type APIEmbed
 } from "discord.js";
-import { buildTicketIntakeReason, classifyTicketCategory, parseTicketIntakeSnapshot } from "../services/ticketEnhancements";
+import { buildTicketIntakeReason, classifyTicketCategory, getTicketSlaPolicy, hydrateTicketIntakeFields, parseTicketIntakeSnapshot } from "../services/ticketEnhancements";
+import { createTicketEntry, getTicketSlaState, normalizeTicketStatus, type TicketRecord } from "../services/ticketState";
 const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 const source = ts.createSourceFile("bot.ts", readBotSource(), ts.ScriptTarget.ES2020, true);
 const functionNames = new Set([
     "buildBotFeatureBriefPayload", "upsertBotFeatureBriefInChannel", "buildTicketPanelPayload",
     "upsertTicketPanelInChannel", "messageHasTicketOpenButton", "buildTicketIntakeModal",
-    "buildGettingStartedEmbed", "handleCommunityInteraction", "handleFormInteraction", "handleTicketButtonInteraction"
+    "buildGettingStartedEmbed", "handleCommunityInteraction", "handleFormInteraction", "handleTicketButtonInteraction",
+    "buildTicketOpsEmbed", "buildTicketOpsComponents", "buildTicketStaffEmbed", "buildTicketStaffComponents",
+    "getTicketNextActionHint", "updateTicketOpsPanelMessage", "refreshTicketPanelsForGuild"
 ]);
-const constantNames = new Set(["ONBOARDING_IDS", "HELP_IDS", "TICKET_IDS"]);
+const constantNames = new Set(["ONBOARDING_IDS", "HELP_IDS", "TICKET_IDS", "TICKET_TEMPLATE_IDS", "REPORT_IDS", "GIVEAWAY_IDS"]);
 const selected = source.statements.filter(node =>
     (ts.isFunctionDeclaration(node) && functionNames.has(node.name?.text || ""))
     || (ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration =>
@@ -45,11 +48,36 @@ const helpEvents: string[] = [];
 const createEvents: string[] = [];
 let createdReason = "";
 let createError: string | undefined;
+const ticket = createTicketEntry({ nextId: 41, version: 1, tickets: [] }, "guild", "owner", "channel",
+    buildTicketIntakeReason({ category: "general", summary: "Missing raid loot", details: "I extracted but cannot find the loot." }),
+    "normal", () => true);
+assert.ok(ticket);
+const tickets = { tickets: [ticket] };
+const actionEvents: string[] = [];
 const context = vm.createContext({
     exports: {}, console,
     ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, DiscordAPIError, EmbedBuilder,
     MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle,
     MIN_RAID_BET: 10,
+    PERMANENT_TICKET_PANEL_CHANNEL_ID: "1506119505720377434",
+    STAFF_IDS: { home: "staff:home" },
+    ticketStore: tickets,
+    normalizeTicketStatus, hydrateTicketIntakeFields, getTicketSlaPolicy, getTicketSlaState,
+    sanitizeEmbedBuilder: (embed: EmbedBuilder) => embed,
+    canManageTicketActions: (member: { staff?: boolean }) => member.staff === true,
+    findTicketByChannel: (channelId: string) => tickets.tickets.find(ticket => ticket.channelId === channelId),
+    findOpenTicketByChannel: (channelId: string) => tickets.tickets.find(ticket =>
+        ticket.channelId === channelId && ["open", "claimed"].includes(ticket.status)),
+    findArchivedTicketByChannel: (channelId: string) => tickets.tickets.find(ticket =>
+        ticket.channelId === channelId && ticket.status === "archived"),
+    ensureTrackedTicketByChannelId: async () => { actionEvents.push("tracked"); return ticket; },
+    claimTicketChannel: async () => { actionEvents.push("claim"); return "Ticket #41 claimed."; },
+    closeTicketChannel: async () => { actionEvents.push("close"); ticket.status = "archived"; return "Ticket #41 closed."; },
+    resolveTicketChannel: async () => { actionEvents.push("resolve"); ticket.status = "resolved"; return "Ticket #41 resolved."; },
+    setTicketPanelMessageId: (channelId: string, messageId: string) => {
+        const entry = tickets.tickets.find(ticket => ticket.channelId === channelId);
+        if (entry) entry.panelMessageId = messageId;
+    },
     GEAR_UI_IDS: {},
     GEAR_MODAL_PREFIX: "gear_modal:",
     client: { user: { id: "bot" } },
@@ -82,8 +110,14 @@ const functions = context as {
     handleCommunityInteraction: (interaction: unknown) => Promise<boolean>;
     handleFormInteraction: (interaction: unknown) => Promise<boolean>;
     handleTicketButtonInteraction: (interaction: unknown) => Promise<boolean>;
+    buildTicketOpsEmbed: (ticket: TicketRecord) => EmbedBuilder;
+    buildTicketOpsComponents: (ticket: TicketRecord) => ActionRowBuilder<ButtonBuilder>[];
+    buildTicketStaffEmbed: (ticket: TicketRecord) => EmbedBuilder;
+    buildTicketStaffComponents: (ticket: TicketRecord) => ActionRowBuilder<ButtonBuilder>[];
+    updateTicketOpsPanelMessage: (guild: unknown, ticket: TicketRecord) => Promise<void>;
+    refreshTicketPanelsForGuild: (guild: unknown) => Promise<void>;
     ONBOARDING_IDS: { start: string; commands: string };
-    TICKET_IDS: { open: string; intakeModal: string; intakeSummary: string; intakeDetails: string; intakeCategory: string; intakeEvidence: string; intakePlatform: string };
+    TICKET_IDS: { open: string; tools: string; claim: string; close: string; resolve: string; intakeModal: string; intakeSummary: string; intakeDetails: string; intakeCategory: string; intakeEvidence: string; intakePlatform: string };
 };
 const { ONBOARDING_IDS, TICKET_IDS } = vm.runInContext("({ ONBOARDING_IDS, TICKET_IDS })", context) as Pick<typeof functions, "ONBOARDING_IDS" | "TICKET_IDS">;
 
@@ -95,7 +129,9 @@ assert.ok(welcome.embed.description!.split("\n").every(line => line.startsWith("
 assert.ok(welcome.embed.description!.length < 500, "welcome copy must stay short");
 assert.equal(welcome.embed.fields?.length || 0, 0);
 assert.deepEqual(welcome.components[0].components.map(button => button.custom_id),
-    [ONBOARDING_IDS.start, ONBOARDING_IDS.commands, TICKET_IDS.open]);
+    [ONBOARDING_IDS.start, ONBOARDING_IDS.commands]);
+assert.match(welcome.embed.description!, /<#1506119505720377434>/);
+assert.ok(!JSON.stringify(welcome.components).includes(TICKET_IDS.open), "welcome must only reference the ticket channel");
 const guide = functions.buildGettingStartedEmbed().toJSON();
 assert.match(guide.description!, /\/raid bet:10 tension:low/);
 assert.match(guide.description!, /FN Plagued Cemetery/);
@@ -117,6 +153,28 @@ assert.deepEqual(inputs.map(input => input.custom_id),
     [TICKET_IDS.intakeSummary, TICKET_IDS.intakeDetails, TICKET_IDS.intakeCategory, TICKET_IDS.intakeEvidence]);
 assert.deepEqual(inputs.map(input => input.required), [true, true, false, false]);
 assert.equal(inputs[1].max_length, 700, "match the persisted detail limit");
+
+const card = functions.buildTicketOpsEmbed(ticket).toJSON();
+assert.equal(card.title, "Support Ticket #41");
+assert.equal(card.description, "Missing raid loot");
+assert.equal(card.fields?.length, 4, "default ticket has three summary fields and the request");
+assert.deepEqual(card.fields?.map(field => field.name), ["Member", "Status", "Handler", "Your request"]);
+assert.ok(!JSON.stringify(card).match(/SLA|Lifecycle|Workflow|Command Deck|Case Graph|Not provided|No evidence/));
+assert.ok(JSON.stringify(card).length < 750, "member card stays compact");
+assert.equal(functions.buildTicketOpsComponents(ticket)[0].components.length, 3);
+const assigned = { ...ticket, assignedToId: "handler", status: "claimed" as const, workflowStatus: "responded" as const };
+assert.equal(functions.buildTicketOpsEmbed(assigned).data.fields?.[1].value, "In progress");
+assert.equal(functions.buildTicketOpsEmbed(assigned).data.fields?.[2].value, "<@handler>");
+const waiting = { ...assigned, workflowStatus: "waiting_user" as const };
+assert.equal(functions.buildTicketOpsEmbed(waiting).data.fields?.[1].value, "Waiting for your reply");
+const closed = { ...assigned, status: "archived" as const };
+assert.equal(functions.buildTicketOpsEmbed(closed).data.fields?.[1].value, "Closed");
+assert.equal(functions.buildTicketOpsComponents(closed)[0].components.length, 1, "closed tickets only show staff tools");
+assert.equal(functions.buildTicketStaffComponents(ticket)[0].components[0].data.disabled, true);
+assert.equal(functions.buildTicketStaffComponents(closed)[0].components[0].data.disabled, false);
+const evidenced = { ...ticket, intakePlatform: "PC", intakeEvidence: "https://discord.com/channels/g/c/m" };
+assert.equal(functions.buildTicketOpsEmbed(evidenced).data.fields?.length, 6);
+assert.ok(JSON.stringify(functions.buildTicketStaffEmbed(ticket).toJSON()).includes("SLA Clock"), "staff keep detailed diagnostics");
 
 async function run(): Promise<void> {
     let edits = 0;
@@ -188,6 +246,32 @@ async function run(): Promise<void> {
     assert.equal((await functions.upsertTicketPanelInChannel(guild, "channel")).action, "updated");
     assert.equal(sends, sendsBefore, "existing ticket panel is replaced, not duplicated");
 
+    ticket.panelMessageId = "saved";
+    await functions.updateTicketOpsPanelMessage(guild, ticket);
+    let refreshed = savedReply as Reply | null;
+    assert.match(JSON.stringify(refreshed?.embeds), /Support Ticket #41/);
+    assert.equal(refreshed?.components?.length, 1, "legacy rows must be replaced along with the embed");
+    ticket.panelMessageId = null;
+    message.embeds = [{ title: "🏛️ FN Support • Case #41 Command Deck" }];
+    await functions.refreshTicketPanelsForGuild(guild);
+    assert.equal(ticket.panelMessageId, "saved", "startup migrates the old Command Deck in place");
+    ticket.panelMessageId = null;
+    message.embeds = [card];
+    await functions.updateTicketOpsPanelMessage(guild, ticket);
+    assert.equal(ticket.panelMessageId, "saved", "compact cards are recoverable without their saved ID");
+    const terminal = { ...ticket, id: 42, status: "resolved" as const };
+    tickets.tickets.push(terminal);
+    const editCount = edits;
+    await functions.refreshTicketPanelsForGuild(guild);
+    assert.equal(edits, editCount + 1, "startup skips resolved cases");
+    tickets.tickets.pop();
+    ticket.status = "archived";
+    await functions.updateTicketOpsPanelMessage(guild, ticket);
+    refreshed = savedReply as Reply | null;
+    assert.match(JSON.stringify(refreshed?.embeds), /Closed/);
+    assert.equal(functions.buildTicketOpsComponents(ticket)[0].components.length, 1);
+    ticket.status = "open";
+
     const replies: Reply[] = [];
     const button = (customId: string) => ({
         customId, guild,
@@ -206,12 +290,53 @@ async function run(): Promise<void> {
 
     let openedModal: ModalBuilder | null = null;
     assert.equal(await functions.handleTicketButtonInteraction({
-        customId: welcome.components[0].components[2].custom_id,
+        customId: support.components[0].components[0].custom_id,
         guild, isButton: () => true,
         showModal: async (value: ModalBuilder) => { openedModal = value; }
     }), true);
     assert.equal((openedModal as ModalBuilder | null)?.toJSON().custom_id, TICKET_IDS.intakeModal,
-        "the welcome support button must open the same simplified intake form");
+        "the actual support panel must open the simplified intake form");
+
+    const toolsButton = (staff: boolean, channelId = "channel") => ({
+        customId: TICKET_IDS.tools, guild, channelId, member: { staff }, isButton: () => true,
+        reply: async (reply: Reply) => { replies.push(reply); }
+    });
+    await functions.handleTicketButtonInteraction(toolsButton(false));
+    assert.equal(replies[replies.length - 1].content, "These tools are for support staff only.");
+    assert.equal(replies[replies.length - 1].embeds, undefined);
+    await functions.handleTicketButtonInteraction(toolsButton(true));
+    assert.equal(replies[replies.length - 1].flags, MessageFlags.Ephemeral);
+    assert.equal(replies[replies.length - 1].components?.length, 2);
+    assert.match(JSON.stringify(replies[replies.length - 1].embeds), /Staff • Ticket #41/);
+    await functions.handleTicketButtonInteraction(toolsButton(true, "untracked"));
+    assert.equal(replies[replies.length - 1].content, "This ticket is no longer tracked.");
+
+    const actionButton = (customId: string, staff = true) => ({
+        customId, guild, channel: { id: "channel" }, channelId: "channel", member: { staff }, user: { id: "handler" },
+        isButton: () => true,
+        reply: async (reply: Reply) => { replies.push(reply); actionEvents.push("reply"); },
+        deferReply: async (reply: Reply) => { replies.push(reply); actionEvents.push("defer"); },
+        editReply: async (reply: Reply) => { replies.push(reply); actionEvents.push("edit"); }
+    });
+    for (const action of [TICKET_IDS.claim, TICKET_IDS.close, TICKET_IDS.resolve]) {
+        actionEvents.length = 0;
+        await functions.handleTicketButtonInteraction(actionButton(action, false));
+        assert.deepEqual(actionEvents, ["reply"], "members cannot perform staff case actions");
+    }
+    actionEvents.length = 0;
+    await functions.handleTicketButtonInteraction(actionButton(TICKET_IDS.claim));
+    assert.deepEqual(actionEvents, ["defer", "claim", "edit"]);
+    assert.equal(replies[replies.length - 1].embeds, undefined, "action confirmations stay concise");
+    actionEvents.length = 0;
+    await functions.handleTicketButtonInteraction(actionButton(TICKET_IDS.resolve));
+    assert.deepEqual(actionEvents, ["defer", "tracked", "edit"], "open tickets cannot be permanently resolved");
+    actionEvents.length = 0;
+    await functions.handleTicketButtonInteraction(actionButton(TICKET_IDS.close));
+    assert.deepEqual(actionEvents, ["defer", "tracked", "close", "edit"]);
+    actionEvents.length = 0;
+    await functions.handleTicketButtonInteraction(actionButton(TICKET_IDS.resolve));
+    assert.deepEqual(actionEvents, ["defer", "tracked", "resolve", "edit"], "transcript/resolution work starts after acknowledgement");
+    ticket.status = "open";
 
     const submit = async (category = "", evidence = "", platform?: string, details = "Need help finding raid loot") => {
         createEvents.length = 0;

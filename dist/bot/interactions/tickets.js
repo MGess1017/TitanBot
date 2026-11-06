@@ -14,6 +14,25 @@ const ids_1 = require("../ui/ids");
 const channels_1 = require("../tickets/channels");
 /** Ticket, report, and giveaway panel buttons. */
 async function handleTicketButtonInteraction(interaction) {
+    if (interaction.isButton() && interaction.customId === ids_1.TICKET_IDS.tools) {
+        const member = interaction.member;
+        if (!interaction.guild || !member || !(0, actions_1.canManageTicketActions)(member)) {
+            await interaction.reply({ content: "These tools are for support staff only.", flags: discord_js_1.MessageFlags.Ephemeral });
+            return true;
+        }
+        const ticket = interaction.channelId ? (0, store_1.findTicketByChannel)(interaction.channelId) : null;
+        if (!ticket || ticket.guildId !== interaction.guild.id) {
+            await interaction.reply({ content: "This ticket is no longer tracked.", flags: discord_js_1.MessageFlags.Ephemeral });
+            return true;
+        }
+        await interaction.reply({
+            embeds: [(0, opsPanel_1.buildTicketStaffEmbed)(ticket)],
+            components: (0, opsPanel_1.buildTicketStaffComponents)(ticket),
+            allowedMentions: { parse: [] },
+            flags: discord_js_1.MessageFlags.Ephemeral
+        });
+        return true;
+    }
     if (interaction.isButton() && interaction.customId === ids_1.TICKET_IDS.open) {
         const guild = interaction.guild;
         if (!guild) {
@@ -133,36 +152,28 @@ async function handleTicketButtonInteraction(interaction) {
             await interaction.reply({ content: "This action must be used inside a ticket channel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
+        const member = interaction.member;
+        if (!member || !(0, actions_1.canManageTicketActions)(member)) {
+            await interaction.reply({ content: "Only support staff can close tickets.", flags: discord_js_1.MessageFlags.Ephemeral });
+            return true;
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         const tracked = await (0, records_1.ensureTrackedTicketByChannelId)(guild, interaction.channel.id, interaction.user.id);
         if (!tracked) {
-            await interaction.reply({ content: "This channel is not a tracked ticket and could not be imported.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: "This channel is not a tracked ticket and could not be imported." });
             return true;
         }
         const ticket = (0, store_1.findOpenTicketByChannel)(interaction.channel.id);
         if (!ticket) {
-            await interaction.reply({ content: "This is not an open ticket.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
-            return true;
-        }
-        const member = interaction.member;
-        if (!member || !(0, actions_1.canManageTicketActions)(member)) {
-            await interaction.reply({ content: "Only admins or the handler role can archive tickets.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: "This ticket is already closed." });
             return true;
         }
         const msg = await (0, channels_1.closeTicketChannel)(guild, interaction.channel.id, interaction.user.id, "Archived by support panel action");
         const archived = (0, store_1.findArchivedTicketByChannel)(interaction.channel.id);
-        if (archived) {
-            await interaction.reply({
-                embeds: [(0, opsPanel_1.buildTicketCommandEmbed)("🔒 Ticket Archived", "Ticket moved to archive hold queue from panel action.", archived, [
-                        { name: "Archived By", value: `<@${interaction.user.id}>`, inline: true },
-                        { name: "Reason", value: "Archived by support panel action", inline: false },
-                        { name: "Next Step", value: "Use resolve button or `/resolveticket` when fully complete." }
-                    ])],
-                flags: discord_js_1.MessageFlags.Ephemeral
-            }).catch(() => undefined);
-        }
-        else {
-            await interaction.reply({ content: msg, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
-        }
+        await interaction.editReply({
+            content: archived ? `Ticket #${archived.id} closed. Staff can reopen it or finish it from Staff Tools.` : msg,
+            allowedMentions: { parse: [] }
+        });
         return true;
     }
     if (interaction.isButton() && interaction.customId === ids_1.TICKET_IDS.claim) {
@@ -176,21 +187,9 @@ async function handleTicketButtonInteraction(interaction) {
             await interaction.reply({ content: "Only admins or the handler role can claim tickets.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         const msg = await (0, channels_1.claimTicketChannel)(guild, interaction.channel.id, interaction.user.id);
-        const claimed = (0, store_1.findTicketByChannel)(interaction.channel.id);
-        if (claimed && msg.toLowerCase().includes("claimed")) {
-            await interaction.reply({
-                embeds: [(0, opsPanel_1.buildTicketCommandEmbed)("🛠️ Ticket Claimed", "Claim succeeded and panel values were updated live.", claimed, [
-                        { name: "Claimed By", value: `<@${interaction.user.id}>`, inline: true },
-                        { name: "Result", value: msg, inline: false },
-                        { name: "Next Step", value: "Assign handler (`/ticketassign`) or update workflow (`/ticketstatus`)." }
-                    ])],
-                flags: discord_js_1.MessageFlags.Ephemeral
-            }).catch(() => undefined);
-        }
-        else {
-            await interaction.reply({ content: msg, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
-        }
+        await interaction.editReply({ content: msg, allowedMentions: { parse: [] } });
         return true;
     }
     if (interaction.isButton() && interaction.customId === ids_1.TICKET_IDS.resolve) {
@@ -199,36 +198,24 @@ async function handleTicketButtonInteraction(interaction) {
             await interaction.reply({ content: "This action must be used inside a ticket channel.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
+        const member = interaction.member;
+        if (!member || !(0, actions_1.canManageTicketActions)(member)) {
+            await interaction.reply({ content: "Only support staff can permanently resolve tickets.", flags: discord_js_1.MessageFlags.Ephemeral });
+            return true;
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         const tracked = await (0, records_1.ensureTrackedTicketByChannelId)(guild, interaction.channel.id, interaction.user.id);
         if (!tracked) {
-            await interaction.reply({ content: "This channel is not a tracked ticket and could not be imported.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: "This channel is not a tracked ticket and could not be imported." });
             return true;
         }
         const ticket = (0, store_1.findArchivedTicketByChannel)(interaction.channel.id);
         if (!ticket) {
-            await interaction.reply({ content: "This ticket must be archived before it can be permanently resolved.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
-            return true;
-        }
-        const member = interaction.member;
-        if (!member || !(0, actions_1.canManageTicketActions)(member)) {
-            await interaction.reply({ content: "Only admins or the handler role can permanently resolve tickets.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: "Close this ticket before permanently resolving it." });
             return true;
         }
         const msg = await (0, channels_1.resolveTicketChannel)(guild, interaction.channel.id, interaction.user.id, "Resolved by support panel action");
-        const resolved = (0, store_1.findTicketByChannel)(interaction.channel.id);
-        if (resolved && (0, store_1.normalizeTicketStatus)(resolved.status) === "resolved") {
-            await interaction.reply({
-                embeds: [(0, opsPanel_1.buildTicketCommandEmbed)("✅ Ticket Resolved Permanently", "Ticket was resolved and closed out from panel action.", resolved, [
-                        { name: "Resolved By", value: `<@${interaction.user.id}>`, inline: true },
-                        { name: "Resolution", value: "Resolved by support panel action", inline: false },
-                        { name: "Transcript", value: resolved.transcript ? "Captured in ticket metadata/logs." : "No transcript snapshot available." }
-                    ])],
-                flags: discord_js_1.MessageFlags.Ephemeral
-            }).catch(() => undefined);
-        }
-        else {
-            await interaction.reply({ content: msg, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
-        }
+        await interaction.editReply({ content: msg, allowedMentions: { parse: [] } });
         return true;
     }
     return false;

@@ -4,7 +4,11 @@ exports.buildTicketCommandEmbed = buildTicketCommandEmbed;
 exports.buildTicketCommandEmbedPayload = buildTicketCommandEmbedPayload;
 exports.getTicketNextActionHint = getTicketNextActionHint;
 exports.buildTicketOpsEmbed = buildTicketOpsEmbed;
+exports.buildTicketOpsComponents = buildTicketOpsComponents;
+exports.buildTicketStaffComponents = buildTicketStaffComponents;
+exports.buildTicketStaffEmbed = buildTicketStaffEmbed;
 exports.updateTicketOpsPanelMessage = updateTicketOpsPanelMessage;
+exports.refreshTicketPanelsForGuild = refreshTicketPanelsForGuild;
 // Ticket command embeds and the ticket ops panel.
 const discord_js_1 = require("discord.js");
 const ticketEnhancements_1 = require("../../services/ticketEnhancements");
@@ -12,6 +16,8 @@ const client_1 = require("../core/client");
 const store_1 = require("./store");
 const records_1 = require("./records");
 const embeds_1 = require("../ui/embeds");
+const ids_1 = require("../ui/ids");
+const staffHub_1 = require("../../features/staffHub");
 function buildTicketCommandEmbed(title, description, ticket, fields = []) {
     const statusEmoji = {
         open: "🟢",
@@ -62,6 +68,61 @@ function getTicketNextActionHint(ticket) {
     return "Update workflow as the case progresses.";
 }
 function buildTicketOpsEmbed(ticket) {
+    const status = (0, store_1.normalizeTicketStatus)(ticket.status);
+    const statusLabel = status === "archived" ? "Closed"
+        : status === "resolved" ? "Resolved"
+            : ticket.workflowStatus === "waiting_user" ? "Waiting for your reply"
+                : ticket.workflowStatus === "escalated" ? "Under review"
+                    : ticket.assignedToId || ticket.claimedById ? "In progress" : "Waiting for staff";
+    const intake = (0, ticketEnhancements_1.hydrateTicketIntakeFields)(ticket.reason, {
+        summary: ticket.intakeSummary,
+        details: ticket.intakeDetails,
+        platform: ticket.intakePlatform,
+        orderId: ticket.intakeOrderId,
+        evidence: ticket.intakeEvidence
+    });
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle(`Support Ticket #${ticket.id}`)
+        .setDescription(intake.summary.slice(0, 120))
+        .addFields({ name: "Member", value: `<@${ticket.ownerId}>`, inline: true }, { name: "Status", value: statusLabel, inline: true }, { name: "Handler", value: ticket.assignedToId || ticket.claimedById
+            ? `<@${ticket.assignedToId || ticket.claimedById}>` : "Not assigned yet", inline: true }, { name: "Your request", value: intake.details.slice(0, 700) });
+    const reference = [
+        intake.platform !== "Not provided" ? intake.platform : "",
+        intake.orderId
+    ].filter(Boolean).join(" • ");
+    if (reference)
+        embed.addFields({ name: "Reference", value: reference.slice(0, 300) });
+    if (intake.evidence !== "No evidence provided") {
+        embed.addFields({ name: "Attachments / links", value: intake.evidence.slice(0, 450) });
+    }
+    embed.setFooter({ text: status === "archived" || status === "resolved"
+            ? "This ticket is closed. Contact staff if you need it reviewed."
+            : "Reply here to continue. You can add screenshots or files." });
+    return (0, embeds_1.sanitizeEmbedBuilder)(embed);
+}
+function buildTicketOpsComponents(ticket) {
+    const status = (0, store_1.normalizeTicketStatus)(ticket.status);
+    const closed = status === "archived" || status === "resolved";
+    const row = new discord_js_1.ActionRowBuilder();
+    if (!closed) {
+        row.addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.claim)
+            .setLabel(ticket.claimedById ? "Claimed" : "Claim Ticket")
+            .setStyle(discord_js_1.ButtonStyle.Primary).setDisabled(Boolean(ticket.claimedById)), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.close).setLabel("Close Ticket").setStyle(discord_js_1.ButtonStyle.Secondary));
+    }
+    row.addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.tools)
+        .setLabel("Staff Tools").setStyle(discord_js_1.ButtonStyle.Secondary));
+    return [row];
+}
+function buildTicketStaffComponents(ticket) {
+    const status = (0, store_1.normalizeTicketStatus)(ticket.status);
+    return [
+        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.resolve).setLabel("Resolve Permanently")
+            .setStyle(discord_js_1.ButtonStyle.Danger).setDisabled(status !== "archived"), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.watch).setLabel("Watch Ticket").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(staffHub_1.STAFF_IDS.home).setLabel("Case History & Checklist").setStyle(discord_js_1.ButtonStyle.Primary)),
+        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.ack).setLabel("Acknowledgement").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.evidence).setLabel("Request Evidence").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.resolved).setLabel("Resolution Reply").setStyle(discord_js_1.ButtonStyle.Secondary))
+    ];
+}
+function buildTicketStaffEmbed(ticket) {
     const policy = ticket.slaPolicy || (0, ticketEnhancements_1.getTicketSlaPolicy)(ticket.category || "general", ticket.priority);
     const sla = (0, records_1.getTicketSlaState)(ticket, Date.now(), {
         firstResponseWarnMs: Math.max(60000, Math.floor(policy.firstResponseMs * 0.66)),
@@ -85,26 +146,22 @@ function buildTicketOpsEmbed(ticket) {
         orderId: ticket.intakeOrderId,
         evidence: ticket.intakeEvidence
     });
-    const intakeSummary = intake.summary || "General support";
-    const intakeCategory = intake.category || String(ticket.category || "general");
-    const intakeDetails = intake.details || "No details provided.";
-    const intakePlatform = intake.platform || "Not provided";
-    const intakeEvidence = intake.evidence || "No evidence provided";
-    const statusLabel = `${status === "open" ? "🟢" : status === "claimed" ? "🛠️" : status === "archived" ? "🗂️" : "✅"} ${status.toUpperCase()}`;
-    const workflowLabel = `${ticket.workflowStatus === "new" ? "🆕" : ticket.workflowStatus === "responded" ? "💬" : ticket.workflowStatus === "waiting_user" ? "⏳" : ticket.workflowStatus === "escalated" ? "🚨" : "✅"} ${ticket.workflowStatus}`;
-    const priorityLabel = `${ticket.priority === "low" ? "🟦" : ticket.priority === "normal" ? "🟨" : "🟥"} ${ticket.priority.toUpperCase()}`;
-    const intakeSnapshot = [
-        `Summary: ${intakeSummary.slice(0, 200)}`,
-        `Details: ${intakeDetails.slice(0, 450)}`,
-        `Platform / Order: ${intakePlatform === "Not provided" ? "Not provided" : intakePlatform.slice(0, 200)}`,
-        `Evidence: ${intakeEvidence.slice(0, 450)}`
-    ].join("\n");
-    return (0, embeds_1.brandLiveEmbed)(new discord_js_1.EmbedBuilder()
-        .setColor(0x14b8a6)
-        .setTitle(`🏛️ FN Support • Case #${ticket.id} Command Deck`)
-        .setDescription("Premium live operations panel for this case.\nStatus, assignment, workflow, and SLA indicators refresh automatically as handlers progress resolution.")
-        .addFields({ name: "👤 Requester", value: `<@${ticket.ownerId}>`, inline: true }, { name: "🕒 Opened At", value: `<t:${Math.floor(ticket.createdAt / 1000)}:f>`, inline: true }, { name: "📍 Ticket Thread", value: `<#${ticket.channelId}>`, inline: true }, { name: "⚡ Priority Tier", value: priorityLabel, inline: true }, { name: "🏷️ Submitted Category", value: intakeCategory, inline: true }, { name: "🧭 Workflow Lane", value: workflowLabel, inline: true }, { name: "🛠️ Claim Lead", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed yet", inline: true }, { name: "🎯 Assigned Specialist", value: ticket.assignedToId ? `<@${ticket.assignedToId}>` : "Unassigned", inline: true }, { name: "📌 Lifecycle", value: statusLabel, inline: true }, { name: "📥 Intake Snapshot", value: intakeSnapshot, inline: false }, { name: "⏱️ SLA Clock", value: `• Policy: ${policy.name}\n• First response target: ${Math.round(policy.firstResponseMs / 60000)}m (${firstResponseStatus})\n• Resolution target: ${Math.round(policy.resolveMs / 3600000)}h (${resolveStatus})`, inline: false }, { name: "🧬 Case Graph", value: `Parent: ${ticket.parentTicketId ? `#${ticket.parentTicketId}` : "none"} | Linked: ${ticket.linkedTicketId ? `#${ticket.linkedTicketId}` : "none"} | Merged Into: ${ticket.mergedIntoTicketId ? `#${ticket.mergedIntoTicketId}` : "none"}`, inline: false }, { name: "➡️ Recommended Move", value: nextAction, inline: false }, { name: "🧰 Command Strip", value: "`/claimticket` ` /ticketassign` ` /ticketstatus` ` /reopenticket` ` /closeticket` ` /resolveticket`", inline: false })
-        .setFooter({ text: `FN Support Tickets • Case #${ticket.id} • Live sync` }), "FN Support Command Deck", "Live case operations");
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle(`Staff • Ticket #${ticket.id}`)
+        .setDescription("• `/ticketassign` — change handler\n• `/ticketstatus` — update status\n• `/reopenticket` — reopen a closed case\n• Close the ticket before permanently resolving it.")
+        .addFields({ name: "Priority", value: ticket.priority, inline: true }, { name: "Topic", value: intake.category.slice(0, 40), inline: true }, { name: "State", value: `${status} • ${ticket.workflowStatus}`, inline: true }, { name: "SLA Clock", value: `First reply: ${Math.round(policy.firstResponseMs / 60000)}m • ${firstResponseStatus}\nResolution: ${Math.round(policy.resolveMs / 3600000)}h • ${resolveStatus}` }, { name: "Next step", value: nextAction });
+    const links = [
+        ticket.parentTicketId ? `Parent: #${ticket.parentTicketId}` : "",
+        ticket.linkedTicketId ? `Linked: #${ticket.linkedTicketId}` : "",
+        ticket.mergedIntoTicketId ? `Merged into: #${ticket.mergedIntoTicketId}` : ""
+    ].filter(Boolean);
+    if (links.length)
+        embed.addFields({ name: "Related cases", value: links.join(" • ") });
+    if (ticket.claimedById && ticket.claimedById !== ticket.assignedToId) {
+        embed.addFields({ name: "Claimed by", value: `<@${ticket.claimedById}>` });
+    }
+    return (0, embeds_1.sanitizeEmbedBuilder)(embed);
 }
 async function updateTicketOpsPanelMessage(guild, ticket) {
     const channel = (guild.channels.cache.get(ticket.channelId)
@@ -124,7 +181,8 @@ async function updateTicketOpsPanelMessage(guild, ticket) {
                 break;
             const candidate = batch.find(message => message.author.id === (client_1.client.user?.id || "")
                 && (message.embeds[0]?.title?.startsWith(legacyPrefix)
-                    || message.embeds[0]?.title?.startsWith(premiumPrefix)));
+                    || message.embeds[0]?.title?.startsWith(premiumPrefix)
+                    || message.embeds[0]?.title === `Support Ticket #${ticket.id}`));
             if (candidate) {
                 candidateId = candidate.id;
                 break;
@@ -144,5 +202,21 @@ async function updateTicketOpsPanelMessage(guild, ticket) {
     const panelMessage = await channel.messages.fetch(panelMessageId).catch(() => null);
     if (!panelMessage)
         return;
-    await panelMessage.edit({ embeds: [buildTicketOpsEmbed(ticket)], components: panelMessage.components }).catch(() => undefined);
+    await panelMessage.edit({
+        embeds: [buildTicketOpsEmbed(ticket)],
+        components: buildTicketOpsComponents(ticket),
+        allowedMentions: { parse: [] }
+    }).catch(error => {
+        console.error(`Could not refresh ticket #${ticket.id} panel:`, error);
+    });
+}
+async function refreshTicketPanelsForGuild(guild) {
+    for (const ticket of store_1.ticketStore.tickets.filter(ticket => ticket.guildId === guild.id && (0, store_1.normalizeTicketStatus)(ticket.status) !== "resolved")) {
+        try {
+            await updateTicketOpsPanelMessage(guild, ticket);
+        }
+        catch (error) {
+            console.error(`Could not migrate ticket #${ticket.id} panel:`, error);
+        }
+    }
 }

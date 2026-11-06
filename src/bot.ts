@@ -52,6 +52,7 @@ import { handleEconomyInteraction } from "./bot/interactions/economy";
 import { handleTicketButtonInteraction } from "./bot/interactions/tickets";
 import { handleRaidInteraction } from "./bot/interactions/raids";
 import { handleChatInputCommand } from "./bot/interactions/commands";
+import { refreshTicketPanelsForGuild } from "./bot/tickets/opsPanel";
 
 // Entry point: wires Discord events, timers, and startup. Feature code lives in src/bot/ (see README "Project layout").
 let shuttingDown = false;
@@ -120,6 +121,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
                 await ensureAdminReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
+                await refreshTicketPanelsForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
             }
@@ -144,6 +146,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
                 await ensureAdminReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
                 await ensureBotFeatureBriefForGuild(guild);
+                await refreshTicketPanelsForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
             }

@@ -59,6 +59,7 @@ exports.TICKET_IDS = {
     close: "ticket_close",
     resolve: "ticket_resolve",
     watch: "ticket_watch",
+    tools: "ticket_staff_tools",
     intakeModal: "ticket_intake_modal",
     intakeCategory: "ticket_intake_category",
     intakeSummary: "ticket_intake_summary",

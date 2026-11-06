@@ -39,6 +39,7 @@ const economy_1 = require("./bot/interactions/economy");
 const tickets_1 = require("./bot/interactions/tickets");
 const raids_1 = require("./bot/interactions/raids");
 const commands_1 = require("./bot/interactions/commands");
+const opsPanel_1 = require("./bot/tickets/opsPanel");
 // Entry point: wires Discord events, timers, and startup. Feature code lives in src/bot/ (see README "Project layout").
 let shuttingDown = false;
 async function shutdown(reason, exitCode) {
@@ -107,6 +108,7 @@ client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("c
                 await (0, ticketPanels_1.ensureAdminReportPanelForGuild)(guild);
                 await (0, ticketPanels_1.ensurePermanentTicketPanelForGuild)(guild);
                 await (0, featureBrief_1.ensureBotFeatureBriefForGuild)(guild);
+                await (0, opsPanel_1.refreshTicketPanelsForGuild)(guild);
                 await (0, welcome_1.ensureWelcomePanelForGuild)(guild);
                 await (0, community_1.upsertSelfRoleSelectorForGuild)(guild);
             }
@@ -131,6 +133,7 @@ client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("c
                 await (0, ticketPanels_1.ensureAdminReportPanelForGuild)(guild);
                 await (0, ticketPanels_1.ensurePermanentTicketPanelForGuild)(guild);
                 await (0, featureBrief_1.ensureBotFeatureBriefForGuild)(guild);
+                await (0, opsPanel_1.refreshTicketPanelsForGuild)(guild);
                 await (0, welcome_1.ensureWelcomePanelForGuild)(guild);
                 await (0, community_1.upsertSelfRoleSelectorForGuild)(guild);
             }

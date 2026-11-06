@@ -4,17 +4,37 @@ import { finalizeGiveaway, getGiveawayById, saveGiveawayStore, syncGiveawayMessa
 import { appendAuditEvent } from "../core/audit";
 import {
     addTicketWatcher, findArchivedTicketByChannel, findOpenTicketByChannel, findTicketByChannel,
-    normalizeTicketStatus, recordTicketEvent, TICKET_RESPONSE_TEMPLATES, TICKET_TEMPLATE_IDS
+    recordTicketEvent, TICKET_RESPONSE_TEMPLATES, TICKET_TEMPLATE_IDS
 } from "../tickets/store";
 import { buildAdminReportIntakeModal, buildRaidItemGiveawayModal, buildTicketIntakeModal } from "../ui/modals";
 import { ensureTrackedTicketByChannelId } from "../tickets/records";
-import { buildTicketCommandEmbed } from "../tickets/opsPanel";
+import { buildTicketStaffComponents, buildTicketStaffEmbed } from "../tickets/opsPanel";
 import { canManageTicketActions } from "../tickets/actions";
 import { GIVEAWAY_IDS, REPORT_IDS, TICKET_IDS } from "../ui/ids";
 import { claimTicketChannel, closeTicketChannel, resolveTicketChannel } from "../tickets/channels";
 
 /** Ticket, report, and giveaway panel buttons. */
 export async function handleTicketButtonInteraction(interaction: Interaction): Promise<boolean> {
+    if (interaction.isButton() && interaction.customId === TICKET_IDS.tools) {
+        const member = interaction.member as GuildMember | null;
+        if (!interaction.guild || !member || !canManageTicketActions(member)) {
+            await interaction.reply({ content: "These tools are for support staff only.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        const ticket = interaction.channelId ? findTicketByChannel(interaction.channelId) : null;
+        if (!ticket || ticket.guildId !== interaction.guild.id) {
+            await interaction.reply({ content: "This ticket is no longer tracked.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await interaction.reply({
+            embeds: [buildTicketStaffEmbed(ticket)],
+            components: buildTicketStaffComponents(ticket),
+            allowedMentions: { parse: [] },
+            flags: MessageFlags.Ephemeral
+        });
+        return true;
+    }
+
     if (interaction.isButton() && interaction.customId === TICKET_IDS.open) {
         const guild = interaction.guild;
         if (!guild) {
@@ -141,41 +161,29 @@ export async function handleTicketButtonInteraction(interaction: Interaction): P
             await interaction.reply({ content: "This action must be used inside a ticket channel.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
+        const member = interaction.member as GuildMember | null;
+        if (!member || !canManageTicketActions(member)) {
+            await interaction.reply({ content: "Only support staff can close tickets.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const tracked = await ensureTrackedTicketByChannelId(guild, interaction.channel.id, interaction.user.id);
         if (!tracked) {
-            await interaction.reply({ content: "This channel is not a tracked ticket and could not be imported.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: "This channel is not a tracked ticket and could not be imported." });
             return true;
         }
         const ticket = findOpenTicketByChannel(interaction.channel.id);
         if (!ticket) {
-            await interaction.reply({ content: "This is not an open ticket.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
-            return true;
-        }
-        const member = interaction.member as GuildMember | null;
-        if (!member || !canManageTicketActions(member)) {
-            await interaction.reply({ content: "Only admins or the handler role can archive tickets.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: "This ticket is already closed." });
             return true;
         }
 
         const msg = await closeTicketChannel(guild, interaction.channel.id, interaction.user.id, "Archived by support panel action");
         const archived = findArchivedTicketByChannel(interaction.channel.id);
-        if (archived) {
-            await interaction.reply({
-                embeds: [buildTicketCommandEmbed(
-                    "🔒 Ticket Archived",
-                    "Ticket moved to archive hold queue from panel action.",
-                    archived,
-                    [
-                        { name: "Archived By", value: `<@${interaction.user.id}>`, inline: true },
-                        { name: "Reason", value: "Archived by support panel action", inline: false },
-                        { name: "Next Step", value: "Use resolve button or `/resolveticket` when fully complete." }
-                    ]
-                )],
-                flags: MessageFlags.Ephemeral
-            }).catch(() => undefined);
-        } else {
-            await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => undefined);
-        }
+        await interaction.editReply({
+            content: archived ? `Ticket #${archived.id} closed. Staff can reopen it or finish it from Staff Tools.` : msg,
+            allowedMentions: { parse: [] }
+        });
         return true;
     }
 
@@ -191,25 +199,9 @@ export async function handleTicketButtonInteraction(interaction: Interaction): P
             return true;
         }
 
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const msg = await claimTicketChannel(guild, interaction.channel.id, interaction.user.id);
-        const claimed = findTicketByChannel(interaction.channel.id);
-        if (claimed && msg.toLowerCase().includes("claimed")) {
-            await interaction.reply({
-                embeds: [buildTicketCommandEmbed(
-                    "🛠️ Ticket Claimed",
-                    "Claim succeeded and panel values were updated live.",
-                    claimed,
-                    [
-                        { name: "Claimed By", value: `<@${interaction.user.id}>`, inline: true },
-                        { name: "Result", value: msg, inline: false },
-                        { name: "Next Step", value: "Assign handler (`/ticketassign`) or update workflow (`/ticketstatus`)." }
-                    ]
-                )],
-                flags: MessageFlags.Ephemeral
-            }).catch(() => undefined);
-        } else {
-            await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => undefined);
-        }
+        await interaction.editReply({ content: msg, allowedMentions: { parse: [] } });
         return true;
     }
 
@@ -219,41 +211,25 @@ export async function handleTicketButtonInteraction(interaction: Interaction): P
             await interaction.reply({ content: "This action must be used inside a ticket channel.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
+        const member = interaction.member as GuildMember | null;
+        if (!member || !canManageTicketActions(member)) {
+            await interaction.reply({ content: "Only support staff can permanently resolve tickets.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const tracked = await ensureTrackedTicketByChannelId(guild, interaction.channel.id, interaction.user.id);
         if (!tracked) {
-            await interaction.reply({ content: "This channel is not a tracked ticket and could not be imported.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: "This channel is not a tracked ticket and could not be imported." });
             return true;
         }
         const ticket = findArchivedTicketByChannel(interaction.channel.id);
         if (!ticket) {
-            await interaction.reply({ content: "This ticket must be archived before it can be permanently resolved.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
-            return true;
-        }
-        const member = interaction.member as GuildMember | null;
-        if (!member || !canManageTicketActions(member)) {
-            await interaction.reply({ content: "Only admins or the handler role can permanently resolve tickets.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: "Close this ticket before permanently resolving it." });
             return true;
         }
 
         const msg = await resolveTicketChannel(guild, interaction.channel.id, interaction.user.id, "Resolved by support panel action");
-        const resolved = findTicketByChannel(interaction.channel.id);
-        if (resolved && normalizeTicketStatus(resolved.status) === "resolved") {
-            await interaction.reply({
-                embeds: [buildTicketCommandEmbed(
-                    "✅ Ticket Resolved Permanently",
-                    "Ticket was resolved and closed out from panel action.",
-                    resolved,
-                    [
-                        { name: "Resolved By", value: `<@${interaction.user.id}>`, inline: true },
-                        { name: "Resolution", value: "Resolved by support panel action", inline: false },
-                        { name: "Transcript", value: resolved.transcript ? "Captured in ticket metadata/logs." : "No transcript snapshot available." }
-                    ]
-                )],
-                flags: MessageFlags.Ephemeral
-            }).catch(() => undefined);
-        } else {
-            await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => undefined);
-        }
+        await interaction.editReply({ content: msg, allowedMentions: { parse: [] } });
         return true;
     }
     return false;

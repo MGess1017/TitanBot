@@ -1,7 +1,6 @@
 // Ticket channel creation, claiming, closing, and resolution.
 import {
-    ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, Guild, GuildMember,
-    PermissionFlagsBits
+    ChannelType, EmbedBuilder, Guild, GuildMember, PermissionFlagsBits
 } from "discord.js";
 import path from "path";
 import { hydrateTicketIntakeFields } from "../../services/ticketEnhancements";
@@ -16,7 +15,7 @@ import { appendAuditEvent } from "../core/audit";
 import {
     applyTicketMetadata, autoRouteTicket, ensureTicketConfig, evaluateTicketDeflection,
     findOpenTicketByOwnerInBucket, findTicketByChannel, getTicketCaseBucket, normalizeTicketStatus,
-    saveTicketStore, TICKET_TEMPLATE_IDS, type TicketCaseBucket, type TicketPriority, ticketStore
+    saveTicketStore, type TicketCaseBucket, type TicketPriority, ticketStore
 } from "./store";
 import {
     archiveTicketByChannel, buildTicketCsatButtons, claimTicketByChannel, createTicketEntry,
@@ -24,8 +23,7 @@ import {
     pruneDeletedTicketRecords, pruneInaccessibleOwnerTicketRecords, purgeLegacyImportedTicketRecords,
     resolveTicketByChannel, sendTicketLog, setTicketPanelMessageId
 } from "./records";
-import { buildTicketOpsEmbed, updateTicketOpsPanelMessage } from "./opsPanel";
-import { TICKET_IDS } from "../ui/ids";
+import { buildTicketOpsComponents, buildTicketOpsEmbed, updateTicketOpsPanelMessage } from "./opsPanel";
 import { BOT_SRC_DIR } from "../core/paths";
 
 function isOwnerTopicMatch(topic: string | null | undefined, ownerId: string): boolean {
@@ -250,34 +248,10 @@ export async function createTicketChannel(guild: Guild, ownerId: string, reason:
     appendAuditEvent("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason, intake });
 
     const intro = buildTicketOpsEmbed(ticket);
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-            .setCustomId(TICKET_IDS.claim)
-            .setLabel("Claim Ticket")
-            .setEmoji("🛠️")
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId(TICKET_IDS.close)
-            .setLabel("Archive Ticket")
-            .setEmoji("🔒")
-            .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-            .setCustomId(TICKET_IDS.resolve)
-            .setLabel("Resolve Permanently")
-            .setEmoji("✅")
-            .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-            .setCustomId(TICKET_IDS.watch)
-            .setLabel("Watch")
-            .setEmoji("👁️")
-            .setStyle(ButtonStyle.Primary)
-    );
-    const templateRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.ack).setLabel("Ack Template").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.evidence).setLabel("Evidence Template").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.resolved).setLabel("Resolved Template").setStyle(ButtonStyle.Success)
-    );
-    const panelMessage = await created.send({ content: `<@&${TICKET_HANDLER_ROLE_ID}> <@${owner.id}>`, embeds: [intro], components: [row, templateRow], allowedMentions: { parse: ["roles", "users"] } }).catch(() => null);
+    const panelMessage = await created.send({ content: `<@&${TICKET_HANDLER_ROLE_ID}> <@${owner.id}>`, embeds: [intro], components: buildTicketOpsComponents(ticket), allowedMentions: { parse: ["roles", "users"] } }).catch(error => {
+        console.error(`Could not post ticket #${ticket.id} panel:`, error);
+        return null;
+    });
     if (panelMessage) {
         setTicketPanelMessageId(ticket.channelId, panelMessage.id);
     }
@@ -378,6 +352,7 @@ export async function closeTicketChannel(guild: Guild, channelId: string, closed
         { name: "Reopen Window", value: `Until <t:${Math.floor((ticket.reopenUntilAt || Date.now()) / 1000)}:f>` }
     ]);
     appendAuditEvent("ticket_archive", { guildId: guild.id, ticketId: ticket.id, closedById, channelId: ticket.channelId, closeReason });
+    await updateTicketOpsPanelMessage(guild, ticket);
 
     return `Archived ticket #${ticket.id} in hold queue. Reason: ${closeReason}`;
 }

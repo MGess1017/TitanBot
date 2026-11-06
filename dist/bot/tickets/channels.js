@@ -21,7 +21,6 @@ const audit_1 = require("../core/audit");
 const store_1 = require("./store");
 const records_1 = require("./records");
 const opsPanel_1 = require("./opsPanel");
-const ids_1 = require("../ui/ids");
 const paths_1 = require("../core/paths");
 function isOwnerTopicMatch(topic, ownerId) {
     return (0, records_1.findChannelOwnerFromTopic)(topic) === ownerId;
@@ -222,25 +221,10 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
         (0, store_1.applyTicketMetadata)(ticket, reason);
         (0, audit_1.appendAuditEvent)("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason, intake });
         const intro = (0, opsPanel_1.buildTicketOpsEmbed)(ticket);
-        const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
-            .setCustomId(ids_1.TICKET_IDS.claim)
-            .setLabel("Claim Ticket")
-            .setEmoji("🛠️")
-            .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
-            .setCustomId(ids_1.TICKET_IDS.close)
-            .setLabel("Archive Ticket")
-            .setEmoji("🔒")
-            .setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
-            .setCustomId(ids_1.TICKET_IDS.resolve)
-            .setLabel("Resolve Permanently")
-            .setEmoji("✅")
-            .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
-            .setCustomId(ids_1.TICKET_IDS.watch)
-            .setLabel("Watch")
-            .setEmoji("👁️")
-            .setStyle(discord_js_1.ButtonStyle.Primary));
-        const templateRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.ack).setLabel("Ack Template").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.evidence).setLabel("Evidence Template").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.resolved).setLabel("Resolved Template").setStyle(discord_js_1.ButtonStyle.Success));
-        const panelMessage = await created.send({ content: `<@&${config_1.TICKET_HANDLER_ROLE_ID}> <@${owner.id}>`, embeds: [intro], components: [row, templateRow], allowedMentions: { parse: ["roles", "users"] } }).catch(() => null);
+        const panelMessage = await created.send({ content: `<@&${config_1.TICKET_HANDLER_ROLE_ID}> <@${owner.id}>`, embeds: [intro], components: (0, opsPanel_1.buildTicketOpsComponents)(ticket), allowedMentions: { parse: ["roles", "users"] } }).catch(error => {
+            console.error(`Could not post ticket #${ticket.id} panel:`, error);
+            return null;
+        });
         if (panelMessage) {
             (0, records_1.setTicketPanelMessageId)(ticket.channelId, panelMessage.id);
         }
@@ -335,6 +319,7 @@ async function closeTicketChannel(guild, channelId, closedById, closeReason) {
         { name: "Reopen Window", value: `Until <t:${Math.floor((ticket.reopenUntilAt || Date.now()) / 1000)}:f>` }
     ]);
     (0, audit_1.appendAuditEvent)("ticket_archive", { guildId: guild.id, ticketId: ticket.id, closedById, channelId: ticket.channelId, closeReason });
+    await (0, opsPanel_1.updateTicketOpsPanelMessage)(guild, ticket);
     return `Archived ticket #${ticket.id} in hold queue. Reason: ${closeReason}`;
 }
 async function claimTicketChannel(guild, channelId, claimerId) {

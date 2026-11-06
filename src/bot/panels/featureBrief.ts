@@ -1,10 +1,10 @@
 // Bot feature brief panel.
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, DiscordAPIError, EmbedBuilder, Guild } from "discord.js";
-import { BOT_FEATURE_BRIEF_CHANNEL_ID } from "../core/config";
+import { BOT_FEATURE_BRIEF_CHANNEL_ID, PERMANENT_TICKET_PANEL_CHANNEL_ID } from "../core/config";
 import { client } from "../core/client";
 import { appendAuditEvent } from "../core/audit";
 import { getGuildPanelMessageId, setGuildPanelMessageId } from "../moderation/store";
-import { ONBOARDING_IDS, TICKET_IDS } from "../ui/ids";
+import { ONBOARDING_IDS } from "../ui/ids";
 import { brandLiveEmbed } from "../ui/embeds";
 
 export function buildBotFeatureBriefPayload() {
@@ -16,13 +16,12 @@ export function buildBotFeatureBriefPayload() {
             "• **Start free:** claim FN Token$ with `/daily`.",
             "• **Go raiding:** `/raid` earns loot and PMC XP. Start with a small bet and low risk.",
             "• **Earn server XP:** chat or join voice, then check `/xp`.",
-            "• **Need help?** Browse commands or open a private support ticket below."
+            `• **Need help?** Open a private ticket in <#${PERMANENT_TICKET_PANEL_CHANNEL_ID}>.`
         ].join("\n")), "FNT", "FNT • Member Guide");
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(ONBOARDING_IDS.start).setLabel("Get Started").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(ONBOARDING_IDS.commands).setLabel("Command Guide").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(TICKET_IDS.open).setLabel("Open Support Ticket").setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId(ONBOARDING_IDS.commands).setLabel("Command Guide").setStyle(ButtonStyle.Secondary)
     );
 
     return {
