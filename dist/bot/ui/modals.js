@@ -11,43 +11,36 @@ const ids_1 = require("./ids");
 function buildTicketIntakeModal() {
     const summaryInput = new discord_js_1.TextInputBuilder()
         .setCustomId(ids_1.TICKET_IDS.intakeSummary)
-        .setLabel("Issue Summary")
+        .setLabel("What do you need help with?")
         .setStyle(discord_js_1.TextInputStyle.Short)
         .setRequired(true)
         .setMaxLength(120)
         .setPlaceholder("Short title: what do you need help with?");
     const categoryInput = new discord_js_1.TextInputBuilder()
         .setCustomId(ids_1.TICKET_IDS.intakeCategory)
-        .setLabel("Category")
+        .setLabel("Topic (optional)")
         .setStyle(discord_js_1.TextInputStyle.Short)
-        .setRequired(true)
+        .setRequired(false)
         .setMaxLength(40)
         .setPlaceholder("bug, billing, account, report, appeal, general");
     const detailsInput = new discord_js_1.TextInputBuilder()
         .setCustomId(ids_1.TICKET_IDS.intakeDetails)
-        .setLabel("Details")
+        .setLabel("Tell us what happened")
         .setStyle(discord_js_1.TextInputStyle.Paragraph)
         .setRequired(true)
-        .setMaxLength(900)
-        .setPlaceholder("Reproduction steps, timestamps, expected vs actual behavior.");
-    const platformInput = new discord_js_1.TextInputBuilder()
-        .setCustomId(ids_1.TICKET_IDS.intakePlatform)
-        .setLabel("Platform / Order ID")
-        .setStyle(discord_js_1.TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(80)
-        .setPlaceholder("PC / iOS / Order #...");
+        .setMaxLength(700)
+        .setPlaceholder("What happened and what help you need. Add times or an order ID if relevant.");
     const evidenceInput = new discord_js_1.TextInputBuilder()
         .setCustomId(ids_1.TICKET_IDS.intakeEvidence)
-        .setLabel("Evidence Links")
+        .setLabel("Screenshot / message links")
         .setStyle(discord_js_1.TextInputStyle.Paragraph)
         .setRequired(false)
         .setMaxLength(400)
-        .setPlaceholder("Screenshots, clips, logs, message links.");
+        .setPlaceholder("Links required for reports, appeals, or billing. Otherwise optional. Add files in the ticket.");
     return new discord_js_1.ModalBuilder()
         .setCustomId(ids_1.TICKET_IDS.intakeModal)
-        .setTitle("Smart Ticket Intake")
-        .addComponents(new discord_js_1.ActionRowBuilder().addComponents(summaryInput), new discord_js_1.ActionRowBuilder().addComponents(categoryInput), new discord_js_1.ActionRowBuilder().addComponents(detailsInput), new discord_js_1.ActionRowBuilder().addComponents(platformInput), new discord_js_1.ActionRowBuilder().addComponents(evidenceInput));
+        .setTitle("Open Support Ticket")
+        .addComponents(new discord_js_1.ActionRowBuilder().addComponents(summaryInput), new discord_js_1.ActionRowBuilder().addComponents(detailsInput), new discord_js_1.ActionRowBuilder().addComponents(categoryInput), new discord_js_1.ActionRowBuilder().addComponents(evidenceInput));
 }
 function buildAdminReportIntakeModal() {
     const targetInput = new discord_js_1.TextInputBuilder()

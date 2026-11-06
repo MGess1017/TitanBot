@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveXpRoleLines = resolveXpRoleLines;
 exports.buildThemedRoleSections = buildThemedRoleSections;
 exports.helpDropdown = helpDropdown;
+exports.buildGettingStartedEmbed = buildGettingStartedEmbed;
 exports.buildHelpPayload = buildHelpPayload;
 exports.getAvatar = getAvatar;
 // The /help pages and XP role listings.
@@ -80,6 +81,19 @@ function helpDropdown(selected = "general") {
             .addOptions({ label: "Mission Brief", value: ids_1.HELP_IDS.general, description: "Main command overview", emoji: "🪖", default: selected === "general" }, { label: "XP Ops", value: ids_1.HELP_IDS.xp, description: "XP, levels, and progression", emoji: "🎖️", default: selected === "xp" }, { label: "Raid Ops", value: ids_1.HELP_IDS.raids, description: "Raids and risk settings", emoji: "⚔️", default: selected === "raids" }, { label: "Supply Crates", value: ids_1.HELP_IDS.shop, description: "Shop, items, and inventory", emoji: "📦", default: selected === "shop" }, { label: "Training Grounds", value: ids_1.HELP_IDS.games, description: "Games and betting", emoji: "🎯", default: selected === "games" }, { label: "Bank and Trade", value: ids_1.HELP_IDS.bank, description: "Token banking and item exchange", emoji: "🏦", default: selected === "bank" }, { label: "Moderation Desk", value: ids_1.HELP_IDS.moderation, description: "Moderation and admin safeguards", emoji: "🛡️", default: selected === "moderation" }))
     ];
 }
+function buildGettingStartedEmbed() {
+    return new discord_js_1.EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle("Your First 10 Minutes")
+        .setDescription([
+        "• **Meet your character:** `/profile` shows your progress; `/pmc` shows your raid character.",
+        "• **Start free:** `/daily` claims FN Token$ without placing a bet.",
+        `• **Try a small raid:** use \`/raid bet:${config_1.MIN_RAID_BET} tension:low\` and choose **FN Plagued Cemetery** in the map option. Extraction earns loot, tokens, and PMC XP. Failed raids can lose your stake.`,
+        "• **Check your loot:** `/inventory` shows what you collected.",
+        "• **Build server XP:** chat or join voice, then check `/xp`. Server XP and PMC raid XP are separate.",
+        "• **Need a hand?** `/help` lists commands; `/ticket` opens private support."
+    ].join("\n"));
+}
 function helpPageGeneral() {
     return new discord_js_1.EmbedBuilder()
         .setColor(0x00ffea)
@@ -87,7 +101,7 @@ function helpPageGeneral() {
         .setDescription("Use the tactical drop box below to jump into command categories, quick workflows, and support tools.")
         .addFields({
         name: "🧭 Core Utility",
-        value: "• `/help` — open command directory\n\n• `/quickstart` — guided first-run mission flow\n\n• `/ping` — bot latency check\n\n• `/status` — runtime identity\n\n• `/findbots` — list bot accounts in this server\n\n• `/balance` — your wallet tokens\n\n• `/token` — token balance for selected user\n\n• `/ticket` — open support ticket"
+        value: "• `/help` — open command directory\n\n• **Get Started** on the Welcome to FNT panel — first steps\n\n• `/ping` — bot latency check\n\n• `/status` — runtime identity\n\n• `/findbots` — list bot accounts in this server\n\n• `/balance` — your wallet tokens\n\n• `/token` — token balance for selected user\n\n• `/ticket` — open support ticket"
     }, {
         name: "📈 Progress and Economy",
         value: "• `/xp` — engagement XP panel\n\n• `/profile` — progression, achievements, collections, activity, cosmetics\n\n• `/xproles` — themed rank role directory\n\n• `/xprolesync` — admin force-sync all XP roles\n\n• `/pmc` — persistent raid profile\n\n• `/leaderboard` — top XP players\n\n• `/daily` — streak reward claim"
@@ -95,7 +109,7 @@ function helpPageGeneral() {
         name: "🗂️ Directory Topics",
         value: "⚔️ Raid Ops\n📦 Supply Crates\n🎯 Training Grounds\n🏦 Bank and Trade\n🛡️ Moderation Desk"
     })
-        .setFooter({ text: "Tip: use /ticket for direct FN support and /quickstart for the fastest onboarding route." });
+        .setFooter({ text: "Use Get Started on the Welcome to FNT panel for first steps, or /ticket for private support." });
 }
 async function helpPageXP(guild) {
     const rankLines = await resolveXpRoleLines(guild);

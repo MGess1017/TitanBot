@@ -311,7 +311,7 @@ function buildCommandDefinitions(input) {
             .addStringOption(o => o.setName("summary").setDescription("Short report summary").setRequired(true))
             .addStringOption(o => o.setName("details").setDescription("Detailed report context").setRequired(false))
             .addStringOption(o => o.setName("evidence").setDescription("Evidence links or references").setRequired(false)),
-        new discord_js_1.SlashCommandBuilder().setName("ticketintake").setDescription("Open a smart intake modal for structured support requests"),
+        new discord_js_1.SlashCommandBuilder().setName("ticketintake").setDescription("Open the private support ticket form"),
         new discord_js_1.SlashCommandBuilder().setName("ticketforce").setDescription("Open a ticket and bypass duplicate/KB deflection checks")
             .addStringOption(o => o.setName("reason").setDescription("Short reason for your ticket").setRequired(true))
             .addStringOption(o => o.setName("priority").setDescription("Ticket priority").setRequired(false)

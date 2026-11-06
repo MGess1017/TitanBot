@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PRIVATE_SLASH_COMMANDS = exports.CASINO_GAME_ORDER = exports.GEAR_MODAL_PREFIX = exports.PMC_PROFILE_VIEWS = exports.PMC_PROFILE_IDS = exports.PMC_PRESTIGE_IDS = exports.CASINO_UI_IDS = exports.SELL_UI_IDS = exports.GIVEAWAY_IDS = exports.REPORT_IDS = exports.TICKET_IDS = exports.RAID_CONDITION_CHOICES = exports.HELP_IDS = void 0;
+exports.PRIVATE_SLASH_COMMANDS = exports.CASINO_GAME_ORDER = exports.GEAR_MODAL_PREFIX = exports.PMC_PROFILE_VIEWS = exports.PMC_PROFILE_IDS = exports.PMC_PRESTIGE_IDS = exports.CASINO_UI_IDS = exports.SELL_UI_IDS = exports.GIVEAWAY_IDS = exports.REPORT_IDS = exports.TICKET_IDS = exports.RAID_CONDITION_CHOICES = exports.ONBOARDING_IDS = exports.HELP_IDS = void 0;
 const RaidDomain = __importStar(require("../../raid/domain"));
 exports.HELP_IDS = {
     menu: "help_dropbox",
@@ -44,6 +44,10 @@ exports.HELP_IDS = {
     games: "games",
     bank: "bank",
     moderation: "moderation"
+};
+exports.ONBOARDING_IDS = {
+    start: "fnt_get_started",
+    commands: "fnt_command_guide"
 };
 exports.RAID_CONDITION_CHOICES = RaidDomain.RAID_CONDITIONS.map(condition => ({
     name: condition.label,

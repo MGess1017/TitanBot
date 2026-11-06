@@ -15,6 +15,24 @@ const help_1 = require("../ui/help");
 const embeds_1 = require("../ui/embeds");
 /** Help menu, achievement titles, self roles, and temporary voice rooms. */
 async function handleCommunityInteraction(interaction) {
+    if (interaction.isButton() && interaction.customId === ids_1.ONBOARDING_IDS.start) {
+        await interaction.reply({
+            embeds: [(0, help_1.buildGettingStartedEmbed)()],
+            allowedMentions: { parse: [] },
+            flags: discord_js_1.MessageFlags.Ephemeral
+        });
+        return true;
+    }
+    if (interaction.isButton() && interaction.customId === ids_1.ONBOARDING_IDS.commands) {
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        const payload = await (0, help_1.buildHelpPayload)("general", interaction.guild);
+        await interaction.editReply({
+            embeds: [payload.embed],
+            components: (0, help_1.helpDropdown)("general"),
+            allowedMentions: { parse: [] }
+        });
+        return true;
+    }
     if (interaction.isStringSelectMenu() && interaction.customId === ids_1.HELP_IDS.menu) {
         const selected = interaction.values[0];
         const page = ["general", "xp", "raids", "shop", "games", "bank", "moderation"].includes(selected)

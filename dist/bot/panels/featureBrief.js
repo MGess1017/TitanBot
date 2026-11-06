@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildBotFeatureBriefPayload = buildBotFeatureBriefPayload;
 exports.ensureBotFeatureBriefForGuild = ensureBotFeatureBriefForGuild;
 // Bot feature brief panel.
 const discord_js_1 = require("discord.js");
@@ -7,59 +8,24 @@ const config_1 = require("../core/config");
 const client_1 = require("../core/client");
 const audit_1 = require("../core/audit");
 const store_1 = require("../moderation/store");
-const help_1 = require("../ui/help");
+const ids_1 = require("../ui/ids");
 const embeds_1 = require("../ui/embeds");
-function buildBotFeatureBriefPayload(guildName) {
+function buildBotFeatureBriefPayload() {
     const embed = (0, embeds_1.brandLiveEmbed)(new discord_js_1.EmbedBuilder()
-        .setColor(0x0891b2)
-        .setTitle(`🛰️ ${guildName} • About Titan Bot`)
+        .setColor(0x9b59b6)
+        .setTitle("Welcome to FNT")
         .setDescription([
-        `Titan Bot is the primary operations and progression system for **${guildName}**.`,
-        "",
-        "Use the command menu below to flip through live command pages and read what each bot area does.",
-        "",
-        "This post is the public command reference for new members, returning players, and staff."
-    ].join("\n"))
-        .addFields({
-        name: "🧭 What This Bot Covers",
-        value: [
-            "• Raid progression and PMC profiles",
-            "• Economy, inventory, crates, and trading",
-            "• Giveaways, moderation, support, and report tooling"
-        ].join("\n")
-    }, {
-        name: "📚 Browse Command Pages",
-        value: [
-            "• Mission Brief",
-            "• XP Ops",
-            "• Raid Ops",
-            "• Supply Crates",
-            "• Training Grounds",
-            "• Bank and Trade",
-            "• Moderation Desk"
-        ].join("\n")
-    }, {
-        name: "🚀 Fast Start",
-        value: [
-            "• `/quickstart` — guided onboarding",
-            "• `/help` — direct personal help menu",
-            "• `/ticket` — support request",
-            "• `/reportintake` — submit a report"
-        ].join("\n")
-    }, {
-        name: "🔔 Public Guide Rules",
-        value: [
-            "• Click the menu to change pages",
-            "• Keep this channel readable; don’t reply with support requests here",
-            "• Use tickets, reports, or commands for action paths"
-        ].join("\n")
-    }), `${guildName} About Titan Bot`, "About Titan Bot • Official Reference Panel");
+        "• **Your profile:** `/profile` shows progress, achievements, and cosmetics.",
+        "• **Start free:** claim FN Token$ with `/daily`.",
+        "• **Go raiding:** `/raid` earns loot and PMC XP. Start with a small bet and low risk.",
+        "• **Earn server XP:** chat or join voice, then check `/xp`.",
+        "• **Need help?** Browse commands or open a private support ticket below."
+    ].join("\n")), "FNT", "FNT • Member Guide");
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.ONBOARDING_IDS.start).setLabel("Get Started").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(ids_1.ONBOARDING_IDS.commands).setLabel("Command Guide").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.open).setLabel("Open Support Ticket").setStyle(discord_js_1.ButtonStyle.Success));
     return {
         embed: embed.toJSON(),
-        components: (0, help_1.helpDropdown)("general").map(row => row.toJSON()),
-        isBotFeatureBrief: true,
-        withHelpNav: true,
-        helpPage: "general"
+        components: [row.toJSON()],
+        isBotFeatureBrief: true
     };
 }
 async function upsertBotFeatureBriefInChannel(guild, channelId) {
@@ -68,14 +34,16 @@ async function upsertBotFeatureBriefInChannel(guild, channelId) {
     if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
         return { ok: false, error: "Configured bot feature brief channel is missing or not a text channel." };
     }
-    const payload = buildBotFeatureBriefPayload(guild.name);
-    const embed = payload.embed;
-    const components = Array.isArray(payload.components) ? payload.components : [];
+    const { embed, components } = buildBotFeatureBriefPayload();
     const storedMessageId = (0, store_1.getGuildPanelMessageId)(guild.id, "featureBrief");
     if (storedMessageId) {
-        const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
-        const edited = await stored?.edit({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
-        if (edited) {
+        const stored = await channel.messages.fetch(storedMessageId).catch(error => {
+            if (error instanceof discord_js_1.DiscordAPIError && error.code === 10008)
+                return null;
+            throw error;
+        });
+        if (stored && stored.author.id === client_1.client.user?.id) {
+            await stored.edit({ embeds: [embed], components, allowedMentions: { parse: [] } });
             return { ok: true, action: "updated" };
         }
         (0, store_1.setGuildPanelMessageId)(guild.id, "featureBrief", null);
@@ -85,11 +53,13 @@ async function upsertBotFeatureBriefInChannel(guild, channelId) {
     let beforeId;
     const expectedPrefix = `🛰️ ${guild.name} • About Titan Bot`;
     for (let i = 0; i < 10; i++) {
-        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
-        if (!batch || !batch.size)
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) });
+        if (!batch.size)
             break;
         const candidates = batch.filter(message => message.author.id === (client_1.client.user?.id || "")
-            && (message.embeds[0]?.title === expectedPrefix
+            && (message.embeds[0]?.title === "Welcome to FNT"
+                || message.embeds[0]?.footer?.text?.includes("FNT • Member Guide")
+                || message.embeds[0]?.title === expectedPrefix
                 || message.embeds[0]?.footer?.text?.includes("About Titan Bot")));
         const candidate = candidates.first();
         if (candidate) {
@@ -116,7 +86,9 @@ async function upsertBotFeatureBriefInChannel(guild, channelId) {
             if (duplicateId === candidateId)
                 continue;
             const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);
-            await duplicate?.delete().catch(() => undefined);
+            await duplicate?.delete().catch(error => {
+                console.warn(`Could not remove duplicate welcome panel ${duplicateId}:`, error);
+            });
         }
         return { ok: true, action: "updated" };
     }

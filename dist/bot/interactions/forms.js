@@ -15,7 +15,6 @@ const audit_1 = require("../core/audit");
 const store_1 = require("../moderation/store");
 const store_2 = require("../tickets/store");
 const modals_1 = require("../ui/modals");
-const opsPanel_1 = require("../tickets/opsPanel");
 const guards_1 = require("../core/guards");
 const ids_1 = require("../ui/ids");
 const channels_1 = require("../tickets/channels");
@@ -64,36 +63,49 @@ async function handleFormInteraction(interaction) {
             await interaction.reply({ content: "Ticket intake can only be used in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
-        const summary = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakeSummary) || "General support";
-        const category = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakeCategory) || "general";
-        const details = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakeDetails) || "";
-        const platform = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakePlatform) || "";
-        const evidence = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakeEvidence) || "";
+        const summary = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakeSummary).trim();
+        const category = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakeCategory).trim() || "general";
+        const details = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakeDetails).trim();
+        // Forms opened before deployment can still include the removed platform field.
+        const platform = interaction.fields.fields.has(ids_1.TICKET_IDS.intakePlatform)
+            ? interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakePlatform).trim() : "";
+        const evidence = interaction.fields.getTextInputValue(ids_1.TICKET_IDS.intakeEvidence).trim();
+        if (!summary || !details) {
+            await interaction.reply({
+                content: "Please include a short summary and tell us what happened.",
+                flags: discord_js_1.MessageFlags.Ephemeral
+            });
+            return true;
+        }
         const intakeCategory = (0, ticketEnhancements_1.classifyTicketCategory)(category);
         if (["report", "appeal", "billing"].includes(intakeCategory) && !evidence.trim()) {
-            await interaction.reply({ content: `Evidence links are required for ${intakeCategory} intake. Please reopen the form and include screenshots, logs, or relevant links.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.reply({ content: `Please include a screenshot or message link for a ${intakeCategory} ticket, then submit again.`, flags: discord_js_1.MessageFlags.Ephemeral });
             return true;
         }
         const reason = (0, ticketEnhancements_1.buildTicketIntakeReason)({ category, summary, details, platform, evidence });
         const priority = category.toLowerCase().includes("billing") ? "high" : "normal";
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         const created = await (0, channels_1.createTicketChannel)(guild, interaction.user.id, reason, priority, false);
         if (created.error) {
-            await interaction.reply({ content: created.error, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: created.error, allowedMentions: { parse: [] } });
             return true;
         }
-        const ticket = created.channelId ? (0, store_2.findTicketByChannel)(created.channelId) : null;
-        const intake = (0, ticketEnhancements_1.parseTicketIntakeSnapshot)(reason);
-        await interaction.reply({
-            embeds: [(0, opsPanel_1.buildTicketCommandEmbed)("🎫 Intake Submitted", "Your structured support request was submitted successfully.", ticket || undefined, [
-                    { name: "Category", value: (0, ticketEnhancements_1.classifyTicketCategory)(category), inline: true },
-                    { name: "Summary", value: (intake.summary || summary || "General support").slice(0, 180), inline: false },
-                    { name: "Details", value: (intake.details || details || "No details provided.").slice(0, 600), inline: false },
-                    { name: "Platform / Order", value: (intake.platform || intake.orderId || platform || "Not provided").slice(0, 200), inline: false },
-                    { name: "Evidence", value: (intake.evidence || evidence || "No evidence provided.").slice(0, 600), inline: false },
-                    { name: "KB References", value: (0, ticketEnhancements_1.getKbSuggestions)(reason).map(item => `• ${item}`).join("\n"), inline: false }
-                ])],
-            flags: discord_js_1.MessageFlags.Ephemeral
-        }).catch(() => undefined);
+        if (!created.channelId) {
+            console.error("Ticket creation returned no channel:", { guildId: guild.id, ownerId: interaction.user.id });
+            await interaction.editReply({ content: "Could not confirm your ticket channel. Please contact staff before trying again." });
+            return true;
+        }
+        await interaction.editReply({
+            embeds: [new discord_js_1.EmbedBuilder()
+                    .setColor(0x9b59b6)
+                    .setTitle("Ticket Opened")
+                    .setDescription([
+                    `• Continue in <#${created.channelId}>.`,
+                    "• Add any screenshots or files there.",
+                    "• The support team will reply in your ticket."
+                ].join("\n"))],
+            allowedMentions: { parse: [] }
+        });
         return true;
     }
     if (interaction.isModalSubmit() && interaction.customId === ids_1.REPORT_IDS.adminModal) {
