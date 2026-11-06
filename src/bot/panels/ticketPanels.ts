@@ -1,5 +1,5 @@
 // Ticket and raid-item giveaway panels.
-import { ActionRowBuilder, APIEmbed, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, Guild } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, Guild } from "discord.js";
 import {
     PERMANENT_TICKET_PANEL_CHANNEL_ID, REPORT_ADMIN_PANEL_CHANNEL_ID, REPORT_PANEL_CHANNEL_ID
 } from "../core/config";
@@ -11,46 +11,16 @@ import { upsertAdminReportPanelInChannel } from "./reportPanels";
 import { GIVEAWAY_IDS, REPORT_IDS, TICKET_IDS } from "../ui/ids";
 import { brandLiveEmbed } from "../ui/embeds";
 
-function buildTicketPanelPayload(guildName: string, frame: "opening" | "ready" = "ready") {
-    if (frame === "opening") {
-        const openingEmbed = brandLiveEmbed(new EmbedBuilder()
-            .setColor(0x0ea5e9)
-            .setTitle("⌛ FN Support Desk")
-            .setDescription(`Connecting to ${guildName} support operations...`)
-            .addFields({ name: "Status", value: "Establishing a private support lane.", inline: false })
-            .setFooter({ text: "Support operations initializing" }), "FN Support Desk", `${guildName} support panel`);
-        return {
-            embed: openingEmbed.toJSON(),
-            components: [],
-            isTicketPanel: true
-        };
-    }
-
+export function buildTicketPanelPayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
-        .setColor(0x14b8a6)
+        .setColor(0x9b59b6)
         .setTitle("🎫 FN Support Desk")
         .setDescription([
-            `Private support for **${guildName}**.`,
-            "Open a tracked case with live status, handler assignment, and SLA visibility."
-        ].join("\n"))
-        .addFields(
-            {
-                name: "Start Here",
-                value: "Press **Open Support Ticket**. A private case channel and operations panel will appear automatically."
-            },
-            {
-                name: "Include This",
-                value: "A short summary, exact steps, timestamps, IDs, and evidence links when relevant."
-            },
-            {
-                name: "Priority",
-                value: "Low: general questions\nNormal: standard support\nHigh: urgent operational issue"
-            },
-            {
-                name: "Workflow",
-                value: "`new` → `responded` → `waiting_user` → `archived` → `resolved`\nPrivate channels. Audited actions. One active case per user."
-            }
-        ), "FN Support Desk", `${guildName} support panel`);
+            "• Click **Open Support Ticket** and tell us what you need.",
+            "• Your ticket is private between you and the support team.",
+            "• Add screenshots, message links, or order details when relevant.",
+            "• Continue an existing open case instead of opening a duplicate."
+        ].join("\n")), "FNT Support", `${guildName} support panel`);
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -115,22 +85,14 @@ export async function upsertTicketPanelInChannel(guild: Guild, channelId: string
         return { ok: false, error: "Configured ticket panel channel is missing or not a text channel." };
     }
 
-    const panel = buildTicketPanelPayload(guild.name);
-    const embed = panel.embed as APIEmbed;
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-            .setCustomId(TICKET_IDS.open)
-            .setLabel("Open Support Ticket")
-            .setEmoji("🎫")
-            .setStyle(ButtonStyle.Success)
-    );
+    const { embed, components } = buildTicketPanelPayload(guild.name);
 
     let candidateId: string | null = null;
     let beforeId: string | undefined;
     const expectedTitle = "🎫 FN Support Desk";
     for (let i = 0; i < 5; i++) {
-        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
-        if (!batch || !batch.size) break;
+        const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) });
+        if (!batch.size) break;
 
         const candidate = batch.find(message =>
             message.author.id === (client.user?.id || "")
@@ -148,21 +110,17 @@ export async function upsertTicketPanelInChannel(guild: Guild, channelId: string
 
     if (candidateId) {
         const candidate = await channel.messages.fetch(candidateId).catch(() => null);
-        const edited = await candidate?.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
+        const edited = await candidate?.edit({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
         if (!edited) {
             return { ok: false, error: "Failed to refresh ticket panel message. Check bot permissions for this channel." };
         }
         return { ok: true, action: "updated" };
     }
 
-    const opening = buildTicketPanelPayload(guild.name, "opening");
-    const sent = await channel.send({ embeds: [opening.embed as APIEmbed], components: [], allowedMentions: { parse: [] } }).catch(() => null);
+    const sent = await channel.send({ embeds: [embed], components, allowedMentions: { parse: [] } }).catch(() => null);
     if (!sent) {
         return { ok: false, error: "Failed to post ticket panel message. Check bot permissions for this channel." };
     }
-    setTimeout(() => {
-        void sent.edit({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => undefined);
-    }, 650).unref();
     return { ok: true, action: "posted" };
 }
 

@@ -13,12 +13,31 @@ import { SELF_ROLE_SELECTOR_ROLES, TEMP_VOICE_CATEGORY_ID, TEMP_VOICE_PANEL_BUTT
 import { toSafeString } from "../core/ops";
 import { appendAuditEvent } from "../core/audit";
 import { isUnknownInteractionError } from "../core/guards";
-import { HELP_IDS } from "../ui/ids";
-import { buildHelpPayload, helpDropdown } from "../ui/help";
+import { HELP_IDS, ONBOARDING_IDS } from "../ui/ids";
+import { buildGettingStartedEmbed, buildHelpPayload, helpDropdown } from "../ui/help";
 import { embedFromPayload } from "../ui/embeds";
 
 /** Help menu, achievement titles, self roles, and temporary voice rooms. */
 export async function handleCommunityInteraction(interaction: Interaction): Promise<boolean> {
+    if (interaction.isButton() && interaction.customId === ONBOARDING_IDS.start) {
+        await interaction.reply({
+            embeds: [buildGettingStartedEmbed()],
+            allowedMentions: { parse: [] },
+            flags: MessageFlags.Ephemeral
+        });
+        return true;
+    }
+    if (interaction.isButton() && interaction.customId === ONBOARDING_IDS.commands) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const payload = await buildHelpPayload("general", interaction.guild);
+        await interaction.editReply({
+            embeds: [payload.embed],
+            components: helpDropdown("general"),
+            allowedMentions: { parse: [] }
+        });
+        return true;
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId === HELP_IDS.menu) {
         const selected = interaction.values[0] as keyof typeof HELP_IDS;
         const page = ["general", "xp", "raids", "shop", "games", "bank", "moderation"].includes(selected)

@@ -13,6 +13,11 @@ export const HELP_IDS = {
     moderation: "moderation"
 } as const;
 
+export const ONBOARDING_IDS = {
+    start: "fnt_get_started",
+    commands: "fnt_command_guide"
+} as const;
+
 export const RAID_CONDITION_CHOICES = RaidDomain.RAID_CONDITIONS.map(condition => ({
     name: condition.label,
     value: condition.key

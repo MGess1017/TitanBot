@@ -88,6 +88,20 @@ export function helpDropdown(selected: keyof typeof HELP_IDS = "general") {
     ];
 }
 
+export function buildGettingStartedEmbed(): EmbedBuilder {
+    return new EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle("Your First 10 Minutes")
+        .setDescription([
+            "• **Meet your character:** `/profile` shows your progress; `/pmc` shows your raid character.",
+            "• **Start free:** `/daily` claims FN Token$ without placing a bet.",
+            `• **Try a small raid:** use \`/raid bet:${MIN_RAID_BET} tension:low\` and choose **FN Plagued Cemetery** in the map option. Extraction earns loot, tokens, and PMC XP. Failed raids can lose your stake.`,
+            "• **Check your loot:** `/inventory` shows what you collected.",
+            "• **Build server XP:** chat or join voice, then check `/xp`. Server XP and PMC raid XP are separate.",
+            "• **Need a hand?** `/help` lists commands; `/ticket` opens private support."
+        ].join("\n"));
+}
+
 function helpPageGeneral() {
     return new EmbedBuilder()
         .setColor(0x00ffea)
@@ -96,7 +110,7 @@ function helpPageGeneral() {
         .addFields(
             {
                 name: "🧭 Core Utility",
-                value: "• `/help` — open command directory\n\n• `/quickstart` — guided first-run mission flow\n\n• `/ping` — bot latency check\n\n• `/status` — runtime identity\n\n• `/findbots` — list bot accounts in this server\n\n• `/balance` — your wallet tokens\n\n• `/token` — token balance for selected user\n\n• `/ticket` — open support ticket"
+                value: "• `/help` — open command directory\n\n• **Get Started** on the Welcome to FNT panel — first steps\n\n• `/ping` — bot latency check\n\n• `/status` — runtime identity\n\n• `/findbots` — list bot accounts in this server\n\n• `/balance` — your wallet tokens\n\n• `/token` — token balance for selected user\n\n• `/ticket` — open support ticket"
             },
             {
                 name: "📈 Progress and Economy",
@@ -107,7 +121,7 @@ function helpPageGeneral() {
                 value: "⚔️ Raid Ops\n📦 Supply Crates\n🎯 Training Grounds\n🏦 Bank and Trade\n🛡️ Moderation Desk"
             }
         )
-        .setFooter({ text: "Tip: use /ticket for direct FN support and /quickstart for the fastest onboarding route." });
+        .setFooter({ text: "Use Get Started on the Welcome to FNT panel for first steps, or /ticket for private support." });
 }
 
 async function helpPageXP(guild?: Guild | null) {

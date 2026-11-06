@@ -3,9 +3,7 @@ import {
     ChannelType, EmbedBuilder, GuildMember, MessageFlags, PermissionFlagsBits, type Interaction
 } from "discord.js";
 import { ensureUser, savePoints } from "../../utils";
-import {
-    buildTicketIntakeReason, classifyTicketCategory, getKbSuggestions, parseTicketIntakeSnapshot
-} from "../../services/ticketEnhancements";
+import { buildTicketIntakeReason, classifyTicketCategory } from "../../services/ticketEnhancements";
 import { ITEM_DEFS } from "../../game/catalog";
 import {
     CRAFT_RECIPES, craftItem, dismantleGear, insureGear, repairGear, saveLoadout, upgradeGear
@@ -16,9 +14,8 @@ import { client } from "../core/client";
 import { createAndPostGiveaway, sendGiveawayLog } from "../giveaways/giveaways";
 import { appendAuditEvent } from "../core/audit";
 import { parseDurationMs, parseUserIdFromReportTarget, submitFormalUserReport } from "../moderation/store";
-import { findTicketByChannel, findTicketById, saveTicketStore } from "../tickets/store";
+import { findTicketById, saveTicketStore } from "../tickets/store";
 import { buildGearActionModal, buildTicketIntakeModal } from "../ui/modals";
-import { buildTicketCommandEmbed } from "../tickets/opsPanel";
 import { requireGuild } from "../core/guards";
 import { GEAR_MODAL_PREFIX, GIVEAWAY_IDS, REPORT_IDS, TICKET_IDS } from "../ui/ids";
 import { createTicketChannel } from "../tickets/channels";
@@ -70,43 +67,51 @@ export async function handleFormInteraction(interaction: Interaction): Promise<b
             return true;
         }
 
-        const summary = interaction.fields.getTextInputValue(TICKET_IDS.intakeSummary) || "General support";
-        const category = interaction.fields.getTextInputValue(TICKET_IDS.intakeCategory) || "general";
-        const details = interaction.fields.getTextInputValue(TICKET_IDS.intakeDetails) || "";
-        const platform = interaction.fields.getTextInputValue(TICKET_IDS.intakePlatform) || "";
-        const evidence = interaction.fields.getTextInputValue(TICKET_IDS.intakeEvidence) || "";
+        const summary = interaction.fields.getTextInputValue(TICKET_IDS.intakeSummary).trim();
+        const category = interaction.fields.getTextInputValue(TICKET_IDS.intakeCategory).trim() || "general";
+        const details = interaction.fields.getTextInputValue(TICKET_IDS.intakeDetails).trim();
+        // Forms opened before deployment can still include the removed platform field.
+        const platform = interaction.fields.fields.has(TICKET_IDS.intakePlatform)
+            ? interaction.fields.getTextInputValue(TICKET_IDS.intakePlatform).trim() : "";
+        const evidence = interaction.fields.getTextInputValue(TICKET_IDS.intakeEvidence).trim();
+        if (!summary || !details) {
+            await interaction.reply({
+                content: "Please include a short summary and tell us what happened.",
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
         const intakeCategory = classifyTicketCategory(category);
         if (["report", "appeal", "billing"].includes(intakeCategory) && !evidence.trim()) {
-            await interaction.reply({ content: `Evidence links are required for ${intakeCategory} intake. Please reopen the form and include screenshots, logs, or relevant links.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.reply({ content: `Please include a screenshot or message link for a ${intakeCategory} ticket, then submit again.`, flags: MessageFlags.Ephemeral });
             return true;
         }
         const reason = buildTicketIntakeReason({ category, summary, details, platform, evidence });
         const priority = category.toLowerCase().includes("billing") ? "high" : "normal";
 
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const created = await createTicketChannel(guild, interaction.user.id, reason, priority, false);
         if (created.error) {
-            await interaction.reply({ content: created.error, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            await interaction.editReply({ content: created.error, allowedMentions: { parse: [] } });
             return true;
         }
 
-        const ticket = created.channelId ? findTicketByChannel(created.channelId) : null;
-        const intake = parseTicketIntakeSnapshot(reason);
-        await interaction.reply({
-            embeds: [buildTicketCommandEmbed(
-                "🎫 Intake Submitted",
-                "Your structured support request was submitted successfully.",
-                ticket || undefined,
-                [
-                    { name: "Category", value: classifyTicketCategory(category), inline: true },
-                    { name: "Summary", value: (intake.summary || summary || "General support").slice(0, 180), inline: false },
-                    { name: "Details", value: (intake.details || details || "No details provided.").slice(0, 600), inline: false },
-                    { name: "Platform / Order", value: (intake.platform || intake.orderId || platform || "Not provided").slice(0, 200), inline: false },
-                    { name: "Evidence", value: (intake.evidence || evidence || "No evidence provided.").slice(0, 600), inline: false },
-                    { name: "KB References", value: getKbSuggestions(reason).map(item => `• ${item}`).join("\n"), inline: false }
-                ]
-            )],
-            flags: MessageFlags.Ephemeral
-        }).catch(() => undefined);
+        if (!created.channelId) {
+            console.error("Ticket creation returned no channel:", { guildId: guild.id, ownerId: interaction.user.id });
+            await interaction.editReply({ content: "Could not confirm your ticket channel. Please contact staff before trying again." });
+            return true;
+        }
+        await interaction.editReply({
+            embeds: [new EmbedBuilder()
+                .setColor(0x9b59b6)
+                .setTitle("Ticket Opened")
+                .setDescription([
+                    `• Continue in <#${created.channelId}>.`,
+                    "• Add any screenshots or files there.",
+                    "• The support team will reply in your ticket."
+                ].join("\n"))],
+            allowedMentions: { parse: [] }
+        });
         return true;
     }
 

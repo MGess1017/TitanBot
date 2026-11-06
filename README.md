@@ -4,6 +4,8 @@
 Titan Raid Bot is a Discord bot designed to provide an engaging gaming experience inspired by Escape from Tarkov. Users build persistent PMC progression through raids, earning rewards and map reputation based on performance. The bot also features an economy, daily rewards, moderation, tickets, giveaways, and casino games.
 
 ## Features
+- **Welcome to FNT**: The newcomer panel in channel `1528998695624773714` (`BOT_FEATURE_BRIEF_CHANNEL_ID` override) replaces the old About Titan Bot reference message in place. Five short bullets introduce profiles, free daily rewards, raids, server XP, and support. **Get Started** opens a private first-ten-minutes guide with a minimum-stake, low-risk raid example; **Command Guide** opens privately without changing the public panel; **Open Support Ticket** opens the support form. No new slash command is needed.
+- **Simple Support Intake**: The support panel gives four short instructions. Its form asks for a summary and details, with an optional topic and screenshot/message links; reports, appeals, and billing still require evidence links. Include platform/order information in the details and upload additional files in the ticket. Submission immediately acknowledges the interaction while the private channel is created. Existing staff assignment, status, transcripts, and other case tools are unchanged.
 - **PMC Progression**: Users advance through 50,000 levels and optional Prestige I-X with permanent raid bonuses.
 - **Raid System**: Initiate raids with random outcomes, where users can earn XP and FN Token$ based on their performance.
 - **Economy Management**: Users can manage their FN Token$ balance, earn daily rewards, and participate in games like crash.

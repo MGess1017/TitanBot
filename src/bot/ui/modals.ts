@@ -5,7 +5,7 @@ import { GEAR_MODAL_PREFIX, GIVEAWAY_IDS, REPORT_IDS, TICKET_IDS } from "./ids";
 export function buildTicketIntakeModal(): ModalBuilder {
     const summaryInput = new TextInputBuilder()
         .setCustomId(TICKET_IDS.intakeSummary)
-        .setLabel("Issue Summary")
+        .setLabel("What do you need help with?")
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setMaxLength(120)
@@ -13,44 +13,35 @@ export function buildTicketIntakeModal(): ModalBuilder {
 
     const categoryInput = new TextInputBuilder()
         .setCustomId(TICKET_IDS.intakeCategory)
-        .setLabel("Category")
+        .setLabel("Topic (optional)")
         .setStyle(TextInputStyle.Short)
-        .setRequired(true)
+        .setRequired(false)
         .setMaxLength(40)
         .setPlaceholder("bug, billing, account, report, appeal, general");
 
     const detailsInput = new TextInputBuilder()
         .setCustomId(TICKET_IDS.intakeDetails)
-        .setLabel("Details")
+        .setLabel("Tell us what happened")
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(true)
-        .setMaxLength(900)
-        .setPlaceholder("Reproduction steps, timestamps, expected vs actual behavior.");
-
-    const platformInput = new TextInputBuilder()
-        .setCustomId(TICKET_IDS.intakePlatform)
-        .setLabel("Platform / Order ID")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(80)
-        .setPlaceholder("PC / iOS / Order #...");
+        .setMaxLength(700)
+        .setPlaceholder("What happened and what help you need. Add times or an order ID if relevant.");
 
     const evidenceInput = new TextInputBuilder()
         .setCustomId(TICKET_IDS.intakeEvidence)
-        .setLabel("Evidence Links")
+        .setLabel("Screenshot / message links")
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(false)
         .setMaxLength(400)
-        .setPlaceholder("Screenshots, clips, logs, message links.");
+        .setPlaceholder("Links required for reports, appeals, or billing. Otherwise optional. Add files in the ticket.");
 
     return new ModalBuilder()
         .setCustomId(TICKET_IDS.intakeModal)
-        .setTitle("Smart Ticket Intake")
+        .setTitle("Open Support Ticket")
         .addComponents(
             new ActionRowBuilder<TextInputBuilder>().addComponents(summaryInput),
-            new ActionRowBuilder<TextInputBuilder>().addComponents(categoryInput),
             new ActionRowBuilder<TextInputBuilder>().addComponents(detailsInput),
-            new ActionRowBuilder<TextInputBuilder>().addComponents(platformInput),
+            new ActionRowBuilder<TextInputBuilder>().addComponents(categoryInput),
             new ActionRowBuilder<TextInputBuilder>().addComponents(evidenceInput)
         );
 }
