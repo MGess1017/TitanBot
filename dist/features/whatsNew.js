@@ -10,25 +10,34 @@ const node_path_1 = __importDefault(require("node:path"));
 const discord_js_1 = require("discord.js");
 exports.WHATS_NEW_COLOR = 0x9b59b6;
 exports.WHATS_NEW_RELEASE = {
-    id: "2026-11-casino-commands",
-    title: "🎰 Casino Commands Moved Under /casino",
-    intro: "All casino games now live under one command, which makes room for new features. Your tokens, stats and odds are unchanged.",
+    id: "fnt-patch-001",
+    title: "FNT Bot — Patch 001: Onboarding & Support",
+    intro: "A cleaner welcome guide and a simpler support experience.",
     sections: [
         {
-            name: "🎲 How to Play Now",
+            name: "01 • Welcome Guide",
             lines: [
-                "Type `/casino` and pick a game: `dice`, `roulette`, `blackjack`, `crash`, `slots`, `coinflip`, `baccarat`, `hilo` or `keno`.",
-                "Example: `/casino dice bet:100 choice:high` (was `/dice`). Magic Slots is now `/casino slots`."
+                "**Welcome to FNT** now has a short introduction and private Get Started and Command Guide buttons.",
+                "Support tickets open from the dedicated panel in <#1506119505720377434>."
             ]
         },
         {
-            name: "🏛️ Casino Floor",
+            name: "02 • Support Tickets",
             lines: [
-                "`/casino lobby` opens the button-based game floor, with replay, double and halve on every result."
+                "Shorter ticket form and a compact case card showing your request, status, and handler.",
+                "Screenshots and links appear only when supplied. Existing case cards update in place."
+            ]
+        },
+        {
+            name: "03 • Staff Tools & Reliability",
+            lines: [
+                "Advanced case details, response templates, and resolution tools open privately for staff.",
+                "Claim, close, and resolve actions acknowledge immediately and use short confirmations.",
+                "Closing preserves the case for staff review; permanent resolution still captures a transcript."
             ]
         }
     ],
-    footer: "FNT • Titan Bot • Questions? Open a ticket anytime."
+    footer: "FNT Bot • Patch 001 • Member Update"
 };
 function buildWhatsNewEmbed(release = exports.WHATS_NEW_RELEASE) {
     return new discord_js_1.EmbedBuilder()
