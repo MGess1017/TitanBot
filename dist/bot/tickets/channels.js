@@ -13,6 +13,7 @@ const discord_js_1 = require("discord.js");
 const path_1 = __importDefault(require("path"));
 const ticketEnhancements_1 = require("../../services/ticketEnhancements");
 const ticketTranscript_1 = require("../../services/ticketTranscript");
+const ticketExperience_1 = require("../../services/ticketExperience");
 const config_1 = require("../core/config");
 const client_1 = require("../core/client");
 const metrics_1 = require("../core/metrics");
@@ -22,6 +23,8 @@ const store_1 = require("./store");
 const records_1 = require("./records");
 const opsPanel_1 = require("./opsPanel");
 const paths_1 = require("../core/paths");
+const staffDesk_1 = require("../staff/staffDesk");
+const experience_1 = require("./experience");
 function isOwnerTopicMatch(topic, ownerId) {
     return (0, records_1.findChannelOwnerFromTopic)(topic) === ownerId;
 }
@@ -87,9 +90,9 @@ async function reconcileOwnerTicketDuplicates(guild, owner, canonicalChannelId, 
         });
     }
 }
-async function createTicketChannel(guild, ownerId, reason, priority = "normal", bypassDeflection = false) {
+async function createTicketChannel(guild, ownerId, reason, priority = "normal", bypassDeflection = false, submittedIntake) {
     (0, metrics_1.recordTicketCreateAttempt)();
-    const requestedBucket = (0, store_1.getTicketCaseBucket)(reason);
+    const requestedBucket = (0, store_1.getTicketCaseBucket)(submittedIntake?.category || reason);
     if (!(0, ops_1.tryAcquireTicketCreateLock)(guild.id, ownerId)) {
         (0, metrics_1.recordTicketCreateFailure)("in_flight_lock");
         return { error: "Ticket creation is already in progress for your account. Please wait a moment and try again." };
@@ -210,7 +213,8 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
             details: ticket.intakeDetails,
             platform: ticket.intakePlatform,
             orderId: ticket.intakeOrderId,
-            evidence: ticket.intakeEvidence
+            evidence: ticket.intakeEvidence,
+            ...submittedIntake
         });
         ticket.intakeSummary = intake.summary;
         ticket.intakeCategory = intake.category;
@@ -219,9 +223,17 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
         ticket.intakeOrderId = intake.orderId;
         ticket.intakeEvidence = intake.evidence;
         (0, store_1.applyTicketMetadata)(ticket, reason);
+        if (submittedIntake?.category) {
+            ticket.category = (0, ticketEnhancements_1.classifyTicketCategory)(submittedIntake.category);
+            ticket.slaPolicy = (0, ticketEnhancements_1.getTicketSlaPolicy)(ticket.category, priority);
+        }
+        if (!(0, store_1.saveTicketStore)()) {
+            console.error(`Ticket #${ticket.id} intake fields could not be saved.`);
+            return { error: `Your ticket channel <#${ticket.channelId}> exists, but its details could not be saved. Keep your draft and contact staff in that channel.` };
+        }
         (0, audit_1.appendAuditEvent)("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason, intake });
         const intro = (0, opsPanel_1.buildTicketOpsEmbed)(ticket);
-        const panelMessage = await created.send({ content: `<@&${config_1.TICKET_HANDLER_ROLE_ID}> <@${owner.id}>`, embeds: [intro], components: (0, opsPanel_1.buildTicketOpsComponents)(ticket), allowedMentions: { parse: ["roles", "users"] } }).catch(error => {
+        const panelMessage = await created.send({ content: `<@${owner.id}>`, embeds: [intro], components: (0, opsPanel_1.buildTicketOpsComponents)(ticket), allowedMentions: { parse: [], users: [owner.id] } }).catch(error => {
             console.error(`Could not post ticket #${ticket.id} panel:`, error);
             return null;
         });
@@ -236,6 +248,7 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
             { name: "Reason", value: reason || "No reason provided" }
         ]);
         await (0, store_1.autoRouteTicket)(guild, ticket);
+        await (0, experience_1.notifyTicketRecipient)(ticket, "member_reply", `created:${ticket.id}`);
         await reconcileOwnerTicketDuplicates(guild, owner, created.id, requestedBucket);
         return { channelId: created.id, ticketId: ticket.id };
     }
@@ -286,30 +299,48 @@ async function ensureArchiveCategory(guild) {
     return created.id;
 }
 async function closeTicketChannel(guild, channelId, closedById, closeReason) {
+    return ticketExperience_1.ticketActions.run(channelId, () => performCloseTicketChannel(guild, channelId, closedById, closeReason));
+}
+async function performCloseTicketChannel(guild, channelId, closedById, closeReason) {
+    const tracked = (0, store_1.findTicketByChannel)(channelId);
+    if (!tracked || tracked.guildId !== guild.id)
+        return "This is not a ticket in this server.";
+    const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId);
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+        return "The ticket channel is missing.";
+    const botMember = guild.members.me || await guild.members.fetchMe();
+    if (!channel.permissionsFor(botMember)?.has(discord_js_1.PermissionFlagsBits.ManageChannels)
+        || !channel.permissionsFor(botMember)?.has(discord_js_1.PermissionFlagsBits.ManageRoles))
+        return "The bot needs Manage Channels and Manage Roles in this ticket before it can close it.";
     const ticket = (0, records_1.archiveTicketByChannel)(channelId, closeReason);
     if (!ticket)
         return "This channel is not an open ticket.";
     const cfg = (0, store_1.ensureTicketConfig)(guild.id);
     const reopenHours = Math.max(1, Number(cfg.reopenWindowHours || 72));
     ticket.reopenUntilAt = Date.now() + (reopenHours * 60 * 60 * 1000);
-    (0, store_1.saveTicketStore)();
-    const channel = guild.channels.cache.get(channelId);
+    if (!(0, store_1.saveTicketStore)())
+        return "The ticket was marked closed, but its reopen window could not be saved. Staff should check storage before resolving it.";
     const archiveCategoryId = await ensureArchiveCategory(guild);
-    if (channel && channel.type === discord_js_1.ChannelType.GuildText) {
-        await channel.setParent(archiveCategoryId, { lockPermissions: false }).catch(() => undefined);
-        await channel.setTopic(`${channel.topic || `Support ticket (${ticket.ownerId})`} [ticket-archived]`).catch(() => undefined);
+    try {
+        await channel.setParent(archiveCategoryId, { lockPermissions: false });
+        await channel.setTopic(`${channel.topic || `Support ticket (${ticket.ownerId})`} [ticket-archived]`);
         await channel.permissionOverwrites.edit(ticket.ownerId, {
             ViewChannel: true,
             ReadMessageHistory: true,
             SendMessages: false
-        }).catch(() => undefined);
+        });
         await channel.permissionOverwrites.edit(config_1.TICKET_HANDLER_ROLE_ID, {
             ViewChannel: true,
             ReadMessageHistory: true,
             SendMessages: true,
             ManageChannels: true
-        }).catch(() => undefined);
-        await channel.send({ content: `🔒 Ticket archived to hold queue.\n📝 Reason: ${closeReason}` }).catch(() => undefined);
+        });
+        await channel.send({ content: `Ticket closed by staff.\nReason: ${closeReason}`, allowedMentions: { parse: [] } });
+    }
+    catch (error) {
+        console.error(`Ticket #${ticket.id} closed, but channel updates failed:`, error);
+        await (0, opsPanel_1.updateTicketOpsPanelMessage)(guild, ticket);
+        return `Ticket #${ticket.id} was marked closed, but channel permissions or archiving failed. Staff must review it before resolving.`;
     }
     await (0, records_1.sendTicketLog)(guild.id, `Ticket #${ticket.id} Archived`, [
         { name: "Owner", value: `<@${ticket.ownerId}>`, inline: true },
@@ -323,6 +354,9 @@ async function closeTicketChannel(guild, channelId, closedById, closeReason) {
     return `Archived ticket #${ticket.id} in hold queue. Reason: ${closeReason}`;
 }
 async function claimTicketChannel(guild, channelId, claimerId) {
+    return ticketExperience_1.ticketActions.run(channelId, () => performClaimTicketChannel(guild, channelId, claimerId));
+}
+async function performClaimTicketChannel(guild, channelId, claimerId) {
     const ticket = await (0, records_1.ensureTrackedTicketByChannelId)(guild, channelId, claimerId);
     if (!ticket) {
         return "This channel is not an active tracked ticket. Open a fresh ticket from the support panel.";
@@ -356,9 +390,15 @@ async function claimTicketChannel(guild, channelId, claimerId) {
     return `Ticket #${claimed.id} claimed by <@${claimerId}>.`;
 }
 async function resolveTicketChannel(guild, channelId, resolverId, resolvedReason) {
+    return ticketExperience_1.ticketActions.run(channelId, () => performResolveTicketChannel(guild, channelId, resolverId, resolvedReason));
+}
+async function performResolveTicketChannel(guild, channelId, resolverId, resolvedReason) {
     const tracked = (0, store_1.findTicketByChannel)(channelId);
-    const exported = tracked
-        ? await (0, ticketTranscript_1.exportTicketTranscript)({
+    if (!tracked || tracked.guildId !== guild.id || tracked.status !== "archived")
+        return "Close this ticket before permanently resolving it.";
+    let transcript;
+    try {
+        const exported = await (0, ticketTranscript_1.exportTicketTranscript)({
             guild,
             channelId,
             ticketId: tracked.id,
@@ -367,21 +407,26 @@ async function resolveTicketChannel(guild, channelId, resolverId, resolvedReason
             resolvedReason,
             transcriptDir: config_1.TICKET_TRANSCRIPT_DIR,
             projectRootDir: path_1.default.resolve(paths_1.BOT_SRC_DIR, "..")
-        })
-        : { transcriptPath: null, messageCount: 0, truncated: false, fetchErrors: 0 };
-    const transcript = await (0, ticketTranscript_1.buildTicketTranscriptStub)(guild, channelId);
-    if (transcript && exported.transcriptPath) {
-        transcript.transcriptPath = exported.transcriptPath;
-        transcript.transcriptFormat = "txt";
-        transcript.messageCountApprox = Math.max(transcript.messageCountApprox, exported.messageCount);
+        });
+        transcript = exported.stub;
     }
-    if (transcript) {
-        transcript.truncated = exported.truncated;
-        transcript.fetchErrors = exported.fetchErrors;
+    catch (error) {
+        console.error(`Ticket #${tracked.id} transcript failed; channel preserved:`, error);
+        await (0, staffDesk_1.postStaffAlert)({
+            embeds: [new discord_js_1.EmbedBuilder().setColor(0xdc2626).setTitle(`Ticket #${tracked.id} — Transcript Failed`)
+                    .setDescription(`The ticket in <#${channelId}> has been preserved. Check storage and channel permissions before retrying.`).toJSON()]
+        }).catch(alertError => console.error("Could not alert staff about transcript failure:", alertError));
+        return "Transcript could not be verified. The ticket has been preserved; staff have been alerted where possible.";
     }
     const ticket = (0, records_1.resolveTicketByChannel)(channelId, resolvedReason, transcript);
-    if (!ticket)
-        return "This channel is not an archived ticket.";
+    if (!ticket) {
+        console.error(`Ticket #${tracked.id} resolution could not be saved; channel preserved.`);
+        await (0, staffDesk_1.postStaffAlert)({
+            embeds: [new discord_js_1.EmbedBuilder().setColor(0xdc2626).setTitle(`Ticket #${tracked.id} — Resolution Save Failed`)
+                    .setDescription(`Transcript verified, but the resolution could not be saved. <#${channelId}> remains available; check storage before retrying.`).toJSON()]
+        }).catch(error => console.error("Could not alert staff about resolution save failure:", error));
+        return "Transcript verified, but the resolution could not be saved. The ticket channel has been preserved.";
+    }
     const exportWebhook = (0, store_1.ensureTicketConfig)(guild.id).exportWebhookUrl || config_1.TICKET_EXPORT_WEBHOOK_URL;
     if (exportWebhook) {
         const exported = await (0, records_1.postJsonToWebhook)(exportWebhook, {
@@ -436,6 +481,16 @@ async function resolveTicketChannel(guild, channelId, resolverId, resolvedReason
             components: [(0, records_1.buildTicketCsatButtons)(ticket.id)]
         }).catch(() => undefined);
     }
-    void guild.channels.delete(ticket.channelId, "Ticket permanently resolved").catch(() => undefined);
+    try {
+        await guild.channels.delete(ticket.channelId, "Ticket permanently resolved; transcript verified");
+    }
+    catch (error) {
+        console.error(`Ticket #${ticket.id} channel deletion failed:`, error);
+        await (0, staffDesk_1.postStaffAlert)({
+            embeds: [new discord_js_1.EmbedBuilder().setColor(0xdc2626).setTitle(`Ticket #${ticket.id} — Channel Cleanup Required`)
+                    .setDescription(`Transcript saved, but <#${ticket.channelId}> could not be deleted. Staff can remove it after checking the saved transcript.`).toJSON()]
+        }).catch(alertError => console.error("Could not alert staff about channel deletion failure:", alertError));
+        return `Ticket #${ticket.id} resolved with a verified transcript, but channel deletion failed. Staff must finish cleanup.`;
+    }
     return `Resolved ticket #${ticket.id} permanently. Reason: ${resolvedReason}`;
 }

@@ -59,7 +59,9 @@ function normalizeTicketFromRaw(ticketRaw) {
             lastMessageAt: typeof transcriptRaw.lastMessageAt === "number" ? transcriptRaw.lastMessageAt : null,
             channelName: String(transcriptRaw.channelName || "unknown"),
             transcriptPath: transcriptRaw.transcriptPath ? String(transcriptRaw.transcriptPath) : undefined,
-            transcriptFormat: transcriptRaw.transcriptFormat === "txt" ? "txt" : undefined
+            transcriptFormat: transcriptRaw.transcriptFormat === "txt" ? "txt" : undefined,
+            truncated: transcriptRaw.truncated === true,
+            fetchErrors: typeof transcriptRaw.fetchErrors === "number" ? transcriptRaw.fetchErrors : 0
         }
         : null;
     const notesRaw = Array.isArray(ticketRaw.internalNotes) ? ticketRaw.internalNotes : [];
@@ -100,6 +102,17 @@ function normalizeTicketFromRaw(ticketRaw) {
         ownerId: String(ticketRaw.ownerId || ""),
         channelId: String(ticketRaw.channelId || ""),
         reason: String(ticketRaw.reason || "General support"),
+        intakeSummary: typeof ticketRaw.intakeSummary === "string" ? ticketRaw.intakeSummary.slice(0, 120) : undefined,
+        intakeCategory: typeof ticketRaw.intakeCategory === "string" ? ticketRaw.intakeCategory.slice(0, 40) : undefined,
+        intakeDetails: typeof ticketRaw.intakeDetails === "string" ? ticketRaw.intakeDetails.slice(0, 700) : undefined,
+        intakePlatform: typeof ticketRaw.intakePlatform === "string" ? ticketRaw.intakePlatform.slice(0, 80) : undefined,
+        intakeEvidence: typeof ticketRaw.intakeEvidence === "string" ? ticketRaw.intakeEvidence.slice(0, 400) : undefined,
+        intakeOrderId: typeof ticketRaw.intakeOrderId === "string" ? ticketRaw.intakeOrderId.slice(0, 80) : undefined,
+        lastReplyAt: typeof ticketRaw.lastReplyAt === "number" ? ticketRaw.lastReplyAt : undefined,
+        lastReplyBy: ticketRaw.lastReplyBy === "member" || ticketRaw.lastReplyBy === "staff" ? ticketRaw.lastReplyBy : undefined,
+        closureRequestedAt: typeof ticketRaw.closureRequestedAt === "number" ? ticketRaw.closureRequestedAt : null,
+        closureRequestedBy: typeof ticketRaw.closureRequestedBy === "string" ? ticketRaw.closureRequestedBy : null,
+        notifications: normalizeTicketNotifications(ticketRaw.notifications),
         status: normalizeTicketStatus(ticketRaw.status),
         priority,
         workflowStatus: normalizeTicketWorkflowStatus(ticketRaw.workflowStatus),
@@ -141,6 +154,19 @@ function normalizeTicketFromRaw(ticketRaw) {
     if (!(normalized.id > 0 && normalized.guildId && normalized.ownerId && normalized.channelId)) {
         return null;
     }
+    function normalizeTicketNotifications(raw) {
+        const entries = {};
+        if (!raw || typeof raw !== "object")
+            return entries;
+        for (const [kind, value] of Object.entries(raw)) {
+            if (!value || typeof value !== "object")
+                continue;
+            const item = value;
+            if (typeof item.key === "string" && typeof item.at === "number")
+                entries[kind] = { key: item.key.slice(0, 200), at: item.at };
+        }
+        return entries;
+    }
     return normalized;
 }
 function readTicketStore() {
@@ -177,14 +203,37 @@ function recordTicketEvent(ticket, actorId, type, detail) {
     ticket.events = [...(ticket.events || []), event].slice(-100);
     (0, metrics_1.runAsyncWithBoundary)("ticketWatcherNotification", () => notifyTicketWatchers(ticket, event));
 }
+const ticketWatcherNotifications = new Set();
 async function notifyTicketWatchers(ticket, event) {
+    const cfg = ensureTicketConfig(ticket.guildId);
+    if (!cfg.notificationsEnabled)
+        return;
     for (const watcherId of ticket.watchers || []) {
         if (watcherId === event.actorId)
             continue;
-        const watcher = await client_1.client.users.fetch(watcherId).catch(() => null);
-        if (!watcher)
+        const kind = `watcher:${watcherId}`;
+        const key = `${event.at}:${event.type}:${event.actorId}`;
+        const previous = ticket.notifications?.[kind];
+        const lock = `${ticket.id}:${kind}`;
+        if (ticketWatcherNotifications.has(lock) || previous?.key === key
+            || (previous && Date.now() - previous.at < (cfg.reminderMinutes || 30) * 60000))
             continue;
-        await watcher.send(`Ticket #${ticket.id} update: ${event.type}\n${event.detail}`).catch(() => undefined);
+        ticketWatcherNotifications.add(lock);
+        try {
+            const watcher = await client_1.client.users.fetch(watcherId);
+            await watcher.send({
+                content: `Ticket #${ticket.id} update: ${event.type}\n${event.detail}\nhttps://discord.com/channels/${ticket.guildId}/${ticket.channelId}`,
+                allowedMentions: { parse: [] }
+            });
+            ticket.notifications = { ...(ticket.notifications || {}), [kind]: { key, at: Date.now() } };
+            saveTicketStore();
+        }
+        catch (error) {
+            console.warn(`Could not notify watcher ${watcherId} about ticket #${ticket.id}:`, error);
+        }
+        finally {
+            ticketWatcherNotifications.delete(lock);
+        }
     }
 }
 function addTicketWatcher(ticket, watcherId) {
@@ -254,6 +303,10 @@ function ensureTicketConfig(guildId) {
         cfg.reopenWindowHours = 72;
     if (cfg.exportWebhookUrl === undefined)
         cfg.exportWebhookUrl = null;
+    if (typeof cfg.notificationsEnabled !== "boolean")
+        cfg.notificationsEnabled = true;
+    if (!Number.isFinite(cfg.reminderMinutes) || (cfg.reminderMinutes || 0) < 5 || (cfg.reminderMinutes || 0) > 1440)
+        cfg.reminderMinutes = 30;
     return cfg;
 }
 function getTicketCaseBucket(categoryOrReason) {
@@ -295,7 +348,7 @@ async function autoRouteTicket(guild, ticket) {
     const handlerIds = Array.from(role.members.values())
         .filter(member => !member.user.bot)
         .map(member => member.id);
-    const best = (0, ticketEnhancements_1.pickLeastLoadedAssignee)(handlerIds, exports.ticketStore.tickets);
+    const best = (0, ticketEnhancements_1.pickLeastLoadedAssignee)(handlerIds, exports.ticketStore.tickets.filter(entry => entry.guildId === guild.id));
     if (!best)
         return;
     const assigned = (0, records_1.assignTicketToUser)(ticket.channelId, best);

@@ -22,9 +22,8 @@ const audit_1 = require("./audit");
 const store_1 = require("../moderation/store");
 const store_2 = require("../tickets/store");
 const roles_1 = require("../xp/roles");
-const records_1 = require("../tickets/records");
 const embeds_1 = require("../ui/embeds");
-const channels_1 = require("../tickets/channels");
+const experience_1 = require("../tickets/experience");
 function getPrimaryGuild() {
     return config_1.DISCORD_GUILD_ID
         ? client_1.client.guilds.cache.get(config_1.DISCORD_GUILD_ID) || null
@@ -312,52 +311,6 @@ async function runHealthWatchdog(reason) {
         (0, store_2.purgeResolvedTicketsByRetention)(guild.id, now);
     }
 }
-async function runTicketSlaWatchdog(guild, reason) {
-    const now = Date.now();
-    const activeTickets = store_2.ticketStore.tickets.filter(t => t.guildId === guild.id &&
-        ((0, store_2.normalizeTicketStatus)(t.status) === "open" || (0, store_2.normalizeTicketStatus)(t.status) === "claimed" || (0, store_2.normalizeTicketStatus)(t.status) === "archived"));
-    for (const ticket of activeTickets) {
-        const status = (0, store_2.normalizeTicketStatus)(ticket.status);
-        const thresholds = (0, store_2.buildTicketSlaThresholds)(ticket);
-        const age = now - ticket.createdAt;
-        const firstResponseWarned = (ticket.events || []).some(event => event.type === "sla_first_response_warning");
-        const firstResponseBreached = (ticket.events || []).some(event => event.type === "sla_first_response_breach");
-        const resolveWarned = (ticket.events || []).some(event => event.type === "sla_resolution_warning");
-        const resolveBreached = (ticket.events || []).some(event => event.type === "sla_resolution_breach");
-        if (!ticket.firstResponseAt && age >= thresholds.firstResponseWarnMs && !firstResponseWarned) {
-            (0, store_2.recordTicketEvent)(ticket, guild.members.me?.id || guild.ownerId, "sla_first_response_warning", "First-response SLA warning issued.");
-            await (0, records_1.ticketChannelNotice)(guild, ticket, `SLA warning: first response target is approaching for ticket #${ticket.id}.`);
-            (0, store_2.saveTicketStore)();
-        }
-        if (!ticket.firstResponseAt && age >= thresholds.firstResponseBreachMs && !firstResponseBreached) {
-            ticket.workflowStatus = "escalated";
-            (0, store_2.recordTicketEvent)(ticket, guild.members.me?.id || guild.ownerId, "sla_first_response_breach", "First-response SLA breached; ticket escalated.");
-            await (0, records_1.ticketChannelNotice)(guild, ticket, `SLA breach: ticket #${ticket.id} has been escalated to senior support.`);
-            (0, store_2.saveTicketStore)();
-        }
-        if (status !== "resolved" && age >= thresholds.resolveWarnMs && !resolveWarned) {
-            (0, store_2.recordTicketEvent)(ticket, guild.members.me?.id || guild.ownerId, "sla_resolution_warning", "Resolution SLA warning issued.");
-            await (0, records_1.ticketChannelNotice)(guild, ticket, `SLA warning: resolution target is approaching for ticket #${ticket.id}.`);
-            (0, store_2.saveTicketStore)();
-        }
-        if (status !== "resolved" && age >= thresholds.resolveBreachMs && !resolveBreached) {
-            ticket.workflowStatus = "escalated";
-            (0, store_2.recordTicketEvent)(ticket, guild.members.me?.id || guild.ownerId, "sla_resolution_breach", "Resolution SLA breached; ticket escalated.");
-            await (0, records_1.ticketChannelNotice)(guild, ticket, `SLA breach: ticket #${ticket.id} requires senior escalation.`);
-            (0, store_2.saveTicketStore)();
-        }
-        if (status === "open" && !ticket.claimedById && now - ticket.createdAt >= config_1.UNCLAIMED_TICKET_AUTO_CLOSE_MS) {
-            const closedById = guild.members.me?.id || guild.ownerId;
-            await (0, channels_1.closeTicketChannel)(guild, ticket.channelId, closedById, "Auto-closed: ticket was not claimed within 30 minutes.");
-            (0, audit_1.appendAuditEvent)("ticket_auto_close_unclaimed", {
-                guildId: guild.id,
-                ticketId: ticket.id,
-                channelId: ticket.channelId,
-                ownerId: ticket.ownerId,
-                ageMinutes: Math.floor((now - ticket.createdAt) / 60000),
-                thresholdMinutes: Math.floor(config_1.UNCLAIMED_TICKET_AUTO_CLOSE_MS / 60000),
-                reason
-            });
-        }
-    }
+async function runTicketSlaWatchdog(guild, _reason) {
+    await (0, experience_1.runTicketReplyReminders)(guild);
 }

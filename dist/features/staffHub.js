@@ -17,6 +17,7 @@ exports.buildIncidentAlert = buildIncidentAlert;
 exports.buildIncidentLog = buildIncidentLog;
 const discord_js_1 = require("discord.js");
 const botSettings_1 = require("./botSettings");
+const ids_1 = require("../bot/ui/ids");
 exports.STAFF_COLOR = 0x9b59b6;
 exports.STAFF_IDS = {
     home: "staff:home",
@@ -53,7 +54,7 @@ function buildStaffHome(input) {
         `🩺 Health issues: **${input.healthIssues}**`
     ].join("\n"));
     const rows = [
-        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.caseLookup).setLabel(input.ticketId ? "Case & Checklist" : "Case Lookup").setEmoji("📁").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.kbSearch).setLabel("Search KB").setEmoji("🔎").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.kbAdd).setLabel("Add KB Article").setEmoji("📝").setStyle(discord_js_1.ButtonStyle.Secondary)).toJSON(),
+        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.caseLookup).setLabel(input.ticketId ? "Case & Checklist" : "Case Lookup").setEmoji("📁").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.kbSearch).setLabel("Help Articles").setEmoji("🔎").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.kbAdd).setLabel("Add Help Article").setEmoji("📝").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.queue).setLabel("Support Queue").setStyle(discord_js_1.ButtonStyle.Primary)).toJSON(),
         new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${exports.STAFF_IDS.settings}:channels`).setLabel("Settings").setEmoji("⚙️").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.health).setLabel("Health Check").setEmoji("🩺").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.STAFF_IDS.incidents).setLabel("Spam Alert Log").setEmoji("🚨").setStyle(discord_js_1.ButtonStyle.Secondary)).toJSON()
     ];
     return { embeds: [embed.toJSON()], components: rows };
@@ -142,14 +143,14 @@ function parseNumericFields(values, specs) {
     return errors.length ? { ok: false, errors } : { ok: true, values: parsed };
 }
 function buildKbSearchModal() {
-    return new discord_js_1.ModalBuilder().setCustomId(exports.STAFF_IDS.kbSearchModal).setTitle("Search Knowledge Base").addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("query").setLabel("Keywords")
+    return new discord_js_1.ModalBuilder().setCustomId(exports.STAFF_IDS.kbSearchModal).setTitle("Search Help Articles").addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("query").setLabel("Keywords")
         .setPlaceholder("e.g. voice xp double, crate limit, appeal").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(100)));
 }
 function buildKbAddModal() {
-    return new discord_js_1.ModalBuilder().setCustomId(exports.STAFF_IDS.kbAddModal).setTitle("Add KB Article").addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("title").setLabel("Title").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(100)), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("body").setLabel("Answer / steps").setStyle(discord_js_1.TextInputStyle.Paragraph).setRequired(true).setMaxLength(1500)), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("tags").setLabel("Tags (comma separated)").setStyle(discord_js_1.TextInputStyle.Short).setRequired(false).setMaxLength(200)));
+    return new discord_js_1.ModalBuilder().setCustomId(exports.STAFF_IDS.kbAddModal).setTitle("Add Help Article").addComponents(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("title").setLabel("Title").setStyle(discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(100)), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("body").setLabel("Answer / steps").setStyle(discord_js_1.TextInputStyle.Paragraph).setRequired(true).setMaxLength(1500)), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId("tags").setLabel("Tags (comma separated)").setStyle(discord_js_1.TextInputStyle.Short).setRequired(false).setMaxLength(200)));
 }
 function buildKbResults(query, hits) {
-    const embed = new discord_js_1.EmbedBuilder().setColor(exports.STAFF_COLOR).setTitle(`🔎 Knowledge Base • "${query.slice(0, 60)}"`);
+    const embed = new discord_js_1.EmbedBuilder().setColor(exports.STAFF_COLOR).setTitle(`🔎 Help Articles • "${query.slice(0, 60)}"`);
     if (!hits.length)
         embed.setDescription("No matches. Try fewer or different keywords, or add an article from the Staff Desk.");
     for (const hit of hits) {

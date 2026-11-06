@@ -6,7 +6,7 @@ import { getBossPortraitFiles, getBossPortraitUrl } from "../../game/bossPortrai
 import {
     ACTIVITY_CHANNEL_ID, ARMY_ICON_URL, BACKUP_STALE_WARNING_MS, BALANCE_TELEMETRY_FILE, DISCORD_GUILD_ID,
     EVENT_LOG_FILE, HEALTH_REPORT_CHANNEL_ID, METRICS_DATA_FILE, MOD_DATA_FILE, POINTS_BACKUP_FILE,
-    POINTS_DATA_FILE, TICKET_DATA_FILE, TRADE_DATA_FILE, UNCLAIMED_TICKET_AUTO_CLOSE_MS, XP_ROLE_METRICS_FILE
+    POINTS_DATA_FILE, TICKET_DATA_FILE, TRADE_DATA_FILE, XP_ROLE_METRICS_FILE
 } from "./config";
 import { client } from "./client";
 import { formatMetricDuration, runtimeMetrics } from "./metrics";
@@ -14,16 +14,12 @@ import { formatDuration, postOpsAlert, statLabel, statSummary } from "./ops";
 import { type BalanceSlice, balanceTelemetry, saveBalanceTelemetry } from "./telemetry";
 import { appendAuditEvent } from "./audit";
 import { ensureGuildModeration } from "../moderation/store";
-import {
-    buildTicketSlaThresholds, normalizeTicketStatus, purgeResolvedTicketsByRetention, recordTicketEvent,
-    saveTicketStore, ticketStore
-} from "../tickets/store";
+import { purgeResolvedTicketsByRetention } from "../tickets/store";
 import {
     readXpRoleDeadLetters, XP_ROLE_SYNC_METRICS, XP_ROLE_SYNC_QUEUE, XP_ROLE_SYNC_RUNNING_GUILDS
 } from "../xp/roles";
-import { ticketChannelNotice } from "../tickets/records";
 import { brandLiveEmbed } from "../ui/embeds";
-import { closeTicketChannel } from "../tickets/channels";
+import { runTicketReplyReminders } from "../tickets/experience";
 
 export function getPrimaryGuild(): Guild | null {
     return DISCORD_GUILD_ID
@@ -366,57 +362,6 @@ export async function runHealthWatchdog(reason: string): Promise<void> {
     }
 }
 
-async function runTicketSlaWatchdog(guild: Guild, reason: string): Promise<void> {
-    const now = Date.now();
-    const activeTickets = ticketStore.tickets.filter(t =>
-        t.guildId === guild.id &&
-        (normalizeTicketStatus(t.status) === "open" || normalizeTicketStatus(t.status) === "claimed" || normalizeTicketStatus(t.status) === "archived")
-    );
-
-    for (const ticket of activeTickets) {
-        const status = normalizeTicketStatus(ticket.status);
-        const thresholds = buildTicketSlaThresholds(ticket);
-        const age = now - ticket.createdAt;
-        const firstResponseWarned = (ticket.events || []).some(event => event.type === "sla_first_response_warning");
-        const firstResponseBreached = (ticket.events || []).some(event => event.type === "sla_first_response_breach");
-        const resolveWarned = (ticket.events || []).some(event => event.type === "sla_resolution_warning");
-        const resolveBreached = (ticket.events || []).some(event => event.type === "sla_resolution_breach");
-
-        if (!ticket.firstResponseAt && age >= thresholds.firstResponseWarnMs && !firstResponseWarned) {
-            recordTicketEvent(ticket, guild.members.me?.id || guild.ownerId, "sla_first_response_warning", "First-response SLA warning issued.");
-            await ticketChannelNotice(guild, ticket, `SLA warning: first response target is approaching for ticket #${ticket.id}.`);
-            saveTicketStore();
-        }
-        if (!ticket.firstResponseAt && age >= thresholds.firstResponseBreachMs && !firstResponseBreached) {
-            ticket.workflowStatus = "escalated";
-            recordTicketEvent(ticket, guild.members.me?.id || guild.ownerId, "sla_first_response_breach", "First-response SLA breached; ticket escalated.");
-            await ticketChannelNotice(guild, ticket, `SLA breach: ticket #${ticket.id} has been escalated to senior support.`);
-            saveTicketStore();
-        }
-        if (status !== "resolved" && age >= thresholds.resolveWarnMs && !resolveWarned) {
-            recordTicketEvent(ticket, guild.members.me?.id || guild.ownerId, "sla_resolution_warning", "Resolution SLA warning issued.");
-            await ticketChannelNotice(guild, ticket, `SLA warning: resolution target is approaching for ticket #${ticket.id}.`);
-            saveTicketStore();
-        }
-        if (status !== "resolved" && age >= thresholds.resolveBreachMs && !resolveBreached) {
-            ticket.workflowStatus = "escalated";
-            recordTicketEvent(ticket, guild.members.me?.id || guild.ownerId, "sla_resolution_breach", "Resolution SLA breached; ticket escalated.");
-            await ticketChannelNotice(guild, ticket, `SLA breach: ticket #${ticket.id} requires senior escalation.`);
-            saveTicketStore();
-        }
-
-        if (status === "open" && !ticket.claimedById && now - ticket.createdAt >= UNCLAIMED_TICKET_AUTO_CLOSE_MS) {
-            const closedById = guild.members.me?.id || guild.ownerId;
-            await closeTicketChannel(guild, ticket.channelId, closedById, "Auto-closed: ticket was not claimed within 30 minutes.");
-            appendAuditEvent("ticket_auto_close_unclaimed", {
-                guildId: guild.id,
-                ticketId: ticket.id,
-                channelId: ticket.channelId,
-                ownerId: ticket.ownerId,
-                ageMinutes: Math.floor((now - ticket.createdAt) / 60000),
-                thresholdMinutes: Math.floor(UNCLAIMED_TICKET_AUTO_CLOSE_MS / 60000),
-                reason
-            });
-        }
-    }
+async function runTicketSlaWatchdog(guild: Guild, _reason: string): Promise<void> {
+    await runTicketReplyReminders(guild);
 }

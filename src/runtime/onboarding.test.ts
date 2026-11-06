@@ -5,19 +5,20 @@ import vm from "node:vm";
 import ts from "typescript";
 import {
     ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, DiscordAPIError,
-    EmbedBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle, type APIEmbed
+    EmbedBuilder, MessageFlags, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, type APIEmbed
 } from "discord.js";
 import { buildTicketIntakeReason, classifyTicketCategory, getTicketSlaPolicy, hydrateTicketIntakeFields, parseTicketIntakeSnapshot } from "../services/ticketEnhancements";
 import { createTicketEntry, getTicketSlaState, normalizeTicketStatus, type TicketRecord } from "../services/ticketState";
+import { isTicketTopic, TICKET_TOPICS, ticketDisplayStatus } from "../services/ticketExperience";
 const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
 
 const source = ts.createSourceFile("bot.ts", readBotSource(), ts.ScriptTarget.ES2020, true);
 const functionNames = new Set([
     "buildBotFeatureBriefPayload", "upsertBotFeatureBriefInChannel", "buildTicketPanelPayload",
-    "upsertTicketPanelInChannel", "messageHasTicketOpenButton", "buildTicketIntakeModal",
+    "upsertTicketPanelInChannel", "messageHasTicketOpenButton", "buildTicketIntakeModal", "buildTicketCategoryPicker", "buildTicketRetryRow",
     "buildGettingStartedEmbed", "handleCommunityInteraction", "handleFormInteraction", "handleTicketButtonInteraction",
     "buildTicketOpsEmbed", "buildTicketOpsComponents", "buildTicketStaffEmbed", "buildTicketStaffComponents",
-    "getTicketNextActionHint", "updateTicketOpsPanelMessage", "refreshTicketPanelsForGuild"
+    "getTicketNextActionHint", "updateTicketOpsPanelMessage", "performTicketPanelUpdate", "refreshTicketPanelsForGuild"
 ]);
 const constantNames = new Set(["ONBOARDING_IDS", "HELP_IDS", "TICKET_IDS", "TICKET_TEMPLATE_IDS", "REPORT_IDS", "GIVEAWAY_IDS"]);
 const selected = source.statements.filter(node =>
@@ -47,6 +48,7 @@ let storedId: string | null = "saved";
 const helpEvents: string[] = [];
 const createEvents: string[] = [];
 let createdReason = "";
+let createdIntake: { details?: string } | undefined;
 let createError: string | undefined;
 const ticket = createTicketEntry({ nextId: 41, version: 1, tickets: [] }, "guild", "owner", "channel",
     buildTicketIntakeReason({ category: "general", summary: "Missing raid loot", details: "I extracted but cannot find the loot." }),
@@ -57,7 +59,17 @@ const actionEvents: string[] = [];
 const context = vm.createContext({
     exports: {}, console,
     ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, DiscordAPIError, EmbedBuilder,
-    MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle,
+    MessageFlags, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle,
+    isTicketTopic, TICKET_TOPICS, ticketDisplayStatus,
+    getTicketDraft: () => undefined,
+    saveTicketDraft: () => true,
+    buildHandlerSelector: () => new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId("test_assign").setLabel("Assign Handler").setStyle(ButtonStyle.Secondary)),
+    ticketPanelSignatures: new Map(),
+    ticketPanelCheckedAt: new Map(),
+    ticketPanelUpdates: new Map(),
+    handleTicketExperienceInteraction: async () => false,
+    buildResolveConfirmation: () => ({ content: "Confirm Permanent Resolution", components: [] }),
     MIN_RAID_BET: 10,
     PERMANENT_TICKET_PANEL_CHANNEL_ID: "1506119505720377434",
     STAFF_IDS: { home: "staff:home" },
@@ -91,9 +103,10 @@ const context = vm.createContext({
     },
     helpDropdown: (page: string) => { helpEvents.push(`menu:${page}`); return []; },
     buildTicketIntakeReason, classifyTicketCategory,
-    createTicketChannel: async (_guild: unknown, _owner: string, reason: string) => {
+    createTicketChannel: async (_guild: unknown, _owner: string, reason: string, _priority: string, _bypass: boolean, intake?: { details: string }) => {
         createEvents.push("create");
         createdReason = reason;
+        createdIntake = intake;
         return createError ? { error: createError } : { channelId: "ticket-channel" };
     }
 });
@@ -147,11 +160,11 @@ assert.ok(support.embed.description!.length < 400);
 assert.equal(support.components[0].components[0].custom_id, TICKET_IDS.open);
 const modal = functions.buildTicketIntakeModal().toJSON();
 assert.equal(modal.title, "Open Support Ticket");
-assert.equal(modal.components.length, 4);
+assert.equal(modal.components.length, 3);
 const inputs = modal.components.flatMap(row => row.components);
 assert.deepEqual(inputs.map(input => input.custom_id),
-    [TICKET_IDS.intakeSummary, TICKET_IDS.intakeDetails, TICKET_IDS.intakeCategory, TICKET_IDS.intakeEvidence]);
-assert.deepEqual(inputs.map(input => input.required), [true, true, false, false]);
+    [TICKET_IDS.intakeSummary, TICKET_IDS.intakeDetails, TICKET_IDS.intakeEvidence]);
+assert.deepEqual(inputs.map(input => input.required), [true, true, false]);
 assert.equal(inputs[1].max_length, 700, "match the persisted detail limit");
 
 const card = functions.buildTicketOpsEmbed(ticket).toJSON();
@@ -161,12 +174,12 @@ assert.equal(card.fields?.length, 4, "default ticket has three summary fields an
 assert.deepEqual(card.fields?.map(field => field.name), ["Member", "Status", "Handler", "Your request"]);
 assert.ok(!JSON.stringify(card).match(/SLA|Lifecycle|Workflow|Command Deck|Case Graph|Not provided|No evidence/));
 assert.ok(JSON.stringify(card).length < 750, "member card stays compact");
-assert.equal(functions.buildTicketOpsComponents(ticket)[0].components.length, 3);
+assert.equal(functions.buildTicketOpsComponents(ticket)[0].components.length, 4);
 const assigned = { ...ticket, assignedToId: "handler", status: "claimed" as const, workflowStatus: "responded" as const };
 assert.equal(functions.buildTicketOpsEmbed(assigned).data.fields?.[1].value, "In progress");
 assert.equal(functions.buildTicketOpsEmbed(assigned).data.fields?.[2].value, "<@handler>");
 const waiting = { ...assigned, workflowStatus: "waiting_user" as const };
-assert.equal(functions.buildTicketOpsEmbed(waiting).data.fields?.[1].value, "Waiting for your reply");
+assert.equal(functions.buildTicketOpsEmbed(waiting).data.fields?.[1].value, "Waiting for you");
 const closed = { ...assigned, status: "archived" as const };
 assert.equal(functions.buildTicketOpsEmbed(closed).data.fields?.[1].value, "Closed");
 assert.equal(functions.buildTicketOpsComponents(closed)[0].components.length, 1, "closed tickets only show staff tools");
@@ -252,6 +265,7 @@ async function run(): Promise<void> {
     assert.match(JSON.stringify(refreshed?.embeds), /Support Ticket #41/);
     assert.equal(refreshed?.components?.length, 1, "legacy rows must be replaced along with the embed");
     ticket.panelMessageId = null;
+    (context.ticketPanelSignatures as Map<string, string>).clear();
     message.embeds = [{ title: "🏛️ FN Support • Case #41 Command Deck" }];
     await functions.refreshTicketPanelsForGuild(guild);
     assert.equal(ticket.panelMessageId, "saved", "startup migrates the old Command Deck in place");
@@ -263,8 +277,23 @@ async function run(): Promise<void> {
     tickets.tickets.push(terminal);
     const editCount = edits;
     await functions.refreshTicketPanelsForGuild(guild);
-    assert.equal(edits, editCount + 1, "startup skips resolved cases");
+    assert.equal(edits, editCount, "startup skips resolved cases and unchanged cards");
     tickets.tickets.pop();
+    const checkedAt = context.ticketPanelCheckedAt as Map<string, number>;
+    checkedAt.set(ticket.channelId, 0);
+    await functions.updateTicketOpsPanelMessage(guild, ticket);
+    assert.equal(edits, editCount, "periodic health checks fetch but do not edit unchanged panels");
+    checkedAt.set(ticket.channelId, 0);
+    fetchError = new Error("Missing Permissions");
+    await assert.rejects(functions.updateTicketOpsPanelMessage(guild, ticket), /Missing Permissions/);
+    assert.equal(sends, sendsBefore, "permission failures cannot post duplicate cards");
+    fetchError = new DiscordAPIError({ code: 10008, message: "Unknown Message" }, 10008, 404, "GET", "https://discord.com/api", {});
+    history = new Collection();
+    await functions.updateTicketOpsPanelMessage(guild, ticket);
+    assert.equal(sends, sendsBefore + 1, "deleted unchanged cards are recovered by periodic health checks");
+    assert.equal(ticket.panelMessageId, "new");
+    fetchError = null;
+    ticket.panelMessageId = "saved";
     ticket.status = "archived";
     await functions.updateTicketOpsPanelMessage(guild, ticket);
     refreshed = savedReply as Reply | null;
@@ -288,14 +317,14 @@ async function run(): Promise<void> {
     assert.deepEqual(helpEvents, ["defer", "build:general", "menu:general"]);
     assert.equal(JSON.stringify(welcome), originalWelcome, "private guides do not rewrite the public panel");
 
-    let openedModal: ModalBuilder | null = null;
+    let openedPicker: Reply | null = null;
     assert.equal(await functions.handleTicketButtonInteraction({
         customId: support.components[0].components[0].custom_id,
         guild, isButton: () => true,
-        showModal: async (value: ModalBuilder) => { openedModal = value; }
+        reply: async (value: Reply) => { openedPicker = value; }
     }), true);
-    assert.equal((openedModal as ModalBuilder | null)?.toJSON().custom_id, TICKET_IDS.intakeModal,
-        "the actual support panel must open the simplified intake form");
+    assert.equal((openedPicker as Reply | null)?.flags, MessageFlags.Ephemeral,
+        "the support panel opens the category picker privately");
 
     const toolsButton = (staff: boolean, channelId = "channel") => ({
         customId: TICKET_IDS.tools, guild, channelId, member: { staff }, isButton: () => true,
@@ -306,7 +335,7 @@ async function run(): Promise<void> {
     assert.equal(replies[replies.length - 1].embeds, undefined);
     await functions.handleTicketButtonInteraction(toolsButton(true));
     assert.equal(replies[replies.length - 1].flags, MessageFlags.Ephemeral);
-    assert.equal(replies[replies.length - 1].components?.length, 2);
+    assert.equal(replies[replies.length - 1].components?.length, 3);
     assert.match(JSON.stringify(replies[replies.length - 1].embeds), /Staff • Ticket #41/);
     await functions.handleTicketButtonInteraction(toolsButton(true, "untracked"));
     assert.equal(replies[replies.length - 1].content, "This ticket is no longer tracked.");
@@ -335,7 +364,8 @@ async function run(): Promise<void> {
     assert.deepEqual(actionEvents, ["defer", "tracked", "close", "edit"]);
     actionEvents.length = 0;
     await functions.handleTicketButtonInteraction(actionButton(TICKET_IDS.resolve));
-    assert.deepEqual(actionEvents, ["defer", "tracked", "resolve", "edit"], "transcript/resolution work starts after acknowledgement");
+    assert.deepEqual(actionEvents, ["defer", "tracked", "edit"], "resolution requires a separate staff confirmation");
+    assert.equal(replies[replies.length - 1].content, "Confirm Permanent Resolution");
     ticket.status = "open";
 
     const submit = async (category = "", evidence = "", platform?: string, details = "Need help finding raid loot") => {
@@ -368,6 +398,8 @@ async function run(): Promise<void> {
     assert.match(JSON.stringify(replies[replies.length - 1]), /ticket-channel/);
     await submit("bug", "", "PC");
     assert.equal(parseTicketIntakeSnapshot(createdReason).platform, "PC", "old in-flight forms retain platform data");
+    await submit("bug", "", undefined, "First | Second");
+    assert.equal(createdIntake?.details, "First | Second", "submitted details reach creation without lossy parsing");
     for (const topic of ["report", "appeal", "billing"]) {
         await submit(topic);
         assert.deepEqual(createEvents, ["reply"], `${topic} still requires evidence`);

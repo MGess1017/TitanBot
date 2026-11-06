@@ -5,8 +5,12 @@ Titan Raid Bot is a Discord bot designed to provide an engaging gaming experienc
 
 ## Features
 - **Welcome to FNT**: The newcomer panel in channel `1528998695624773714` (`BOT_FEATURE_BRIEF_CHANNEL_ID` override) replaces the old About Titan Bot reference message in place. Five short bullets introduce profiles, free daily rewards, raids, server XP, and support. **Get Started** opens a private first-ten-minutes guide with a minimum-stake, low-risk raid example; **Command Guide** opens privately without changing the public panel. Support is referenced only by mentioning the actual ticket panel channel, `1506119505720377434` (`PERMANENT_TICKET_PANEL_CHANNEL_ID` override); there is no ticket-opening button on the welcome panel. No new slash command is needed.
-- **Simple Support Intake**: The support panel gives four short instructions. Its form asks for a summary and details, with an optional topic and screenshot/message links; reports, appeals, and billing still require evidence links. Include platform/order information in the details and upload additional files in the ticket. Submission immediately acknowledges the interaction while the private channel is created. Existing staff assignment, status, transcripts, and other case tools are unchanged.
-- **Compact Ticket Cards**: Each case shows its summary, member, readable status, handler, and request. References and evidence appear only when supplied. One row offers Claim Ticket, Close Ticket, and Staff Tools; closed tickets show only Staff Tools. Closing still archives the case for staff review/reopening. Staff Tools opens privately with SLA diagnostics, case links, response templates, watch, case history/checklists, and permanent resolution (enabled only after closure). Existing open and archived cards are refreshed in place at startup when automatic panels are enabled, and on case updates. `npm run test:runtime:onboarding` covers these views, permissions, and migration.
+- **Support Intake & Retry Drafts**: The support panel, `/ticket` without a reason, and `/ticketintake` open a private category selector, then a three-field form (summary, details, screenshot/message links). Reports, appeals, and billing require evidence links. Include platform/order information in the details; legacy in-flight forms still work. Failed submissions retain a per-guild, per-member draft for 24 hours in `src/data/ticket-drafts.json`, including across restarts. **Edit / Retry Request** reopens it prefilled. Successful submissions clear the draft; save failures are logged and shown to the member. Drafts are capped at 1,000 active entries.
+- **Compact Ticket Cards**: Each case shows its summary, member, readable status, handler, and request. References and evidence appear only when supplied. Members can **Request Closure**; this leaves the case open for staff review. Staff can Claim Ticket, Close Ticket, or open private Staff Tools. Member replies automatically show **Waiting for staff**; **Request Information** sends the staff question and shows **Waiting for you**. Normal staff replies mark the case in progress. Closing archives the case; reopening restores member send permissions. Permanent resolution requires a separate staff-bound confirmation, rejected if the case changes. Existing cards are migrated at startup.
+- **Private Support Queue**: `/staff` → Support Queue offers paginated Unclaimed, Waiting for Staff, Waiting for Member, and Overdue Replies views with direct channel links. Staff Tools includes Assign Handler, Request Information, case history/checklists, templates, and watch. Knowledge-base controls use the label **Help Articles**. Queue navigation and notifications settings are staff-only and never replace the public case card.
+- **Ticket Notifications**: Creation and member replies notify the assigned handler (claim lead as fallback), or send an unpinged staff alert for unassigned cases. Staff replies can notify the member. From Support Queue → Notification Settings, staff can turn these notifications on/off and set a 5–1440 minute minimum interval (default 30). Notification keys and last-send times persist to suppress duplicate/burst alerts across restarts. Failed deliveries are logged and not marked delivered. Overdue staff replies receive periodic targeted reminders; waiting-member and closed cases do not. The previous automatic closure of unclaimed tickets is removed: delays by staff must not close a member's request.
+- **Ticket Reliability**: Panel IDs are reused; history is scanned only when recovering a missing card. Unchanged cards skip edits and concurrent updates are serialized. Per-channel action guards prevent overlapping claim/close/resolve/assignment and block conflicting state mutations. Member replies wait for pending case actions rather than being discarded. Transcript export includes full sanitized message text, embed content, and attachment links, paginates up to 10,000 messages, flushes and atomically saves the file, then verifies its SHA-256 readback before resolution/deletion. Fetch, export-limit, disk, or verification failures preserve the channel and alert staff. Channel-deletion failures are surfaced for manual cleanup. Larger tickets need a manual export; attachment links are not copies of the underlying files.
+- **Ticket Verification**: `npm run test:runtime:onboarding`, `npm run test:runtime:ticket-system`, `npm run test:runtime:ticket-enhancements`, and `npm run test:runtime:staff-profile` cover cards, private views, state transitions, drafts/restarts, notification suppression, locks, and transcript failures.
 - **PMC Progression**: Users advance through 50,000 levels and optional Prestige I-X with permanent raid bonuses.
 - **Raid System**: Initiate raids with random outcomes, where users can earn XP and FN Token$ based on their performance.
 - **Economy Management**: Users can manage their FN Token$ balance, earn daily rewards, and participate in games like crash.
@@ -110,16 +114,14 @@ Editing tips:
 Run from the existing bot repository on the VPS. Keep the current `.env` and `src/data` files. A fast-forward pull stops on conflicting local changes; resolve those without discarding live player data.
 
 ```bash
-set -e
-git pull --ff-only origin main
-npm install --include=dev
-npm run verify:all
-npm run restart:pm2
-npx pm2 save
+git pull --ff-only origin main &&
+npm run build &&
+npx pm2 startOrReload ecosystem.config.cjs --only titan-raid-bot --update-env &&
+npx pm2 save &&
 npx pm2 logs titan-raid-bot --lines 50 --nostream
 ```
 
-The verification gate builds `dist` before PM2 restarts `titan-raid-bot`. Check the logs for successful login and command registration.
+This builds `dist` before PM2 restarts `titan-raid-bot`. Failed steps stop the command chain without exiting your SSH shell. Check the logs for successful login and command registration.
 
 ## Operations and Reliability
 - Persistent VC sessions:

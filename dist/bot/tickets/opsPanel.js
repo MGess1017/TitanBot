@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.ticketPanelUpdates = exports.ticketPanelCheckedAt = exports.ticketPanelSignatures = void 0;
 exports.buildTicketCommandEmbed = buildTicketCommandEmbed;
 exports.buildTicketCommandEmbedPayload = buildTicketCommandEmbedPayload;
 exports.getTicketNextActionHint = getTicketNextActionHint;
@@ -18,6 +19,8 @@ const records_1 = require("./records");
 const embeds_1 = require("../ui/embeds");
 const ids_1 = require("../ui/ids");
 const staffHub_1 = require("../../features/staffHub");
+const ticketExperience_1 = require("../../services/ticketExperience");
+const experience_1 = require("./experience");
 function buildTicketCommandEmbed(title, description, ticket, fields = []) {
     const statusEmoji = {
         open: "🟢",
@@ -69,11 +72,7 @@ function getTicketNextActionHint(ticket) {
 }
 function buildTicketOpsEmbed(ticket) {
     const status = (0, store_1.normalizeTicketStatus)(ticket.status);
-    const statusLabel = status === "archived" ? "Closed"
-        : status === "resolved" ? "Resolved"
-            : ticket.workflowStatus === "waiting_user" ? "Waiting for your reply"
-                : ticket.workflowStatus === "escalated" ? "Under review"
-                    : ticket.assignedToId || ticket.claimedById ? "In progress" : "Waiting for staff";
+    const statusLabel = (0, ticketExperience_1.ticketDisplayStatus)(ticket);
     const intake = (0, ticketEnhancements_1.hydrateTicketIntakeFields)(ticket.reason, {
         summary: ticket.intakeSummary,
         details: ticket.intakeDetails,
@@ -109,6 +108,9 @@ function buildTicketOpsComponents(ticket) {
         row.addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.claim)
             .setLabel(ticket.claimedById ? "Claimed" : "Claim Ticket")
             .setStyle(discord_js_1.ButtonStyle.Primary).setDisabled(Boolean(ticket.claimedById)), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.close).setLabel("Close Ticket").setStyle(discord_js_1.ButtonStyle.Secondary));
+        row.addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.requestClose)
+            .setLabel(ticket.closureRequestedAt ? "Closure Requested" : "Request Closure")
+            .setDisabled(Boolean(ticket.closureRequestedAt)).setStyle(discord_js_1.ButtonStyle.Secondary));
     }
     row.addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.tools)
         .setLabel("Staff Tools").setStyle(discord_js_1.ButtonStyle.Secondary));
@@ -118,8 +120,9 @@ function buildTicketStaffComponents(ticket) {
     const status = (0, store_1.normalizeTicketStatus)(ticket.status);
     return [
         new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.resolve).setLabel("Resolve Permanently")
-            .setStyle(discord_js_1.ButtonStyle.Danger).setDisabled(status !== "archived"), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.watch).setLabel("Watch Ticket").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(staffHub_1.STAFF_IDS.home).setLabel("Case History & Checklist").setStyle(discord_js_1.ButtonStyle.Primary)),
-        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.ack).setLabel("Acknowledgement").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.evidence).setLabel("Request Evidence").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.resolved).setLabel("Resolution Reply").setStyle(discord_js_1.ButtonStyle.Secondary))
+            .setStyle(discord_js_1.ButtonStyle.Danger).setDisabled(status !== "archived"), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.watch).setLabel("Watch Ticket").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.requestInfo).setLabel("Request Information").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(status === "archived" || status === "resolved"), new discord_js_1.ButtonBuilder().setCustomId(staffHub_1.STAFF_IDS.home).setLabel("Case History & Checklist").setStyle(discord_js_1.ButtonStyle.Primary)),
+        new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.ack).setLabel("Acknowledgement").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.evidence).setLabel("Request Evidence").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(store_1.TICKET_TEMPLATE_IDS.resolved).setLabel("Resolution Reply").setStyle(discord_js_1.ButtonStyle.Secondary)),
+        (0, experience_1.buildHandlerSelector)()
     ];
 }
 function buildTicketStaffEmbed(ticket) {
@@ -163,12 +166,47 @@ function buildTicketStaffEmbed(ticket) {
     }
     return (0, embeds_1.sanitizeEmbedBuilder)(embed);
 }
+exports.ticketPanelSignatures = new Map();
+exports.ticketPanelCheckedAt = new Map();
+exports.ticketPanelUpdates = new Map();
 async function updateTicketOpsPanelMessage(guild, ticket) {
-    const channel = (guild.channels.cache.get(ticket.channelId)
-        || await guild.channels.fetch(ticket.channelId).catch(() => null));
-    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+    const previous = exports.ticketPanelUpdates.get(ticket.channelId);
+    const pending = (previous || Promise.resolve()).catch(error => {
+        console.error(`Previous panel update failed for ticket #${ticket.id}:`, error);
+    }).then(() => performTicketPanelUpdate(guild, ticket));
+    exports.ticketPanelUpdates.set(ticket.channelId, pending);
+    try {
+        await pending;
+    }
+    finally {
+        if (exports.ticketPanelUpdates.get(ticket.channelId) === pending)
+            exports.ticketPanelUpdates.delete(ticket.channelId);
+    }
+}
+async function performTicketPanelUpdate(guild, ticket) {
+    const embeds = [buildTicketOpsEmbed(ticket)];
+    const components = buildTicketOpsComponents(ticket);
+    const savedPanelId = ticket.panelMessageId;
+    const signature = JSON.stringify({ messageId: ticket.panelMessageId, embeds: embeds.map(embed => embed.toJSON()), components: components.map(row => row.toJSON()) });
+    const unchanged = ticket.panelMessageId && exports.ticketPanelSignatures.get(ticket.channelId) === signature;
+    if (unchanged && Date.now() - (exports.ticketPanelCheckedAt.get(ticket.channelId) || 0) < 5 * 60000)
         return;
+    const channel = (guild.channels.cache.get(ticket.channelId)
+        || await guild.channels.fetch(ticket.channelId));
+    if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+        console.warn(`Ticket #${ticket.id} channel is missing or not text-based.`);
+        return;
+    }
     let panelMessageId = ticket.panelMessageId;
+    let panelMessage = panelMessageId ? await channel.messages.fetch(panelMessageId).catch(error => {
+        if (error instanceof discord_js_1.DiscordAPIError && error.code === 10008)
+            return null;
+        throw error;
+    }) : null;
+    if (panelMessage && panelMessage.author.id !== client_1.client.user?.id)
+        panelMessage = null;
+    if (!panelMessage)
+        panelMessageId = null;
     if (!panelMessageId) {
         const legacyPrefix = `Ticket #${ticket.id} · Operations Desk`;
         const premiumPrefix = `🏛️ FN Support • Case #${ticket.id} Command Deck`;
@@ -176,7 +214,7 @@ async function updateTicketOpsPanelMessage(guild, ticket) {
         let beforeId;
         // Look through deeper history so legacy tickets still get live panel updates.
         for (let i = 0; i < 5; i++) {
-            const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+            const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) });
             if (!batch || !batch.size)
                 break;
             const candidate = batch.find(message => message.author.id === (client_1.client.user?.id || "")
@@ -197,18 +235,19 @@ async function updateTicketOpsPanelMessage(guild, ticket) {
             panelMessageId = candidateId;
         }
     }
-    if (!panelMessageId)
-        return;
-    const panelMessage = await channel.messages.fetch(panelMessageId).catch(() => null);
-    if (!panelMessage)
-        return;
-    await panelMessage.edit({
-        embeds: [buildTicketOpsEmbed(ticket)],
-        components: buildTicketOpsComponents(ticket),
-        allowedMentions: { parse: [] }
-    }).catch(error => {
-        console.error(`Could not refresh ticket #${ticket.id} panel:`, error);
-    });
+    if (!panelMessage && panelMessageId)
+        panelMessage = await channel.messages.fetch(panelMessageId);
+    if (!panelMessage) {
+        panelMessage = await channel.send({ embeds, components, allowedMentions: { parse: [] } });
+        (0, records_1.setTicketPanelMessageId)(ticket.channelId, panelMessage.id);
+    }
+    else if (!unchanged || panelMessage.id !== savedPanelId) {
+        await panelMessage.edit({ embeds, components, allowedMentions: { parse: [] } });
+    }
+    exports.ticketPanelCheckedAt.set(ticket.channelId, Date.now());
+    exports.ticketPanelSignatures.set(ticket.channelId, JSON.stringify({
+        messageId: ticket.panelMessageId, embeds: embeds.map(embed => embed.toJSON()), components: components.map(row => row.toJSON())
+    }));
 }
 async function refreshTicketPanelsForGuild(guild) {
     for (const ticket of store_1.ticketStore.tickets.filter(ticket => ticket.guildId === guild.id && (0, store_1.normalizeTicketStatus)(ticket.status) !== "resolved")) {

@@ -15,6 +15,7 @@ const actions_1 = require("../tickets/actions");
 const channels_1 = require("../tickets/channels");
 const registry_1 = require("./registry");
 const staffDesk_1 = require("../staff/staffDesk");
+const experience_1 = require("../tickets/experience");
 /** Ticket and member report commands. */
 exports.ticketReportCommands = {
     ticket: async (interaction) => {
@@ -113,13 +114,38 @@ exports.ticketReportCommands = {
         return await registry_1.ticketCommandHandlers.ticketstatus(interaction);
     },
     reopenticket: async (interaction) => {
-        return await registry_1.ticketCommandHandlers.reopenticket(interaction);
+        const result = await registry_1.ticketCommandHandlers.reopenticket(interaction);
+        if (interaction.guild && interaction.member && (0, actions_1.canManageTicketActions)(interaction.member)) {
+            const target = (0, actions_1.resolveTicketTargetChannelId)(interaction);
+            const ticket = target.channelId ? (0, store_2.findTicketByChannel)(target.channelId) : null;
+            if (ticket?.status === "claimed" && result.includes("Ticket Reopened")) {
+                const channel = await interaction.guild.channels.fetch(ticket.channelId);
+                if (channel?.type === discord_js_1.ChannelType.GuildText) {
+                    await channel.permissionOverwrites.edit(ticket.ownerId, { ViewChannel: true, ReadMessageHistory: true, SendMessages: true });
+                    await channel.setTopic((channel.topic || "").replace(/\s*\[ticket-archived\]/g, ""));
+                }
+            }
+        }
+        return result;
     },
     closeticket: async (interaction) => {
         return await registry_1.ticketCommandHandlers.closeticket(interaction);
     },
     resolveticket: async (interaction) => {
-        return await registry_1.ticketCommandHandlers.resolveticket(interaction);
+        if (!interaction.guild || !interaction.member || !(0, actions_1.canManageTicketActions)(interaction.member))
+            return "Only support staff can permanently resolve tickets.";
+        const target = (0, actions_1.resolveTicketTargetChannelId)(interaction);
+        if (!target.channelId || target.error)
+            return target.error || "Choose a ticket channel.";
+        const ticket = (0, store_2.findTicketByChannel)(target.channelId);
+        if (!ticket || ticket.guildId !== interaction.guild.id || ticket.status !== "archived")
+            return "Close the ticket before permanently resolving it.";
+        const confirmation = (0, experience_1.buildResolveConfirmation)(ticket, interaction.user.id, interaction.options.getString("reason") || undefined);
+        return JSON.stringify({
+            embed: confirmation.embeds[0].setDescription(confirmation.content).toJSON(),
+            components: confirmation.components.map(row => row.toJSON()),
+            ephemeral: true
+        });
     },
     ticketconfig: async (interaction) => {
         return await registry_1.ticketCommandHandlers.ticketconfig(interaction);

@@ -32,6 +32,7 @@ const audit_1 = require("../core/audit");
 const store_1 = require("./store");
 const ids_1 = require("../ui/ids");
 const embeds_1 = require("../ui/embeds");
+const ticketExperience_1 = require("../../services/ticketExperience");
 function buildTicketCsatButtons(ticketId) {
     return new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${ids_1.TICKET_IDS.csatPrefix}:${ticketId}:1`).setLabel("1").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(`${ids_1.TICKET_IDS.csatPrefix}:${ticketId}:2`).setLabel("2").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(`${ids_1.TICKET_IDS.csatPrefix}:${ticketId}:3`).setLabel("3").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(`${ids_1.TICKET_IDS.csatPrefix}:${ticketId}:4`).setLabel("4").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(`${ids_1.TICKET_IDS.csatPrefix}:${ticketId}:5`).setLabel("5").setStyle(discord_js_1.ButtonStyle.Success));
 }
@@ -77,10 +78,14 @@ async function pruneDeletedTicketRecords(guild) {
     let removed = 0;
     for (let i = store_1.ticketStore.tickets.length - 1; i >= 0; i--) {
         const ticket = store_1.ticketStore.tickets[i];
-        if (ticket.guildId !== guild.id)
+        if (ticket.guildId !== guild.id || ticketExperience_1.ticketActions.isBusy(ticket.channelId))
             continue;
         const channel = guild.channels.cache.get(ticket.channelId)
-            || await guild.channels.fetch(ticket.channelId).catch(() => null);
+            || await guild.channels.fetch(ticket.channelId).catch(error => {
+                if (error instanceof discord_js_1.DiscordAPIError && error.code === 10003)
+                    return null;
+                throw error;
+            });
         if (channel)
             continue;
         store_1.ticketStore.tickets.splice(i, 1);
@@ -102,15 +107,23 @@ async function pruneInaccessibleOwnerTicketRecords(guild) {
     let removed = 0;
     for (let i = store_1.ticketStore.tickets.length - 1; i >= 0; i--) {
         const ticket = store_1.ticketStore.tickets[i];
-        if (ticket.guildId !== guild.id)
+        if (ticket.guildId !== guild.id || ticketExperience_1.ticketActions.isBusy(ticket.channelId))
             continue;
         if (!(ticket.status === "open" || ticket.status === "claimed"))
             continue;
         const channel = guild.channels.cache.get(ticket.channelId)
-            || await guild.channels.fetch(ticket.channelId).catch(() => null);
+            || await guild.channels.fetch(ticket.channelId).catch(error => {
+                if (error instanceof discord_js_1.DiscordAPIError && error.code === 10003)
+                    return null;
+                throw error;
+            });
         if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
             continue;
-        const owner = await guild.members.fetch(ticket.ownerId).catch(() => null);
+        const owner = await guild.members.fetch(ticket.ownerId).catch(error => {
+            if (error instanceof discord_js_1.DiscordAPIError && error.code === 10007)
+                return null;
+            throw error;
+        });
         const ownerCanView = owner ? channel.permissionsFor(owner)?.has(discord_js_1.PermissionFlagsBits.ViewChannel) : false;
         if (ownerCanView)
             continue;
@@ -146,7 +159,7 @@ function purgeLegacyImportedTicketRecords(guildId) {
 function findChannelOwnerFromTopic(topic) {
     if (!topic)
         return null;
-    const match = topic.match(/\((\d{17,21})\)\s*$/);
+    const match = topic.match(/\((\d{17,21})\)(?:\s*\[ticket-archived\])?\s*$/);
     if (!match)
         return null;
     return match[1];
@@ -170,12 +183,18 @@ function resolveTicketByChannel(channelId, resolvedReason, transcript) {
     return (0, ticketState_1.resolveTicketByChannel)(store_1.ticketStore.tickets, channelId, resolvedReason, transcript, store_1.saveTicketStore);
 }
 function setTicketWorkflowStatus(channelId, workflowStatus) {
+    if (ticketExperience_1.ticketActions.isBusy(channelId))
+        return null;
     return (0, ticketState_1.setTicketWorkflowStatus)(store_1.ticketStore.tickets, channelId, workflowStatus, store_1.saveTicketStore);
 }
-function assignTicketToUser(channelId, assigneeId) {
+function assignTicketToUser(channelId, assigneeId, ownsLock = false) {
+    if (!ownsLock && ticketExperience_1.ticketActions.isBusy(channelId))
+        return null;
     return (0, ticketState_1.assignTicketToUser)(store_1.ticketStore.tickets, channelId, assigneeId, store_1.saveTicketStore);
 }
 function reopenTicketByChannel(channelId, reopenedById, reopenReason) {
+    if (ticketExperience_1.ticketActions.isBusy(channelId))
+        return null;
     return (0, ticketState_1.reopenTicketByChannel)(store_1.ticketStore.tickets, channelId, reopenedById, reopenReason, store_1.saveTicketStore);
 }
 function getTicketSlaState(ticket, now = Date.now(), thresholds) {

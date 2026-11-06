@@ -12,8 +12,11 @@ const opsPanel_1 = require("../tickets/opsPanel");
 const actions_1 = require("../tickets/actions");
 const ids_1 = require("../ui/ids");
 const channels_1 = require("../tickets/channels");
+const experience_1 = require("../tickets/experience");
 /** Ticket, report, and giveaway panel buttons. */
 async function handleTicketButtonInteraction(interaction) {
+    if (await (0, experience_1.handleTicketExperienceInteraction)(interaction))
+        return true;
     if (interaction.isButton() && interaction.customId === ids_1.TICKET_IDS.tools) {
         const member = interaction.member;
         if (!interaction.guild || !member || !(0, actions_1.canManageTicketActions)(member)) {
@@ -39,9 +42,7 @@ async function handleTicketButtonInteraction(interaction) {
             await interaction.reply({ content: "Tickets can only be opened in a server.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
-        await interaction.showModal((0, modals_1.buildTicketIntakeModal)()).catch(async () => {
-            await interaction.reply({ content: "Unable to open intake modal right now.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
-        });
+        await interaction.reply({ ...(0, modals_1.buildTicketCategoryPicker)(), flags: discord_js_1.MessageFlags.Ephemeral });
         return true;
     }
     if (interaction.isButton() && interaction.customId === ids_1.TICKET_IDS.watch) {
@@ -169,9 +170,8 @@ async function handleTicketButtonInteraction(interaction) {
             return true;
         }
         const msg = await (0, channels_1.closeTicketChannel)(guild, interaction.channel.id, interaction.user.id, "Archived by support panel action");
-        const archived = (0, store_1.findArchivedTicketByChannel)(interaction.channel.id);
         await interaction.editReply({
-            content: archived ? `Ticket #${archived.id} closed. Staff can reopen it or finish it from Staff Tools.` : msg,
+            content: msg,
             allowedMentions: { parse: [] }
         });
         return true;
@@ -214,8 +214,7 @@ async function handleTicketButtonInteraction(interaction) {
             await interaction.editReply({ content: "Close this ticket before permanently resolving it." });
             return true;
         }
-        const msg = await (0, channels_1.resolveTicketChannel)(guild, interaction.channel.id, interaction.user.id, "Resolved by support panel action");
-        await interaction.editReply({ content: msg, allowedMentions: { parse: [] } });
+        await interaction.editReply((0, experience_1.buildResolveConfirmation)(ticket, interaction.user.id));
         return true;
     }
     return false;

@@ -1,15 +1,19 @@
 // Ticket permission checks and assignment.
-import { ChannelType, ChatInputCommandInteraction, GuildMember, PermissionFlagsBits } from "discord.js";
+import { ChannelType, ChatInputCommandInteraction, GuildMember, PermissionFlagsBits, type APIInteractionGuildMember } from "discord.js";
 import { TICKET_HANDLER_ROLE_ID } from "../core/config";
 import { rejectIfDuplicateCommand } from "../core/ops";
 import { appendAuditEvent } from "../core/audit";
 import { assignTicketToUser, ensureTrackedTicketByChannelId, sendTicketLog } from "./records";
 import { buildTicketCommandEmbedPayload, updateTicketOpsPanelMessage } from "./opsPanel";
 import { requireGuild } from "../core/guards";
+import { ticketActions } from "../../services/ticketExperience";
 
-export function canManageTicketActions(member: GuildMember): boolean {
-    return member.permissions.has(PermissionFlagsBits.Administrator)
-        || member.roles.cache.has(TICKET_HANDLER_ROLE_ID);
+export function canManageTicketActions(member: GuildMember | APIInteractionGuildMember): boolean {
+    const administrator = typeof member.permissions === "string"
+        ? (BigInt(member.permissions) & PermissionFlagsBits.Administrator) !== 0n
+        : member.permissions.has(PermissionFlagsBits.Administrator);
+    return administrator || (Array.isArray(member.roles)
+        ? member.roles.includes(TICKET_HANDLER_ROLE_ID) : member.roles.cache.has(TICKET_HANDLER_ROLE_ID));
 }
 
 export function resolveTicketTargetChannelId(interaction: ChatInputCommandInteraction): { channelId: string | null; error: string | null } {
@@ -29,6 +33,12 @@ export function resolveTicketTargetChannelId(interaction: ChatInputCommandIntera
 }
 
 export async function handleTicketAssignCommand(interaction: ChatInputCommandInteraction, usedAlias = false): Promise<string> {
+    const target = resolveTicketTargetChannelId(interaction);
+    if (!target.channelId || target.error) return target.error || "Choose a ticket channel.";
+    return ticketActions.run(target.channelId, () => performTicketAssignCommand(interaction, usedAlias));
+}
+
+async function performTicketAssignCommand(interaction: ChatInputCommandInteraction, usedAlias = false): Promise<string> {
     const guildError = requireGuild(interaction);
     if (guildError) return guildError;
 
@@ -56,7 +66,7 @@ export async function handleTicketAssignCommand(interaction: ChatInputCommandInt
         return "Assignee must be an admin or have the ticket handler role.";
     }
 
-    const assigned = assignTicketToUser(target.channelId, assignee.id);
+    const assigned = assignTicketToUser(target.channelId, assignee.id, true);
     if (!assigned) return "Unable to assign this ticket right now.";
     await updateTicketOpsPanelMessage(interaction.guild!, assigned);
 

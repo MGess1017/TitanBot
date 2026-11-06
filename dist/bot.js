@@ -40,6 +40,7 @@ const tickets_1 = require("./bot/interactions/tickets");
 const raids_1 = require("./bot/interactions/raids");
 const commands_1 = require("./bot/interactions/commands");
 const opsPanel_1 = require("./bot/tickets/opsPanel");
+const experience_1 = require("./bot/tickets/experience");
 // Entry point: wires Discord events, timers, and startup. Feature code lives in src/bot/ (see README "Project layout").
 let shuttingDown = false;
 async function shutdown(reason, exitCode) {
@@ -326,6 +327,7 @@ client_1.client.on("messageCreate", message => (0, metrics_1.runAsyncWithBoundar
         return;
     if (message.author.bot)
         return;
+    await (0, experience_1.trackTicketReply)(message);
     if (message.guildId) {
         const state = (0, store_1.ensureGuildModeration)(message.guildId);
         if (state.lockdownChannelId && message.channelId === state.lockdownChannelId) {

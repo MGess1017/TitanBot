@@ -6,15 +6,17 @@ import {
     addTicketWatcher, findArchivedTicketByChannel, findOpenTicketByChannel, findTicketByChannel,
     recordTicketEvent, TICKET_RESPONSE_TEMPLATES, TICKET_TEMPLATE_IDS
 } from "../tickets/store";
-import { buildAdminReportIntakeModal, buildRaidItemGiveawayModal, buildTicketIntakeModal } from "../ui/modals";
+import { buildAdminReportIntakeModal, buildRaidItemGiveawayModal, buildTicketCategoryPicker } from "../ui/modals";
 import { ensureTrackedTicketByChannelId } from "../tickets/records";
 import { buildTicketStaffComponents, buildTicketStaffEmbed } from "../tickets/opsPanel";
 import { canManageTicketActions } from "../tickets/actions";
 import { GIVEAWAY_IDS, REPORT_IDS, TICKET_IDS } from "../ui/ids";
-import { claimTicketChannel, closeTicketChannel, resolveTicketChannel } from "../tickets/channels";
+import { claimTicketChannel, closeTicketChannel } from "../tickets/channels";
+import { handleTicketExperienceInteraction, buildResolveConfirmation } from "../tickets/experience";
 
 /** Ticket, report, and giveaway panel buttons. */
 export async function handleTicketButtonInteraction(interaction: Interaction): Promise<boolean> {
+    if (await handleTicketExperienceInteraction(interaction)) return true;
     if (interaction.isButton() && interaction.customId === TICKET_IDS.tools) {
         const member = interaction.member as GuildMember | null;
         if (!interaction.guild || !member || !canManageTicketActions(member)) {
@@ -41,9 +43,7 @@ export async function handleTicketButtonInteraction(interaction: Interaction): P
             await interaction.reply({ content: "Tickets can only be opened in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
-        await interaction.showModal(buildTicketIntakeModal()).catch(async () => {
-            await interaction.reply({ content: "Unable to open intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
-        });
+        await interaction.reply({ ...buildTicketCategoryPicker(), flags: MessageFlags.Ephemeral });
         return true;
     }
 
@@ -179,9 +179,8 @@ export async function handleTicketButtonInteraction(interaction: Interaction): P
         }
 
         const msg = await closeTicketChannel(guild, interaction.channel.id, interaction.user.id, "Archived by support panel action");
-        const archived = findArchivedTicketByChannel(interaction.channel.id);
         await interaction.editReply({
-            content: archived ? `Ticket #${archived.id} closed. Staff can reopen it or finish it from Staff Tools.` : msg,
+            content: msg,
             allowedMentions: { parse: [] }
         });
         return true;
@@ -228,8 +227,7 @@ export async function handleTicketButtonInteraction(interaction: Interaction): P
             return true;
         }
 
-        const msg = await resolveTicketChannel(guild, interaction.channel.id, interaction.user.id, "Resolved by support panel action");
-        await interaction.editReply({ content: msg, allowedMentions: { parse: [] } });
+        await interaction.editReply(buildResolveConfirmation(ticket, interaction.user.id));
         return true;
     }
     return false;

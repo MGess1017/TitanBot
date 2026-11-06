@@ -1,8 +1,25 @@
 // Intake and action modals (tickets, reports, giveaways, gear, PMC identity).
-import { ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle } from "discord.js";
 import { GEAR_MODAL_PREFIX, GIVEAWAY_IDS, REPORT_IDS, TICKET_IDS } from "./ids";
+import { TICKET_TOPICS, type TicketDraft, type TicketTopic } from "../../services/ticketExperience";
 
-export function buildTicketIntakeModal(): ModalBuilder {
+export function buildTicketCategoryPicker() {
+    return {
+        content: "Choose a topic to open your support form.",
+        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+            new StringSelectMenuBuilder().setCustomId(TICKET_IDS.category).setPlaceholder("What do you need help with?")
+                .addOptions(TICKET_TOPICS.map(topic => ({ label: topic.label, value: topic.value })))
+        )]
+    };
+}
+
+export function buildTicketRetryRow() {
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(TICKET_IDS.retry).setLabel("Edit / Retry Request").setStyle(ButtonStyle.Primary)
+    );
+}
+
+export function buildTicketIntakeModal(category: TicketTopic = "general", draft?: TicketDraft): ModalBuilder {
     const summaryInput = new TextInputBuilder()
         .setCustomId(TICKET_IDS.intakeSummary)
         .setLabel("What do you need help with?")
@@ -10,14 +27,6 @@ export function buildTicketIntakeModal(): ModalBuilder {
         .setRequired(true)
         .setMaxLength(120)
         .setPlaceholder("Short title: what do you need help with?");
-
-    const categoryInput = new TextInputBuilder()
-        .setCustomId(TICKET_IDS.intakeCategory)
-        .setLabel("Topic (optional)")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(40)
-        .setPlaceholder("bug, billing, account, report, appeal, general");
 
     const detailsInput = new TextInputBuilder()
         .setCustomId(TICKET_IDS.intakeDetails)
@@ -35,13 +44,15 @@ export function buildTicketIntakeModal(): ModalBuilder {
         .setMaxLength(400)
         .setPlaceholder("Links required for reports, appeals, or billing. Otherwise optional. Add files in the ticket.");
 
+    if (draft?.summary) summaryInput.setValue(draft.summary.slice(0, 120));
+    if (draft?.details) detailsInput.setValue(draft.details.slice(0, 700));
+    if (draft?.evidence) evidenceInput.setValue(draft.evidence.slice(0, 400));
     return new ModalBuilder()
-        .setCustomId(TICKET_IDS.intakeModal)
+        .setCustomId(`${TICKET_IDS.intakeModal}:${category}`)
         .setTitle("Open Support Ticket")
         .addComponents(
             new ActionRowBuilder<TextInputBuilder>().addComponents(summaryInput),
             new ActionRowBuilder<TextInputBuilder>().addComponents(detailsInput),
-            new ActionRowBuilder<TextInputBuilder>().addComponents(categoryInput),
             new ActionRowBuilder<TextInputBuilder>().addComponents(evidenceInput)
         );
 }

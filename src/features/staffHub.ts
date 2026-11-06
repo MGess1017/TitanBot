@@ -9,6 +9,7 @@ import {
 } from "./botSettings";
 import type { AntiRaidIncident } from "./antiRaid";
 import type { ChecklistItem, KbSearchHit } from "./staffDesk";
+import { TICKET_IDS } from "../bot/ui/ids";
 
 export const STAFF_COLOR = 0x9b59b6;
 export const STAFF_IDS = {
@@ -54,8 +55,9 @@ export function buildStaffHome(input: { ticketId: number | null; openTickets: nu
     const rows: Row[] = [
         new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(STAFF_IDS.caseLookup).setLabel(input.ticketId ? "Case & Checklist" : "Case Lookup").setEmoji("📁").setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId(STAFF_IDS.kbSearch).setLabel("Search KB").setEmoji("🔎").setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId(STAFF_IDS.kbAdd).setLabel("Add KB Article").setEmoji("📝").setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(STAFF_IDS.kbSearch).setLabel("Help Articles").setEmoji("🔎").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(STAFF_IDS.kbAdd).setLabel("Add Help Article").setEmoji("📝").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(TICKET_IDS.queue).setLabel("Support Queue").setStyle(ButtonStyle.Primary)
         ).toJSON(),
         new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(`${STAFF_IDS.settings}:channels`).setLabel("Settings").setEmoji("⚙️").setStyle(ButtonStyle.Secondary),
@@ -158,20 +160,20 @@ export function parseNumericFields<K extends string>(values: Record<K, string>, 
 }
 
 export function buildKbSearchModal(): ModalBuilder {
-    return new ModalBuilder().setCustomId(STAFF_IDS.kbSearchModal).setTitle("Search Knowledge Base").addComponents(
+    return new ModalBuilder().setCustomId(STAFF_IDS.kbSearchModal).setTitle("Search Help Articles").addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("query").setLabel("Keywords")
             .setPlaceholder("e.g. voice xp double, crate limit, appeal").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)));
 }
 
 export function buildKbAddModal(): ModalBuilder {
-    return new ModalBuilder().setCustomId(STAFF_IDS.kbAddModal).setTitle("Add KB Article").addComponents(
+    return new ModalBuilder().setCustomId(STAFF_IDS.kbAddModal).setTitle("Add Help Article").addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("title").setLabel("Title").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)),
         new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("body").setLabel("Answer / steps").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1500)),
         new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("tags").setLabel("Tags (comma separated)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(200)));
 }
 
 export function buildKbResults(query: string, hits: KbSearchHit[]): StaffPayload {
-    const embed = new EmbedBuilder().setColor(STAFF_COLOR).setTitle(`🔎 Knowledge Base • "${query.slice(0, 60)}"`);
+    const embed = new EmbedBuilder().setColor(STAFF_COLOR).setTitle(`🔎 Help Articles • "${query.slice(0, 60)}"`);
     if (!hits.length) embed.setDescription("No matches. Try fewer or different keywords, or add an article from the Staff Desk.");
     for (const hit of hits) {
         if (hit.kind === "article") {

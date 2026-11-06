@@ -15,22 +15,23 @@ import { createAndPostGiveaway, sendGiveawayLog } from "../giveaways/giveaways";
 import { appendAuditEvent } from "../core/audit";
 import { parseDurationMs, parseUserIdFromReportTarget, submitFormalUserReport } from "../moderation/store";
 import { findTicketById, saveTicketStore } from "../tickets/store";
-import { buildGearActionModal, buildTicketIntakeModal } from "../ui/modals";
+import { buildGearActionModal, buildTicketCategoryPicker, buildTicketRetryRow } from "../ui/modals";
 import { requireGuild } from "../core/guards";
 import { GEAR_MODAL_PREFIX, GIVEAWAY_IDS, REPORT_IDS, TICKET_IDS } from "../ui/ids";
 import { createTicketChannel } from "../tickets/channels";
+import { isTicketTopic } from "../../services/ticketExperience";
+import { getTicketDraft, saveTicketDraft } from "../tickets/drafts";
 
 /** Ticket, report, gear, and giveaway forms plus ticket satisfaction ratings. */
 export async function handleFormInteraction(interaction: Interaction): Promise<boolean> {
-    if (interaction.isChatInputCommand() && interaction.commandName === "ticketintake") {
+    if (interaction.isChatInputCommand() && (interaction.commandName === "ticketintake"
+        || (interaction.commandName === "ticket" && !interaction.options.getString("reason")))) {
         const guildError = requireGuild(interaction);
         if (guildError) {
             await interaction.reply({ content: guildError, flags: MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
-        await interaction.showModal(buildTicketIntakeModal()).catch(async () => {
-            await interaction.reply({ content: "Unable to open intake modal right now.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
-        });
+        await interaction.reply({ ...buildTicketCategoryPicker(), flags: MessageFlags.Ephemeral });
         return true;
     }
 
@@ -60,7 +61,8 @@ export async function handleFormInteraction(interaction: Interaction): Promise<b
         return true;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === TICKET_IDS.intakeModal) {
+    if (interaction.isModalSubmit() && (interaction.customId === TICKET_IDS.intakeModal
+        || interaction.customId.startsWith(`${TICKET_IDS.intakeModal}:`))) {
         const guild = interaction.guild;
         if (!guild) {
             await interaction.reply({ content: "Ticket intake can only be used in a server.", flags: MessageFlags.Ephemeral }).catch(() => undefined);
@@ -68,39 +70,62 @@ export async function handleFormInteraction(interaction: Interaction): Promise<b
         }
 
         const summary = interaction.fields.getTextInputValue(TICKET_IDS.intakeSummary).trim();
-        const category = interaction.fields.getTextInputValue(TICKET_IDS.intakeCategory).trim() || "general";
+        const selectedCategory = interaction.customId.split(":")[1];
+        if (selectedCategory && !isTicketTopic(selectedCategory)) {
+            await interaction.reply({ content: "This ticket form has an invalid topic. Open a new form from the support panel.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        const legacyCategory = !selectedCategory && interaction.fields.fields.has(TICKET_IDS.intakeCategory)
+            ? interaction.fields.getTextInputValue(TICKET_IDS.intakeCategory).trim() : "";
+        const category = selectedCategory || classifyTicketCategory(legacyCategory || "general");
         const details = interaction.fields.getTextInputValue(TICKET_IDS.intakeDetails).trim();
         // Forms opened before deployment can still include the removed platform field.
         const platform = interaction.fields.fields.has(TICKET_IDS.intakePlatform)
             ? interaction.fields.getTextInputValue(TICKET_IDS.intakePlatform).trim() : "";
         const evidence = interaction.fields.getTextInputValue(TICKET_IDS.intakeEvidence).trim();
+        const draft = {
+            category: isTicketTopic(category) ? category : "general" as const,
+            summary, details, evidence, platform: platform || getTicketDraft(guild.id, interaction.user.id)?.platform,
+            at: Date.now()
+        };
+        const retained = saveTicketDraft(guild.id, interaction.user.id, draft);
+        const retry = retained ? [buildTicketRetryRow()] : [];
+        const retentionWarning = retained ? "" : " Your draft could not be saved. Copy your details before retrying.";
         if (!summary || !details) {
             await interaction.reply({
-                content: "Please include a short summary and tell us what happened.",
+                content: `Please include a short summary and tell us what happened.${retentionWarning}`,
+                components: retry,
                 flags: MessageFlags.Ephemeral
             });
             return true;
         }
         const intakeCategory = classifyTicketCategory(category);
         if (["report", "appeal", "billing"].includes(intakeCategory) && !evidence.trim()) {
-            await interaction.reply({ content: `Please include a screenshot or message link for a ${intakeCategory} ticket, then submit again.`, flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: `Please include a screenshot or message link for a ${intakeCategory} ticket, then submit again.${retentionWarning}`, components: retry, flags: MessageFlags.Ephemeral });
             return true;
         }
-        const reason = buildTicketIntakeReason({ category, summary, details, platform, evidence });
+        const reason = buildTicketIntakeReason({ category, summary, details, platform: draft.platform, evidence });
         const priority = category.toLowerCase().includes("billing") ? "high" : "normal";
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const created = await createTicketChannel(guild, interaction.user.id, reason, priority, false);
-        if (created.error) {
-            await interaction.editReply({ content: created.error, allowedMentions: { parse: [] } });
+        let created;
+        try {
+            created = await createTicketChannel(guild, interaction.user.id, reason, priority, false, draft);
+        } catch (error) {
+            console.error("Ticket creation failed; draft retained where possible:", error);
+            await interaction.editReply({ content: `Could not create your ticket. Check for an existing ticket before retrying.${retentionWarning}`, components: retry });
             return true;
         }
-
+        if (created.error) {
+            await interaction.editReply({ content: created.error + retentionWarning, components: retry, allowedMentions: { parse: [] } });
+            return true;
+        }
         if (!created.channelId) {
             console.error("Ticket creation returned no channel:", { guildId: guild.id, ownerId: interaction.user.id });
-            await interaction.editReply({ content: "Could not confirm your ticket channel. Please contact staff before trying again." });
+            await interaction.editReply({ content: "Could not confirm your ticket channel. Please contact staff before trying again.", components: retry });
             return true;
         }
+        if (!saveTicketDraft(guild.id, interaction.user.id, null)) console.warn("Could not clear the submitted ticket draft.");
         await interaction.editReply({
             embeds: [new EmbedBuilder()
                 .setColor(0x9b59b6)

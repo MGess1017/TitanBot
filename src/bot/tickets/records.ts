@@ -1,6 +1,6 @@
 // Ticket record helpers: lookups, state changes, notes, and logs.
 import {
-    ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, Guild, PermissionFlagsBits
+    ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, DiscordAPIError, EmbedBuilder, Guild, PermissionFlagsBits
 } from "discord.js";
 import https from "node:https";
 import type { TicketTranscriptStub } from "../../services/ticketTranscript";
@@ -21,6 +21,7 @@ import {
 } from "./store";
 import { TICKET_IDS } from "../ui/ids";
 import { brandLiveEmbed } from "../ui/embeds";
+import { ticketActions } from "../../services/ticketExperience";
 
 export function buildTicketCsatButtons(ticketId: number): ActionRowBuilder<ButtonBuilder> {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -76,10 +77,13 @@ export async function pruneDeletedTicketRecords(guild: Guild): Promise<number> {
     let removed = 0;
     for (let i = ticketStore.tickets.length - 1; i >= 0; i--) {
         const ticket = ticketStore.tickets[i];
-        if (ticket.guildId !== guild.id) continue;
+        if (ticket.guildId !== guild.id || ticketActions.isBusy(ticket.channelId)) continue;
 
         const channel = guild.channels.cache.get(ticket.channelId)
-            || await guild.channels.fetch(ticket.channelId).catch(() => null);
+            || await guild.channels.fetch(ticket.channelId).catch(error => {
+                if (error instanceof DiscordAPIError && error.code === 10003) return null;
+                throw error;
+            });
         if (channel) continue;
 
         ticketStore.tickets.splice(i, 1);
@@ -104,14 +108,20 @@ export async function pruneInaccessibleOwnerTicketRecords(guild: Guild): Promise
     let removed = 0;
     for (let i = ticketStore.tickets.length - 1; i >= 0; i--) {
         const ticket = ticketStore.tickets[i];
-        if (ticket.guildId !== guild.id) continue;
+        if (ticket.guildId !== guild.id || ticketActions.isBusy(ticket.channelId)) continue;
         if (!(ticket.status === "open" || ticket.status === "claimed")) continue;
 
         const channel = guild.channels.cache.get(ticket.channelId)
-            || await guild.channels.fetch(ticket.channelId).catch(() => null);
+            || await guild.channels.fetch(ticket.channelId).catch(error => {
+                if (error instanceof DiscordAPIError && error.code === 10003) return null;
+                throw error;
+            });
         if (!channel || channel.type !== ChannelType.GuildText) continue;
 
-        const owner = await guild.members.fetch(ticket.ownerId).catch(() => null);
+        const owner = await guild.members.fetch(ticket.ownerId).catch(error => {
+            if (error instanceof DiscordAPIError && error.code === 10007) return null;
+            throw error;
+        });
         const ownerCanView = owner ? channel.permissionsFor(owner)?.has(PermissionFlagsBits.ViewChannel) : false;
         if (ownerCanView) continue;
 
@@ -152,7 +162,7 @@ export function purgeLegacyImportedTicketRecords(guildId: string): number {
 
 export function findChannelOwnerFromTopic(topic: string | null | undefined): string | null {
     if (!topic) return null;
-    const match = topic.match(/\((\d{17,21})\)\s*$/);
+    const match = topic.match(/\((\d{17,21})\)(?:\s*\[ticket-archived\])?\s*$/);
     if (!match) return null;
     return match[1];
 }
@@ -180,14 +190,17 @@ export function resolveTicketByChannel(channelId: string, resolvedReason: string
 }
 
 export function setTicketWorkflowStatus(channelId: string, workflowStatus: TicketWorkflowStatus): TicketEntry | null {
+    if (ticketActions.isBusy(channelId)) return null;
     return stateSetTicketWorkflowStatus(ticketStore.tickets, channelId, workflowStatus, saveTicketStore);
 }
 
-export function assignTicketToUser(channelId: string, assigneeId: string): TicketEntry | null {
+export function assignTicketToUser(channelId: string, assigneeId: string, ownsLock = false): TicketEntry | null {
+    if (!ownsLock && ticketActions.isBusy(channelId)) return null;
     return stateAssignTicketToUser(ticketStore.tickets, channelId, assigneeId, saveTicketStore);
 }
 
 export function reopenTicketByChannel(channelId: string, reopenedById: string, reopenReason: string): TicketEntry | null {
+    if (ticketActions.isBusy(channelId)) return null;
     return stateReopenTicketByChannel(ticketStore.tickets, channelId, reopenedById, reopenReason, saveTicketStore);
 }
 

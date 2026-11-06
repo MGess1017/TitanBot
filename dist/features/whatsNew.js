@@ -10,34 +10,35 @@ const node_path_1 = __importDefault(require("node:path"));
 const discord_js_1 = require("discord.js");
 exports.WHATS_NEW_COLOR = 0x9b59b6;
 exports.WHATS_NEW_RELEASE = {
-    id: "fnt-patch-001",
-    title: "FNT Bot — Patch 001: Onboarding & Support",
-    intro: "A cleaner welcome guide and a simpler support experience.",
+    id: "fnt-patch-002",
+    title: "FNT Bot — Patch 002: Support Workflow Upgrade",
+    intro: "Simpler requests, clearer replies, and safer ticket closure.",
     sections: [
         {
-            name: "01 • Welcome Guide",
+            name: "01 • Member Experience",
             lines: [
-                "**Welcome to FNT** now has a short introduction and private Get Started and Command Guide buttons.",
-                "Support tickets open from the dedicated panel in <#1506119505720377434>."
+                "Choose a support category instead of typing one. Failed requests can be edited and retried from saved 24-hour drafts.",
+                "Request closure without deleting the case. Ticket status shows whose reply is needed."
             ]
         },
         {
-            name: "02 • Support Tickets",
+            name: "02 • Staff Workflow",
             lines: [
-                "Shorter ticket form and a compact case card showing your request, status, and handler.",
-                "Screenshots and links appear only when supplied. Existing case cards update in place."
+                "A private Support Queue groups unclaimed cases, waiting members, and overdue staff replies.",
+                "Assign Handler and Request Information controls keep follow-up simple. KB is now labeled Help Articles.",
+                "Notifications target the handler; intervals and notification preferences are configurable from the queue."
             ]
         },
         {
-            name: "03 • Staff Tools & Reliability",
+            name: "03 • Reliability & Closure",
             lines: [
-                "Advanced case details, response templates, and resolution tools open privately for staff.",
-                "Claim, close, and resolve actions acknowledge immediately and use short confirmations.",
-                "Closing preserves the case for staff review; permanent resolution still captures a transcript."
+                "Staff must confirm permanent resolution. A complete, verified transcript is required before channel deletion.",
+                "Export failures preserve the ticket and alert staff. Unattended tickets now receive reminders instead of automatic closure.",
+                "Unchanged cards skip updates, saved panel IDs are reused, and simultaneous case actions are guarded."
             ]
         }
     ],
-    footer: "FNT Bot • Patch 001 • Member Update"
+    footer: "FNT Bot • Patch 002 • Member Update"
 };
 function buildWhatsNewEmbed(release = exports.WHATS_NEW_RELEASE) {
     return new discord_js_1.EmbedBuilder()

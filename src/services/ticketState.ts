@@ -58,6 +58,11 @@ export type TicketRecord = {
     slaPausedAt?: number | null;
     slaPausedMs?: number;
     checklist?: Record<string, { byId: string; at: number }>;
+    lastReplyAt?: number;
+    lastReplyBy?: "member" | "staff";
+    closureRequestedAt?: number | null;
+    closureRequestedBy?: string | null;
+    notifications?: Record<string, { key: string; at: number }>;
 };
 
 export type TicketStoreState = {
@@ -142,6 +147,11 @@ export function createTicketEntry(
         ownerId,
         channelId,
         reason,
+        lastReplyAt: undefined,
+        lastReplyBy: undefined,
+        closureRequestedAt: null,
+        closureRequestedBy: null,
+        notifications: {},
         status: "open",
         priority,
         workflowStatus: "new",
@@ -210,10 +220,8 @@ export function claimTicketByChannel(tickets: TicketRecord[], channelId: string,
 
     const snapshot = cloneTicket(ticket);
     ticket.status = "claimed";
-    ticket.workflowStatus = "responded";
     ticket.claimedById = claimedById;
     if (!ticket.assignedToId) ticket.assignedToId = claimedById;
-    if (!ticket.firstResponseAt) ticket.firstResponseAt = Date.now();
     ticket.updatedAt = Date.now();
     recordEvent(ticket, claimedById, "claimed", `Ticket claimed by ${claimedById}.`);
 
@@ -293,8 +301,6 @@ export function assignTicketToUser(tickets: TicketRecord[], channelId: string, a
     const snapshot = cloneTicket(ticket);
     ticket.assignedToId = assigneeId;
     if (normalizeTicketStatus(ticket.status) === "open") ticket.status = "claimed";
-    ticket.workflowStatus = "responded";
-    if (!ticket.firstResponseAt) ticket.firstResponseAt = Date.now();
     ticket.updatedAt = Date.now();
     recordEvent(ticket, assigneeId, "assigned", `Ticket assigned to ${assigneeId}.`);
 
@@ -354,6 +360,10 @@ export function reopenTicketByChannel(
     }
     ticket.archivedAt = null;
     ticket.closedReason = reopenReason || ticket.closedReason;
+    ticket.closureRequestedAt = null;
+    ticket.closureRequestedBy = null;
+    ticket.lastReplyBy = "member";
+    ticket.lastReplyAt = Date.now();
     ticket.resolvedAt = null;
     ticket.resolvedReason = null;
     ticket.reopenedCount = (ticket.reopenedCount || 0) + 1;

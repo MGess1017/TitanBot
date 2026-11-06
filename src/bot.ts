@@ -53,6 +53,7 @@ import { handleTicketButtonInteraction } from "./bot/interactions/tickets";
 import { handleRaidInteraction } from "./bot/interactions/raids";
 import { handleChatInputCommand } from "./bot/interactions/commands";
 import { refreshTicketPanelsForGuild } from "./bot/tickets/opsPanel";
+import { trackTicketReply } from "./bot/tickets/experience";
 
 // Entry point: wires Discord events, timers, and startup. Feature code lives in src/bot/ (see README "Project layout").
 let shuttingDown = false;
@@ -352,6 +353,7 @@ client.on("voiceStateUpdate", (oldState, newState) => {
 client.on("messageCreate", message => runAsyncWithBoundary("messageCreate", async () => {
     if (shuttingDown) return;
     if (message.author.bot) return;
+    await trackTicketReply(message);
 
     if (message.guildId) {
         const state = ensureGuildModeration(message.guildId);

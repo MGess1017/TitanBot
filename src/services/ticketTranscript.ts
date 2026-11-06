@@ -1,11 +1,11 @@
-import { ChannelType, Guild } from "discord.js";
+import { ChannelType, Guild, type Message } from "discord.js";
 import fs from "fs-extra";
 import path from "path";
-import { clampTranscriptLine, sanitizeTranscriptLine } from "./ticketText";
+import { sanitizeTranscriptLine } from "./ticketText";
+import { createHash } from "node:crypto";
 
-const TRANSCRIPT_FETCH_PAGE_LIMIT = 10;
+const TRANSCRIPT_FETCH_PAGE_LIMIT = 101;
 const TRANSCRIPT_FETCH_BATCH_SIZE = 100;
-const TRANSCRIPT_MESSAGE_LIMIT = 1000;
 
 export type TicketTranscriptStub = {
     exportedAt: number;
@@ -47,41 +47,31 @@ export async function exportTicketTranscript(input: {
     resolvedReason: string;
     transcriptDir: string;
     projectRootDir: string;
-}): Promise<{ transcriptPath: string | null; messageCount: number; truncated: boolean; fetchErrors: number }> {
+}): Promise<{ transcriptPath: string; messageCount: number; truncated: false; fetchErrors: 0; stub: TicketTranscriptStub }> {
     const { guild, channelId, ticketId, ownerId, resolverId, resolvedReason, transcriptDir, projectRootDir } = input;
-    const channel = guild.channels.cache.get(channelId);
+    const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId);
     if (!channel || channel.type !== ChannelType.GuildText) {
-        return { transcriptPath: null, messageCount: 0, truncated: false, fetchErrors: 0 };
+        throw new Error("Transcript channel is missing or not a text channel.");
     }
 
-    const allMessages: any[] = [];
-    let fetchErrors = 0;
-    let truncated = false;
+    const allMessages: Message[] = [];
+    let complete = false;
     let beforeId: string | undefined;
     for (let i = 0; i < TRANSCRIPT_FETCH_PAGE_LIMIT; i++) {
         const batch = await channel.messages.fetch({
             limit: TRANSCRIPT_FETCH_BATCH_SIZE,
             ...(beforeId ? { before: beforeId } : {})
-        }).catch(() => null);
-        if (!batch) {
-            fetchErrors += 1;
-            break;
-        }
-        if (!batch || !batch.size) break;
+        });
+        if (!batch.size) { complete = true; break; }
         allMessages.push(...Array.from(batch.values()));
-        if (allMessages.length >= TRANSCRIPT_MESSAGE_LIMIT) {
-            truncated = true;
-            allMessages.length = TRANSCRIPT_MESSAGE_LIMIT;
-            break;
-        }
+        if (allMessages.length > 10_000) throw new Error("Ticket exceeds the 10,000-message export limit. Preserve the channel for a manual export.");
+        if (batch.size < TRANSCRIPT_FETCH_BATCH_SIZE) { complete = true; break; }
         const last = batch.last();
+        if (!last || last.id === beforeId) throw new Error("Transcript pagination did not advance.");
         beforeId = last?.id;
-        if (!beforeId) break;
     }
 
-    if (!truncated && allMessages.length >= TRANSCRIPT_FETCH_PAGE_LIMIT * TRANSCRIPT_FETCH_BATCH_SIZE) {
-        truncated = true;
-    }
+    if (!complete) throw new Error("Ticket exceeds the 10,000-message export limit. Preserve the channel for a manual export.");
 
     const sorted = allMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const lines = [
@@ -93,8 +83,8 @@ export async function exportTicketTranscript(input: {
         `Resolved Reason: ${sanitizeTranscriptLine(resolvedReason)}`,
         `Exported At: ${new Date().toISOString()}`,
         `Messages: ${sorted.length}`,
-        `Truncated: ${truncated ? "yes" : "no"}`,
-        `Fetch Errors: ${fetchErrors}`,
+        "Truncated: no",
+        "Fetch Errors: 0",
         "",
         "--- Messages ---"
     ];
@@ -104,22 +94,43 @@ export async function exportTicketTranscript(input: {
         const author = `${msg.author?.tag || msg.author?.username || "unknown"} (${msg.author?.id || "unknown"})`;
         const content = sanitizeTranscriptLine(msg.content || "");
         const attachments = msg.attachments?.size
-            ? ` | attachments: ${Array.from(msg.attachments.values()).map((a: any) => a.url).join(", ")}`
+            ? ` | attachments: ${Array.from(msg.attachments.values()).map(attachment => attachment.url).join(", ")}`
             : "";
         const line = `[${stamp}] ${author}: ${content || "(no text content)"}${attachments}`;
-        lines.push(clampTranscriptLine(line));
+        lines.push(line);
+        for (const embed of msg.embeds) lines.push(`  Embed: ${sanitizeTranscriptLine(JSON.stringify(embed.toJSON()))}`);
     }
 
+    fs.ensureDirSync(transcriptDir);
+    const safeChannel = String(channel.name || "ticket").replace(/[^a-z0-9-]/gi, "-").slice(0, 32);
+    const fileName = `ticket-${ticketId}-${safeChannel}-${Date.now()}.txt`;
+    const fullPath = path.join(transcriptDir, fileName);
+    const body = lines.join("\n");
+    const temporaryPath = `${fullPath}.${process.pid}.tmp`;
     try {
-        fs.ensureDirSync(transcriptDir);
-        const safeChannel = String(channel.name || "ticket").replace(/[^a-z0-9-]/gi, "-").slice(0, 32);
-        const fileName = `ticket-${ticketId}-${safeChannel}-${Date.now()}.txt`;
-        const fullPath = path.join(transcriptDir, fileName);
-        fs.writeFileSync(fullPath, lines.join("\n"), "utf8");
-
-        const relativePath = path.relative(projectRootDir, fullPath).replace(/\\/g, "/");
-        return { transcriptPath: relativePath, messageCount: sorted.length, truncated, fetchErrors };
-    } catch {
-        return { transcriptPath: null, messageCount: sorted.length, truncated, fetchErrors };
+        const descriptor = fs.openSync(temporaryPath, "wx");
+        try {
+            fs.writeFileSync(descriptor, body, "utf8");
+            fs.fsyncSync(descriptor);
+        } finally {
+            fs.closeSync(descriptor);
+        }
+        fs.renameSync(temporaryPath, fullPath);
+        const expected = createHash("sha256").update(body).digest("hex");
+        const actual = createHash("sha256").update(fs.readFileSync(fullPath)).digest("hex");
+        if (actual !== expected) throw new Error("Transcript verification failed.");
+    } finally {
+        if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
     }
+    const relativePath = path.relative(projectRootDir, fullPath).replace(/\\/g, "/");
+    return {
+        transcriptPath: relativePath, messageCount: sorted.length, truncated: false, fetchErrors: 0,
+        stub: {
+            exportedAt: Date.now(), messageCountApprox: sorted.length,
+            firstMessageAt: sorted[0]?.createdTimestamp || null,
+            lastMessageAt: sorted[sorted.length - 1]?.createdTimestamp || null,
+            channelName: channel.name, transcriptPath: relativePath, transcriptFormat: "txt",
+            truncated: false, fetchErrors: 0
+        }
+    };
 }

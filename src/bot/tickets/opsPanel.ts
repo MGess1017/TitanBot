@@ -1,5 +1,5 @@
 // Ticket command embeds and the ticket ops panel.
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, Guild } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, DiscordAPIError, EmbedBuilder, Guild } from "discord.js";
 import { getTicketSlaPolicy, hydrateTicketIntakeFields } from "../../services/ticketEnhancements";
 import { client } from "../core/client";
 import { normalizeTicketStatus, TICKET_TEMPLATE_IDS, ticketStore, type TicketEntry, type TicketPriority, type TicketWorkflowStatus } from "./store";
@@ -7,6 +7,8 @@ import { getTicketSlaState, setTicketPanelMessageId } from "./records";
 import { sanitizeEmbedBuilder } from "../ui/embeds";
 import { TICKET_IDS } from "../ui/ids";
 import { STAFF_IDS } from "../../features/staffHub";
+import { ticketDisplayStatus } from "../../services/ticketExperience";
+import { buildHandlerSelector } from "./experience";
 
 export function buildTicketCommandEmbed(
     title: string,
@@ -78,11 +80,7 @@ export function getTicketNextActionHint(ticket: TicketEntry): string {
 
 export function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
     const status = normalizeTicketStatus(ticket.status);
-    const statusLabel = status === "archived" ? "Closed"
-        : status === "resolved" ? "Resolved"
-            : ticket.workflowStatus === "waiting_user" ? "Waiting for your reply"
-                : ticket.workflowStatus === "escalated" ? "Under review"
-                    : ticket.assignedToId || ticket.claimedById ? "In progress" : "Waiting for staff";
+    const statusLabel = ticketDisplayStatus(ticket);
     const intake = hydrateTicketIntakeFields(ticket.reason, {
         summary: ticket.intakeSummary,
         details: ticket.intakeDetails,
@@ -126,26 +124,31 @@ export function buildTicketOpsComponents(ticket: TicketEntry): ActionRowBuilder<
                 .setStyle(ButtonStyle.Primary).setDisabled(Boolean(ticket.claimedById)),
             new ButtonBuilder().setCustomId(TICKET_IDS.close).setLabel("Close Ticket").setStyle(ButtonStyle.Secondary)
         );
+        row.addComponents(new ButtonBuilder().setCustomId(TICKET_IDS.requestClose)
+            .setLabel(ticket.closureRequestedAt ? "Closure Requested" : "Request Closure")
+            .setDisabled(Boolean(ticket.closureRequestedAt)).setStyle(ButtonStyle.Secondary));
     }
     row.addComponents(new ButtonBuilder().setCustomId(TICKET_IDS.tools)
         .setLabel("Staff Tools").setStyle(ButtonStyle.Secondary));
     return [row];
 }
 
-export function buildTicketStaffComponents(ticket: TicketEntry): ActionRowBuilder<ButtonBuilder>[] {
+export function buildTicketStaffComponents(ticket: TicketEntry) {
     const status = normalizeTicketStatus(ticket.status);
     return [
         new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(TICKET_IDS.resolve).setLabel("Resolve Permanently")
                 .setStyle(ButtonStyle.Danger).setDisabled(status !== "archived"),
             new ButtonBuilder().setCustomId(TICKET_IDS.watch).setLabel("Watch Ticket").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(TICKET_IDS.requestInfo).setLabel("Request Information").setStyle(ButtonStyle.Secondary).setDisabled(status === "archived" || status === "resolved"),
             new ButtonBuilder().setCustomId(STAFF_IDS.home).setLabel("Case History & Checklist").setStyle(ButtonStyle.Primary)
         ),
         new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.ack).setLabel("Acknowledgement").setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.evidence).setLabel("Request Evidence").setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(TICKET_TEMPLATE_IDS.resolved).setLabel("Resolution Reply").setStyle(ButtonStyle.Secondary)
-        )
+        ),
+        buildHandlerSelector()
     ];
 }
 
@@ -196,12 +199,41 @@ export function buildTicketStaffEmbed(ticket: TicketEntry): EmbedBuilder {
     return sanitizeEmbedBuilder(embed);
 }
 
+export const ticketPanelSignatures = new Map<string, string>();
+export const ticketPanelCheckedAt = new Map<string, number>();
+export const ticketPanelUpdates = new Map<string, Promise<void>>();
+
 export async function updateTicketOpsPanelMessage(guild: Guild, ticket: TicketEntry): Promise<void> {
+    const previous = ticketPanelUpdates.get(ticket.channelId);
+    const pending = (previous || Promise.resolve()).catch(error => {
+        console.error(`Previous panel update failed for ticket #${ticket.id}:`, error);
+    }).then(() => performTicketPanelUpdate(guild, ticket));
+    ticketPanelUpdates.set(ticket.channelId, pending);
+    try { await pending; }
+    finally { if (ticketPanelUpdates.get(ticket.channelId) === pending) ticketPanelUpdates.delete(ticket.channelId); }
+}
+
+async function performTicketPanelUpdate(guild: Guild, ticket: TicketEntry): Promise<void> {
+    const embeds = [buildTicketOpsEmbed(ticket)];
+    const components = buildTicketOpsComponents(ticket);
+    const savedPanelId = ticket.panelMessageId;
+    const signature = JSON.stringify({ messageId: ticket.panelMessageId, embeds: embeds.map(embed => embed.toJSON()), components: components.map(row => row.toJSON()) });
+    const unchanged = ticket.panelMessageId && ticketPanelSignatures.get(ticket.channelId) === signature;
+    if (unchanged && Date.now() - (ticketPanelCheckedAt.get(ticket.channelId) || 0) < 5 * 60_000) return;
     const channel = (guild.channels.cache.get(ticket.channelId)
-        || await guild.channels.fetch(ticket.channelId).catch(() => null));
-    if (!channel || channel.type !== ChannelType.GuildText) return;
+        || await guild.channels.fetch(ticket.channelId));
+    if (!channel || channel.type !== ChannelType.GuildText) {
+        console.warn(`Ticket #${ticket.id} channel is missing or not text-based.`);
+        return;
+    }
 
     let panelMessageId = ticket.panelMessageId;
+    let panelMessage = panelMessageId ? await channel.messages.fetch(panelMessageId).catch(error => {
+        if (error instanceof DiscordAPIError && error.code === 10008) return null;
+        throw error;
+    }) : null;
+    if (panelMessage && panelMessage.author.id !== client.user?.id) panelMessage = null;
+    if (!panelMessage) panelMessageId = null;
     if (!panelMessageId) {
         const legacyPrefix = `Ticket #${ticket.id} · Operations Desk`;
         const premiumPrefix = `🏛️ FN Support • Case #${ticket.id} Command Deck`;
@@ -209,7 +241,7 @@ export async function updateTicketOpsPanelMessage(guild: Guild, ticket: TicketEn
         let beforeId: string | undefined;
         // Look through deeper history so legacy tickets still get live panel updates.
         for (let i = 0; i < 5; i++) {
-            const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+            const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) });
             if (!batch || !batch.size) break;
 
             const candidate = batch.find(message =>
@@ -235,17 +267,17 @@ export async function updateTicketOpsPanelMessage(guild: Guild, ticket: TicketEn
         }
     }
 
-    if (!panelMessageId) return;
-
-    const panelMessage = await channel.messages.fetch(panelMessageId).catch(() => null);
-    if (!panelMessage) return;
-    await panelMessage.edit({
-        embeds: [buildTicketOpsEmbed(ticket)],
-        components: buildTicketOpsComponents(ticket),
-        allowedMentions: { parse: [] }
-    }).catch(error => {
-        console.error(`Could not refresh ticket #${ticket.id} panel:`, error);
-    });
+    if (!panelMessage && panelMessageId) panelMessage = await channel.messages.fetch(panelMessageId);
+    if (!panelMessage) {
+        panelMessage = await channel.send({ embeds, components, allowedMentions: { parse: [] } });
+        setTicketPanelMessageId(ticket.channelId, panelMessage.id);
+    } else if (!unchanged || panelMessage.id !== savedPanelId) {
+        await panelMessage.edit({ embeds, components, allowedMentions: { parse: [] } });
+    }
+    ticketPanelCheckedAt.set(ticket.channelId, Date.now());
+    ticketPanelSignatures.set(ticket.channelId, JSON.stringify({
+        messageId: ticket.panelMessageId, embeds: embeds.map(embed => embed.toJSON()), components: components.map(row => row.toJSON())
+    }));
 }
 
 export async function refreshTicketPanelsForGuild(guild: Guild): Promise<void> {

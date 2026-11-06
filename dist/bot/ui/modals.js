@@ -1,5 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildTicketCategoryPicker = buildTicketCategoryPicker;
+exports.buildTicketRetryRow = buildTicketRetryRow;
 exports.buildTicketIntakeModal = buildTicketIntakeModal;
 exports.buildAdminReportIntakeModal = buildAdminReportIntakeModal;
 exports.buildRaidItemGiveawayModal = buildRaidItemGiveawayModal;
@@ -8,7 +10,18 @@ exports.buildPmcIdentityModal = buildPmcIdentityModal;
 // Intake and action modals (tickets, reports, giveaways, gear, PMC identity).
 const discord_js_1 = require("discord.js");
 const ids_1 = require("./ids");
-function buildTicketIntakeModal() {
+const ticketExperience_1 = require("../../services/ticketExperience");
+function buildTicketCategoryPicker() {
+    return {
+        content: "Choose a topic to open your support form.",
+        components: [new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder().setCustomId(ids_1.TICKET_IDS.category).setPlaceholder("What do you need help with?")
+                .addOptions(ticketExperience_1.TICKET_TOPICS.map(topic => ({ label: topic.label, value: topic.value }))))]
+    };
+}
+function buildTicketRetryRow() {
+    return new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(ids_1.TICKET_IDS.retry).setLabel("Edit / Retry Request").setStyle(discord_js_1.ButtonStyle.Primary));
+}
+function buildTicketIntakeModal(category = "general", draft) {
     const summaryInput = new discord_js_1.TextInputBuilder()
         .setCustomId(ids_1.TICKET_IDS.intakeSummary)
         .setLabel("What do you need help with?")
@@ -16,13 +29,6 @@ function buildTicketIntakeModal() {
         .setRequired(true)
         .setMaxLength(120)
         .setPlaceholder("Short title: what do you need help with?");
-    const categoryInput = new discord_js_1.TextInputBuilder()
-        .setCustomId(ids_1.TICKET_IDS.intakeCategory)
-        .setLabel("Topic (optional)")
-        .setStyle(discord_js_1.TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(40)
-        .setPlaceholder("bug, billing, account, report, appeal, general");
     const detailsInput = new discord_js_1.TextInputBuilder()
         .setCustomId(ids_1.TICKET_IDS.intakeDetails)
         .setLabel("Tell us what happened")
@@ -37,10 +43,16 @@ function buildTicketIntakeModal() {
         .setRequired(false)
         .setMaxLength(400)
         .setPlaceholder("Links required for reports, appeals, or billing. Otherwise optional. Add files in the ticket.");
+    if (draft?.summary)
+        summaryInput.setValue(draft.summary.slice(0, 120));
+    if (draft?.details)
+        detailsInput.setValue(draft.details.slice(0, 700));
+    if (draft?.evidence)
+        evidenceInput.setValue(draft.evidence.slice(0, 400));
     return new discord_js_1.ModalBuilder()
-        .setCustomId(ids_1.TICKET_IDS.intakeModal)
+        .setCustomId(`${ids_1.TICKET_IDS.intakeModal}:${category}`)
         .setTitle("Open Support Ticket")
-        .addComponents(new discord_js_1.ActionRowBuilder().addComponents(summaryInput), new discord_js_1.ActionRowBuilder().addComponents(detailsInput), new discord_js_1.ActionRowBuilder().addComponents(categoryInput), new discord_js_1.ActionRowBuilder().addComponents(evidenceInput));
+        .addComponents(new discord_js_1.ActionRowBuilder().addComponents(summaryInput), new discord_js_1.ActionRowBuilder().addComponents(detailsInput), new discord_js_1.ActionRowBuilder().addComponents(evidenceInput));
 }
 function buildAdminReportIntakeModal() {
     const targetInput = new discord_js_1.TextInputBuilder()

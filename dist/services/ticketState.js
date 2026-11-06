@@ -80,6 +80,11 @@ function createTicketEntry(store, guildId, ownerId, channelId, reason, priority,
         ownerId,
         channelId,
         reason,
+        lastReplyAt: undefined,
+        lastReplyBy: undefined,
+        closureRequestedAt: null,
+        closureRequestedBy: null,
+        notifications: {},
         status: "open",
         priority,
         workflowStatus: "new",
@@ -144,12 +149,9 @@ function claimTicketByChannel(tickets, channelId, claimedById, save) {
         return null;
     const snapshot = cloneTicket(ticket);
     ticket.status = "claimed";
-    ticket.workflowStatus = "responded";
     ticket.claimedById = claimedById;
     if (!ticket.assignedToId)
         ticket.assignedToId = claimedById;
-    if (!ticket.firstResponseAt)
-        ticket.firstResponseAt = Date.now();
     ticket.updatedAt = Date.now();
     recordEvent(ticket, claimedById, "claimed", `Ticket claimed by ${claimedById}.`);
     if (save()) {
@@ -214,9 +216,6 @@ function assignTicketToUser(tickets, channelId, assigneeId, save) {
     ticket.assignedToId = assigneeId;
     if (normalizeTicketStatus(ticket.status) === "open")
         ticket.status = "claimed";
-    ticket.workflowStatus = "responded";
-    if (!ticket.firstResponseAt)
-        ticket.firstResponseAt = Date.now();
     ticket.updatedAt = Date.now();
     recordEvent(ticket, assigneeId, "assigned", `Ticket assigned to ${assigneeId}.`);
     if (save()) {
@@ -263,6 +262,10 @@ function reopenTicketByChannel(tickets, channelId, reopenedById, reopenReason, s
     }
     ticket.archivedAt = null;
     ticket.closedReason = reopenReason || ticket.closedReason;
+    ticket.closureRequestedAt = null;
+    ticket.closureRequestedBy = null;
+    ticket.lastReplyBy = "member";
+    ticket.lastReplyAt = Date.now();
     ticket.resolvedAt = null;
     ticket.resolvedReason = null;
     ticket.reopenedCount = (ticket.reopenedCount || 0) + 1;

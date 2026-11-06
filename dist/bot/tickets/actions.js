@@ -11,9 +11,13 @@ const audit_1 = require("../core/audit");
 const records_1 = require("./records");
 const opsPanel_1 = require("./opsPanel");
 const guards_1 = require("../core/guards");
+const ticketExperience_1 = require("../../services/ticketExperience");
 function canManageTicketActions(member) {
-    return member.permissions.has(discord_js_1.PermissionFlagsBits.Administrator)
-        || member.roles.cache.has(config_1.TICKET_HANDLER_ROLE_ID);
+    const administrator = typeof member.permissions === "string"
+        ? (BigInt(member.permissions) & discord_js_1.PermissionFlagsBits.Administrator) !== 0n
+        : member.permissions.has(discord_js_1.PermissionFlagsBits.Administrator);
+    return administrator || (Array.isArray(member.roles)
+        ? member.roles.includes(config_1.TICKET_HANDLER_ROLE_ID) : member.roles.cache.has(config_1.TICKET_HANDLER_ROLE_ID));
 }
 function resolveTicketTargetChannelId(interaction) {
     const selectedChannel = interaction.options.getChannel("ticket_channel");
@@ -28,6 +32,12 @@ function resolveTicketTargetChannelId(interaction) {
     return { channelId, error: null };
 }
 async function handleTicketAssignCommand(interaction, usedAlias = false) {
+    const target = resolveTicketTargetChannelId(interaction);
+    if (!target.channelId || target.error)
+        return target.error || "Choose a ticket channel.";
+    return ticketExperience_1.ticketActions.run(target.channelId, () => performTicketAssignCommand(interaction, usedAlias));
+}
+async function performTicketAssignCommand(interaction, usedAlias = false) {
     const guildError = (0, guards_1.requireGuild)(interaction);
     if (guildError)
         return guildError;
@@ -53,7 +63,7 @@ async function handleTicketAssignCommand(interaction, usedAlias = false) {
     if (!canManageTicketActions(assigneeMember) && !assigneeMember.permissions.has(discord_js_1.PermissionFlagsBits.Administrator)) {
         return "Assignee must be an admin or have the ticket handler role.";
     }
-    const assigned = (0, records_1.assignTicketToUser)(target.channelId, assignee.id);
+    const assigned = (0, records_1.assignTicketToUser)(target.channelId, assignee.id, true);
     if (!assigned)
         return "Unable to assign this ticket right now.";
     await (0, opsPanel_1.updateTicketOpsPanelMessage)(interaction.guild, assigned);

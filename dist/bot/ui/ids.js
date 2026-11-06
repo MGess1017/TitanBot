@@ -60,6 +60,16 @@ exports.TICKET_IDS = {
     resolve: "ticket_resolve",
     watch: "ticket_watch",
     tools: "ticket_staff_tools",
+    requestClose: "ticket_request_close",
+    confirmResolve: "ticket_confirm_resolve",
+    category: "ticket_category",
+    retry: "ticket_retry",
+    assign: "ticket_assign_menu",
+    requestInfo: "ticket_request_info",
+    requestInfoModal: "ticket_request_info_modal",
+    queue: "ticket_queue",
+    notificationSettings: "ticket_notification_settings",
+    notificationModal: "ticket_notification_modal",
     intakeModal: "ticket_intake_modal",
     intakeCategory: "ticket_intake_category",
     intakeSummary: "ticket_intake_summary",
@@ -118,4 +128,4 @@ exports.CASINO_GAME_ORDER = [
     "hilo",
     "keno"
 ];
-exports.PRIVATE_SLASH_COMMANDS = new Set(["reportintake", "reportprofile", "reportresolve", "reportanalytics", "staff"]);
+exports.PRIVATE_SLASH_COMMANDS = new Set(["reportintake", "reportprofile", "reportresolve", "reportanalytics", "staff", "resolveticket", "ticket", "ticketintake"]);
