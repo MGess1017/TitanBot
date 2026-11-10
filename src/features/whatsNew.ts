@@ -8,25 +8,33 @@ export type WhatsNewRelease = { id: string; title: string; intro: string; sectio
 export const WHATS_NEW_COLOR = 0x9b59b6;
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
-    id: "fnt-patch-004",
-    title: "FNT Bot — Patch 004: Player Inquiry & Tactical Cards",
-    intro: "A simpler way to find guides, look up players, and check your progress.",
+    id: "fnt-patch-006",
+    title: "FNT Bot — Patch 006: Staff Announcement Studio",
+    intro: "Organized personal workspaces and polished staff announcements.",
     sections: [
         {
-            name: "01 • Player Inquiry",
+            name: "01 • Organized Navigation",
             lines: [
-                "The Player Inquiry panel offers private guide and command searches, personal profiles, and RuneScape player lookups."
+                "The Command Hub groups Profiles, Operations, Economy, and Guides & Support. Home, Back, and Refresh keep private navigation tidy.",
+                "The existing inquiry panel updates in place. Your commands, player data, leaderboards and crate panels remain available."
             ]
         },
         {
-            name: "02 • Tactical Progress Cards",
+            name: "02 • Staff Embed Studio",
             lines: [
-                "XP and PMC cards now use original AI-generated backgrounds with key progress stats. Detailed PMC sections remain available in the dossier menu.",
-                "RuneScape profiles show Jagex avatars and available RuneMetrics stats. Private or unavailable stats are clearly labeled."
+                "Staff can select a destination channel, named color and optional user or role mentions, then compose and publish from a private preview.",
+                "Publishing checks destination and mention permissions. Drafts are owner-only, expire after 30 minutes and cannot be submitted twice."
+            ]
+        },
+        {
+            name: "03 • Personal Customization",
+            lines: [
+                "Choose a quick-access destination, tactical card background, and equipped-theme accent. Save or clear a preferred RuneScape player.",
+                "Preferences persist across restarts and affect only your experience, never rewards or combat odds."
             ]
         }
     ],
-    footer: "FNT Bot • Patch 004 • Member Update"
+    footer: "FNT Bot • Patch 006 • Member Update"
 };
 
 export function buildWhatsNewEmbed(release: WhatsNewRelease = WHATS_NEW_RELEASE): EmbedBuilder {

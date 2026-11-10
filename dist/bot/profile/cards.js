@@ -9,6 +9,9 @@ const xpCrates_1 = require("../../game/xpCrates");
 const progressionCard_1 = require("../../features/progressionCard");
 const engagement_1 = require("../xp/engagement");
 const roles_1 = require("../xp/roles");
+const hubPreferences_1 = require("../../game/hubPreferences");
+const profileHub_1 = require("../../features/profileHub");
+const inquiryPanel_1 = require("../../features/inquiryPanel");
 function getProgressionCardSnapshot(kind, user, guild) {
     const state = (0, utils_1.ensureUser)(user.id);
     if (kind === "pmc") {
@@ -54,10 +57,16 @@ function buildXpProfilePayload(user, guild) {
         .setImage("attachment://xp-profile.png")
         .addFields({ name: "Rank", value: `${current?.name || "Unranked"}\n${next ? `${Math.max(0, next.xp - state.xp).toLocaleString("en-US")} XP to ${next.name}` : "Highest configured rank"}`, inline: true }, { name: "Daily Crate", value: `${crate ? `Latest: ${crate.crateId} (+${crate.xp.toLocaleString("en-US")} XP)\n` : "No crate claimed yet.\n"}${nextCrateAt > Date.now() ? `Next: <t:${Math.floor(nextCrateAt / 1000)}:R>` : "Ready to claim"}`, inline: true })
         .setFooter({ text: "Server XP and PMC raid XP are separate. More details in Profile." });
-    return JSON.stringify({ embed: embed.toJSON(), progressionCard: "xp" });
+    return JSON.stringify((0, inquiryPanel_1.withHubNavigation)({ embed: embed.toJSON(), progressionCard: "xp" }, "xp"));
 }
 async function progressionCardAttachment(kind, user, guild) {
-    return new discord_js_1.AttachmentBuilder(await (0, progressionCard_1.renderProgressionCard)(getProgressionCardSnapshot(kind, user, guild)), {
+    const state = (0, utils_1.ensureUser)(user.id);
+    const preferences = (0, hubPreferences_1.normalizeHubPreferences)(state.preferences.hub);
+    return new discord_js_1.AttachmentBuilder(await (0, progressionCard_1.renderProgressionCard)({
+        ...getProgressionCardSnapshot(kind, user, guild),
+        ...(preferences.background !== "automatic" ? { background: preferences.background } : {}),
+        ...(preferences.accent === "theme" ? { accent: `#${(0, profileHub_1.getThemeColor)(state.cosmetics).toString(16).padStart(6, "0")}` } : {})
+    }), {
         name: `${kind}-profile.png`
     });
 }

@@ -1,3 +1,5 @@
+import { normalizeHubPreferences, type HubPreferences } from "./hubPreferences";
+
 /** Cosmetic-only catalog: nothing here may affect XP, raids, casino odds, or other competitive systems. */
 export type CosmeticKind = "theme" | "title" | "badge";
 
@@ -61,6 +63,7 @@ export type CosmeticState = {
 export type ProfilePreferences = {
     doubleXpDm: boolean;
     showCheckpointRating: boolean;
+    hub?: HubPreferences;
 };
 
 export function defaultCosmeticState(): CosmeticState {
@@ -91,7 +94,8 @@ export function normalizeProfilePreferences(raw: unknown): ProfilePreferences {
     const defaults = defaultProfilePreferences();
     return {
         doubleXpDm: typeof source.doubleXpDm === "boolean" ? source.doubleXpDm : defaults.doubleXpDm,
-        showCheckpointRating: typeof source.showCheckpointRating === "boolean" ? source.showCheckpointRating : defaults.showCheckpointRating
+        showCheckpointRating: typeof source.showCheckpointRating === "boolean" ? source.showCheckpointRating : defaults.showCheckpointRating,
+        ...(source.hub ? { hub: normalizeHubPreferences(source.hub) } : {})
     };
 }
 

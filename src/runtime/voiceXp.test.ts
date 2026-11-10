@@ -5,6 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { EmbedBuilder } from "discord.js";
 import { XP_CRATE_COOLDOWN_MS, type XpCrateReward } from "../game/xpCrates";
+import { withHubNavigation } from "../features/inquiryPanel";
 import { accrueVoiceXp, getVoiceXpConfig, getVoiceXpMultiplier, isVoiceXpEligible, VOICE_XP_DOUBLE_AFTER_MS, type VoiceXpAccrualState } from "./voiceXp";
 import { restoreVoiceSession, type SavedVoiceSession } from "./voiceSessionStore";
 const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
@@ -222,6 +223,7 @@ async function verifyXpStatus(): Promise<void> {
     const statusContext = vm.createContext({
         EmbedBuilder,
         XP_CRATE_COOLDOWN_MS,
+        withHubNavigation,
         getCurrentVoiceXpMultiplier: (targetGuild: TestGuild | null, userId: string) =>
             runtime.getCurrentVoiceXpMultiplier(targetGuild, userId, Date.now()),
         ensureUser: () => user,

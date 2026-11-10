@@ -4,6 +4,9 @@ import { XP_CRATE_COOLDOWN_MS } from "../../game/xpCrates";
 import { renderProgressionCard, type ProgressionCardKind, type ProgressionCardSnapshot } from "../../features/progressionCard";
 import { getCurrentVoiceXpMultiplier } from "../xp/engagement";
 import { getEffectiveXpRoleEntries } from "../xp/roles";
+import { normalizeHubPreferences } from "../../game/hubPreferences";
+import { getThemeColor } from "../../features/profileHub";
+import { withHubNavigation } from "../../features/inquiryPanel";
 
 export function getProgressionCardSnapshot(kind: ProgressionCardKind, user: User, guild: Guild | null): ProgressionCardSnapshot {
     const state = ensureUser(user.id);
@@ -54,11 +57,17 @@ export function buildXpProfilePayload(user: User, guild: Guild | null): string {
             { name: "Daily Crate", value: `${crate ? `Latest: ${crate.crateId} (+${crate.xp.toLocaleString("en-US")} XP)\n` : "No crate claimed yet.\n"}${nextCrateAt > Date.now() ? `Next: <t:${Math.floor(nextCrateAt / 1000)}:R>` : "Ready to claim"}`, inline: true }
         )
         .setFooter({ text: "Server XP and PMC raid XP are separate. More details in Profile." });
-    return JSON.stringify({ embed: embed.toJSON(), progressionCard: "xp" });
+    return JSON.stringify(withHubNavigation({ embed: embed.toJSON(), progressionCard: "xp" }, "xp"));
 }
 
 export async function progressionCardAttachment(kind: ProgressionCardKind, user: User, guild: Guild | null): Promise<AttachmentBuilder> {
-    return new AttachmentBuilder(await renderProgressionCard(getProgressionCardSnapshot(kind, user, guild)), {
+    const state = ensureUser(user.id);
+    const preferences = normalizeHubPreferences(state.preferences.hub);
+    return new AttachmentBuilder(await renderProgressionCard({
+        ...getProgressionCardSnapshot(kind, user, guild),
+        ...(preferences.background !== "automatic" ? { background: preferences.background } : {}),
+        ...(preferences.accent === "theme" ? { accent: `#${getThemeColor(state.cosmetics).toString(16).padStart(6, "0")}` } : {})
+    }), {
         name: `${kind}-profile.png`
     });
 }

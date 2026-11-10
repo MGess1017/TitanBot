@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import ts from "typescript";
 import { loadImage } from "@napi-rs/canvas";
-import { ChannelType, Collection, DiscordAPIError, MessageFlags, type APIEmbed } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, DiscordAPIError, EmbedBuilder, MessageFlags, type APIEmbed } from "discord.js";
 import {
     buildInquiryEntry, buildInquiryHome, buildInquiryIndex, buildInquiryModal, buildInquirySearch,
-    INQUIRY_IDS, INQUIRY_TITLE, inquiryControls, searchInquiry
+    buildHubSection, buildHubSettings, hubParent, withHubNavigation, HUB_SECTIONS,
+    INQUIRY_IDS, INQUIRY_TITLE, INQUIRY_LEGACY_TITLE, inquiryControls, searchInquiry
 } from "../features/inquiryPanel";
+import { normalizeHubPreferences, type HubPreferences } from "../game/hubPreferences";
+import { normalizeProfilePreferences } from "../game/cosmetics";
 import { buildRs3ProfileEmbed, fetchRs3Profile, normalizeRs3Name, parseRs3QuestProfile } from "../features/runescapeProfile";
 import { PROGRESSION_CARD_HEIGHT, PROGRESSION_CARD_WIDTH, renderProgressionCard } from "../features/progressionCard";
 const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
@@ -92,6 +95,19 @@ function verifySearchAndComponents(): void {
     }
     assert.equal(buildInquiryModal("rs3").toJSON().custom_id, INQUIRY_IDS.rs3Modal);
     assert.equal(buildInquiryModal("search").toJSON().custom_id, INQUIRY_IDS.searchModal);
+    for (const key of Object.keys(HUB_SECTIONS)) {
+        const section = withHubNavigation(buildHubSection(key), `section:${key}`);
+        assert.equal(section.components?.length, 2);
+        assert.equal(hubParent(`section:${key}`), "home");
+    }
+    const settings = withHubNavigation(buildHubSettings(normalizeHubPreferences(null)), "settings");
+    assert.equal(settings.components?.length, 5);
+    assert.equal(withHubNavigation(settings, "settings").components?.length, 5, "navigation must not duplicate itself");
+    const malformed = normalizeHubPreferences({ shortcut: "admin", background: "file://secret", accent: "red", rs3Name: "../name" });
+    assert.deepEqual(malformed, { shortcut: "xp", background: "automatic", accent: "tactical", rs3Name: null });
+    const saved = { shortcut: "pmc", background: "radio", accent: "theme", rs3Name: " GzaWizz " };
+    const restored = normalizeProfilePreferences(JSON.parse(JSON.stringify({ hub: saved })));
+    assert.deepEqual(restored.hub, { ...saved, rs3Name: "GzaWizz" });
 }
 
 type Reply = { content?: string; embeds?: APIEmbed[]; files?: unknown[]; components?: unknown[]; flags?: number; attachments?: unknown[] };
@@ -99,9 +115,20 @@ async function verifyPrivateInteractions(): Promise<void> {
     let savedXp = 100;
     const files: string[] = [];
     const errors: unknown[][] = [];
+    const users = new Map<string, { preferences: { hub?: HubPreferences }; fnTokens: number; bankTokens: number }>();
+    let saves = 0;
+    let failSave = false;
+    const ensureUser = (id: string) => {
+        if (!users.has(id)) users.set(id, { preferences: {}, fnTokens: 10, bankTokens: 20 });
+        return users.get(id)!;
+    };
     const context = vm.createContext({
-        INQUIRY_IDS, MessageFlags, buildInquiryEntry, buildInquiryHome, buildInquiryIndex,
+        INQUIRY_IDS, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, Error,
+        buildInquiryEntry, buildInquiryHome, buildInquiryIndex, buildHubSection, buildHubSettings, withHubNavigation,
         buildInquiryModal, buildInquirySearch, inquiryControls, COMMAND_RATE_LIMIT_WINDOW_MS: 1500,
+        ensureUser, normalizeHubPreferences, normalizeRs3Name,
+        savePoints: () => { if (failSave) throw new Error("Save failed"); saves++; },
+        PERMANENT_TICKET_PANEL_CHANNEL_ID: "support",
         rejectIfRateLimited: () => null,
         buildRs3ProfileEmbed,
         fetchRs3Profile: async () => ({ ...parseRs3QuestProfile(questData), stats: null, statsNotice: null }),
@@ -109,7 +136,7 @@ async function verifyPrivateInteractions(): Promise<void> {
             embed: { title: `XP ${user.id}`, description: String(savedXp) }, progressionCard: "xp"
         }),
         buildPmcProfilePayload: (user: { id: string }) => JSON.stringify({
-            embed: { title: `PMC ${user.id}` }, progressionCard: "pmc", components: [{ pmcControls: true }]
+            embed: { title: `PMC ${user.id}` }, progressionCard: "pmc", components: [{ type: 1, components: [{ type: 2, custom_id: "pmc-control" }] }]
         }),
         buildProfilePayload: (user: { id: string }) => ({ embed: { title: `Profile ${user.id}` }, components: [] }),
         progressionCardAttachment: async (kind: string, user: { id: string }) => {
@@ -119,17 +146,19 @@ async function verifyPrivateInteractions(): Promise<void> {
         console: { error: (...args: unknown[]) => { errors.push(args); } }
     });
     vm.runInContext(functionCode("handleInquiryInteraction"), context);
-    function interaction(kind: "button" | "select" | "modal", customId: string, value: string, userId = "member-a") {
+    function interaction(kind: "button" | "select" | "modal", customId: string, value: string, userId = "member-a", ephemeral = false) {
         const events: Array<{ type: string; payload?: Reply }> = [];
         const fake = {
             customId, values: [value], user: { id: userId }, guild: {}, guildId: "guild",
             fields: { getTextInputValue: () => value },
+            message: { flags: { has: () => ephemeral } },
             deferred: false, replied: false,
             isButton: () => kind === "button",
             isStringSelectMenu: () => kind === "select",
             isModalSubmit: () => kind === "modal",
             reply: async (payload: Reply) => { events.push({ type: "reply", payload }); },
             deferReply: async (payload: Reply) => { fake.deferred = true; events.push({ type: "defer", payload }); },
+            deferUpdate: async () => { fake.deferred = true; events.push({ type: "update" }); },
             editReply: async (payload: Reply) => { events.push({ type: "edit", payload }); },
             showModal: async () => { events.push({ type: "modal" }); }
         };
@@ -142,7 +171,7 @@ async function verifyPrivateInteractions(): Promise<void> {
         assert.equal(events[0].payload?.flags, MessageFlags.Ephemeral, "personal results must never update the public panel");
         assert.ok(events[1].payload?.embeds?.[0].title);
         if (value === "xp" || value === "pmc") assert.equal(events[1].payload?.files?.length, 1);
-        if (value === "pmc") assert.deepEqual(JSON.parse(JSON.stringify(events[1].payload?.components)), [{ pmcControls: true }]);
+        if (value === "pmc") assert.equal(events[1].payload?.components?.length, 2, "PMC controls and hub navigation must coexist");
     }
     savedXp = 200;
     const refreshed = interaction("select", INQUIRY_IDS.browse, "xp", "member-b");
@@ -168,6 +197,33 @@ async function verifyPrivateInteractions(): Promise<void> {
     await context.handleInquiryInteraction(expired.fake);
     assert.match(expired.events[1].payload?.content || "", /no longer available/);
     assert.equal(errors.length, 1);
+    const privateHome = interaction("button", `${INQUIRY_IDS.open}home`, "", "member-a", true);
+    await context.handleInquiryInteraction(privateHome.fake);
+    assert.equal(privateHome.events[0].type, "update", "private navigation must reuse the existing workspace");
+    assert.equal(privateHome.events[1].payload?.attachments?.length, 0, "navigation must clear stale card images");
+    for (const [key, value] of [["shortcut", "pmc"], ["background", "radio"], ["accent", "theme"]]) {
+        const change = interaction("select", `${INQUIRY_IDS.preference}${key}`, value, "member-a", true);
+        await context.handleInquiryInteraction(change.fake);
+        assert.match(change.events[1].payload?.content || "", /saved/);
+    }
+    assert.equal(saves, 3);
+    assert.equal(ensureUser("member-a").preferences.hub?.shortcut, "pmc");
+    assert.equal(ensureUser("member-b").preferences.hub, undefined, "settings must not affect other users");
+    const shortcut = interaction("button", `${INQUIRY_IDS.open}shortcut`, "", "member-a", true);
+    await context.handleInquiryInteraction(shortcut.fake);
+    assert.equal(shortcut.events[1].payload?.embeds?.[0].title, "PMC member-a");
+    const name = interaction("modal", INQUIRY_IDS.saveNameModal, "GzaWizz");
+    await context.handleInquiryInteraction(name.fake);
+    assert.equal(ensureUser("member-a").preferences.hub?.rs3Name, "GzaWizz");
+    failSave = true;
+    const failed = interaction("select", `${INQUIRY_IDS.preference}background`, "checkpoint", "member-a", true);
+    await context.handleInquiryInteraction(failed.fake);
+    assert.match(failed.events[1].payload?.content || "", /Save failed/);
+    assert.equal(ensureUser("member-a").preferences.hub?.background, "radio", "failed saves must roll back in-memory settings");
+    failSave = false;
+    const clear = interaction("button", `${INQUIRY_IDS.open}clearName`, "", "member-a", true);
+    await context.handleInquiryInteraction(clear.fake);
+    assert.equal(ensureUser("member-a").preferences.hub?.rs3Name, null);
     assert.equal(await context.handleInquiryInteraction(interaction("button", "other:control", "").fake), false);
 }
 
@@ -187,7 +243,7 @@ async function verifyPanelPersistence(): Promise<void> {
         send: async () => { posts++; return message; }
     };
     const context = vm.createContext({
-        PLAYER_COUNT_CHANNEL_ID: "1527571592320651285", ChannelType, DiscordAPIError, buildInquiryHome, INQUIRY_TITLE,
+        PLAYER_COUNT_CHANNEL_ID: "1527571592320651285", ChannelType, DiscordAPIError, buildInquiryHome, INQUIRY_TITLE, INQUIRY_LEGACY_TITLE,
         getGuildPanelMessageId: () => storedId,
         setGuildPanelMessageId: (_guild: string, panel: string, id: string) => {
             assert.equal(panel, "inquiry"); storedId = id;
@@ -205,6 +261,10 @@ async function verifyPanelPersistence(): Promise<void> {
     await context.ensureInquiryPanelForGuild(guild);
     assert.equal(posts, 1, "recovering a lost saved ID must not post another panel");
     assert.equal(storedId, message.id);
+    message.embeds[0].title = INQUIRY_LEGACY_TITLE;
+    channel.messages.fetch = async () => message;
+    await context.ensureInquiryPanelForGuild(guild);
+    assert.equal(posts, 1, "the legacy inquiry panel must migrate in place");
 }
 
 async function verifyCards(): Promise<void> {
@@ -220,6 +280,26 @@ async function verifyCards(): Promise<void> {
         assert.equal(image.width, PROGRESSION_CARD_WIDTH);
         assert.equal(image.height, PROGRESSION_CARD_HEIGHT);
     }
+}
+
+async function verifyCardPreferences(): Promise<void> {
+    const snapshots: Array<{ background?: string; accent?: string; xp: number }> = [];
+    const context = vm.createContext({
+        ensureUser: () => ({ preferences: { hub: { background: "radio", accent: "theme" } }, cosmetics: {} }),
+        normalizeHubPreferences, getThemeColor: () => 0x38bdf8,
+        getProgressionCardSnapshot: () => ({ xp: 12345 }),
+        renderProgressionCard: async (snapshot: { xp: number }) => { snapshots.push(snapshot); return Buffer.from("card"); },
+        AttachmentBuilder: class {
+            constructor(public buffer: Buffer, public options: { name: string }) {}
+        }
+    });
+    vm.runInContext(functionCode("progressionCardAttachment"), context);
+    for (const kind of ["xp", "pmc"]) {
+        const attachment = await context.progressionCardAttachment(kind, { id: "member" }, null);
+        assert.equal(attachment.options.name, `${kind}-profile.png`);
+    }
+    assert.ok(snapshots.every(snapshot => snapshot.background === "radio" && snapshot.accent === "#38bdf8"));
+    assert.ok(snapshots.every(snapshot => snapshot.xp === 12345), "customization must not alter player stats");
 }
 
 async function verifyAttachmentRouting(): Promise<void> {
@@ -277,6 +357,7 @@ async function main(): Promise<void> {
     await verifyPrivateInteractions();
     await verifyPanelPersistence();
     await verifyCards();
+    await verifyCardPreferences();
     await verifyAttachmentRouting();
     console.log("Inquiry search, private interactions, persistence, RuneScape and card rendering tests passed.");
 }

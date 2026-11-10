@@ -1,8 +1,6 @@
 // Interaction handler: slash command dispatch and reply rendering.
 import { APIEmbed, MessageFlags, type APIActionRowComponent, type APIComponentInMessageActionRow, type Interaction } from "discord.js";
 import { getBossPortraitFiles } from "../../game/bossPortraits";
-import { xpCrateAttachment } from "../../features/xpCratePanel";
-import { type XpCrateId } from "../../game/xpCrates";
 import { recordCommandOutcome } from "../core/metrics";
 import { rejectIfRateLimitedForInteraction } from "../core/ops";
 import { appendAuditEvent } from "../core/audit";
@@ -57,7 +55,7 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
             channelId: interaction.channelId,
             durationMs: elapsedMs
         });
-        let parsed: { embed?: APIEmbed; embeds?: APIEmbed[]; withHelpNav?: boolean; helpPage?: string; components?: APIActionRowComponent<APIComponentInMessageActionRow>[]; xpCrateId?: XpCrateId; bossPortraitName?: string; profilePayload?: boolean; staffPayload?: boolean; progressionCard?: ProgressionCardKind } | null = null;
+        let parsed: { embed?: APIEmbed; embeds?: APIEmbed[]; withHelpNav?: boolean; helpPage?: string; components?: APIActionRowComponent<APIComponentInMessageActionRow>[]; bossPortraitName?: string; profilePayload?: boolean; staffPayload?: boolean; progressionCard?: ProgressionCardKind } | null = null;
         try {
             parsed = JSON.parse(result);
         } catch {
@@ -76,7 +74,7 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
             // Themed panels keep their own colors and controls instead of the generic outcome styling.
             await interaction.editReply({
                 embeds: parsed.embeds || (parsed.embed ? [parsed.embed] : []),
-                components: Array.isArray(parsed.components) ? parsed.components as any[] : [],
+                components: Array.isArray(parsed.components) ? parsed.components : [],
                 allowedMentions: { parse: [] }
             });
         } else if (parsed?.embed) {
@@ -94,10 +92,8 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
                 } else {
                     await interaction.editReply({
                         embeds: [embed],
-                        components: Array.isArray(parsed.components) ? parsed.components as any[] : [],
-                        files: commandKey === "xp" && parsed.xpCrateId
-                            ? [xpCrateAttachment(parsed.xpCrateId)]
-                            : getBossPortraitFiles(parsed.bossPortraitName),
+                        components: Array.isArray(parsed.components) ? parsed.components : [],
+                        files: getBossPortraitFiles(parsed.bossPortraitName),
                         ...(commandKey === "raid" ? { attachments: [] } : {}),
                         allowedMentions: { parse: ["roles"] }
                     });

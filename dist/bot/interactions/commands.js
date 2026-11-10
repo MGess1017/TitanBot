@@ -4,7 +4,6 @@ exports.handleChatInputCommand = handleChatInputCommand;
 // Interaction handler: slash command dispatch and reply rendering.
 const discord_js_1 = require("discord.js");
 const bossPortraits_1 = require("../../game/bossPortraits");
-const xpCratePanel_1 = require("../../features/xpCratePanel");
 const metrics_1 = require("../core/metrics");
 const ops_1 = require("../core/ops");
 const audit_1 = require("../core/audit");
@@ -97,9 +96,7 @@ async function handleChatInputCommand(interaction) {
                     await interaction.editReply({
                         embeds: [embed],
                         components: Array.isArray(parsed.components) ? parsed.components : [],
-                        files: commandKey === "xp" && parsed.xpCrateId
-                            ? [(0, xpCratePanel_1.xpCrateAttachment)(parsed.xpCrateId)]
-                            : (0, bossPortraits_1.getBossPortraitFiles)(parsed.bossPortraitName),
+                        files: (0, bossPortraits_1.getBossPortraitFiles)(parsed.bossPortraitName),
                         ...(commandKey === "raid" ? { attachments: [] } : {}),
                         allowedMentions: { parse: ["roles"] }
                     });

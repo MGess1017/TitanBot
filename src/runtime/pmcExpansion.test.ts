@@ -7,6 +7,7 @@ import * as Discord from "discord.js";
 import * as Utils from "../utils";
 import * as Catalog from "../game/catalog";
 import * as RaidDomain from "../raid/domain";
+import { withHubNavigation } from "../features/inquiryPanel";
 import { RAID_RESULT_ACTION_IDS, RAID_ENCOUNTER_IDS, buildRaidBranchDecisionPayload, buildRaidResultPayload } from "../game/payloads";
 import { getRaidLoadoutBonus, rollRaidLoot } from "../raid/runtime";
 import { CRAFT_RECIPES, getDynamicVendorPrice, getGearDurability, repairGear } from "../game/gearEconomy";
@@ -140,7 +141,7 @@ try {
     const profile = source.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === "buildPmcProfilePayload");
     assert.ok(profile);
     const activeRaids = new Set<string>();
-    const context = vm.createContext({ ...Discord, ...Utils, ...Catalog, RaidDomain, RAID_RESULT_ACTION_IDS,
+    const context = vm.createContext({ ...Discord, ...Utils, ...Catalog, RaidDomain, RAID_RESULT_ACTION_IDS, withHubNavigation,
         PMC_PROFILE_IDS: { view: "pmc_profile_view", followerRole: "pmc_follower_role" },
         PMC_PROFILE_VIEWS: { overview: "Overview", follower: "Follower", prestige: "Prestige", mastery: "Mastery", collection: "Collection" },
         PMC_PRESTIGE_IDS: { identity: "pmc_identity", request: "pmc_prestige_request" },

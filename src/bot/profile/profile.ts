@@ -24,6 +24,7 @@ import { botSettingsStore, isFeatureEnabled } from "../core/settings";
 import { getPrestigeBadge } from "../pmc/visuals";
 import { appendAuditEvent } from "../core/audit";
 import { buildXpIntelligenceEmbed, getXpRoleProgress } from "../xp/roles";
+import { withHubNavigation } from "../../features/inquiryPanel";
 
 // ---------- Unified profile ----------
 
@@ -98,7 +99,8 @@ export function buildProfilePayload(target: User, page: ProfilePage, viewerId: s
         components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(ACHIEVEMENT_TITLE_BUTTON_ID).setLabel("Equip Achievement Title").setStyle(ButtonStyle.Secondary)).toJSON());
     }
-    return { embed, components };
+    const navigable = withHubNavigation({ embed, components }, "profile");
+    return { embed: navigable.embed, components: navigable.components || [] };
 }
 
 function buildShopReply(userId: string, kind: CosmeticKind, notice?: string) {
@@ -117,9 +119,9 @@ export async function handleProfileInteraction(interaction: Interaction): Promis
         const target = await client.users.fetch(ownerId);
         const payload = buildProfilePayload(target, page, interaction.user.id, interaction.guild);
         if (interaction.user.id === ownerId) {
-            await interaction.update({ embeds: [payload.embed], components: payload.components as never[] });
+            await interaction.update({ embeds: [payload.embed], components: payload.components });
         } else {
-            await interaction.reply({ embeds: [payload.embed], components: payload.components as never[], flags: MessageFlags.Ephemeral });
+            await interaction.reply({ embeds: [payload.embed], components: payload.components, flags: MessageFlags.Ephemeral });
         }
         return true;
     }
@@ -136,7 +138,7 @@ export async function handleProfileInteraction(interaction: Interaction): Promis
         savePoints();
         appendAuditEvent("profile_preference_changed", { userId: interaction.user.id, key, value: user.preferences[key] });
         const payload = buildProfilePayload(interaction.user, "preferences", interaction.user.id, interaction.guild);
-        await interaction.update({ embeds: [payload.embed], components: payload.components as never[] });
+        await interaction.update({ embeds: [payload.embed], components: payload.components });
         return true;
     }
 

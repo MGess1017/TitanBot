@@ -20,6 +20,7 @@ const settings_1 = require("../core/settings");
 const visuals_1 = require("../pmc/visuals");
 const audit_1 = require("../core/audit");
 const roles_1 = require("../xp/roles");
+const inquiryPanel_1 = require("../../features/inquiryPanel");
 // ---------- Unified profile ----------
 function buildProfileSnapshot(target, guild) {
     const user = (0, utils_1.ensureUser)(target.id);
@@ -90,7 +91,8 @@ function buildProfilePayload(target, page, viewerId, guild) {
     if (page === "achievements" && viewerId === target.id) {
         components.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(achievementTitles_1.ACHIEVEMENT_TITLE_BUTTON_ID).setLabel("Equip Achievement Title").setStyle(discord_js_1.ButtonStyle.Secondary)).toJSON());
     }
-    return { embed, components };
+    const navigable = (0, inquiryPanel_1.withHubNavigation)({ embed, components }, "profile");
+    return { embed: navigable.embed, components: navigable.components || [] };
 }
 function buildShopReply(userId, kind, notice) {
     const user = (0, utils_1.ensureUser)(userId);

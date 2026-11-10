@@ -1,11 +1,10 @@
 // Raid history, mastery, boss roster, leaderboards, PMC profile, and intel views.
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, User } from "discord.js";
 import {
-    ensureUser, getInventoryCount, getMapReputationEntry, getPmcBuffs, getPmcPrestigeBonuses,
+    ensureUser, getInventoryCount, getMapReputationEntry, getPmcPrestigeBonuses,
     getPmcPrestigePreview, getPmcPrestigeTier, getPmcProgress, getPmcTierForLevel, getSirGruProgress,
     getSirGruRaidBonuses, getSirGruStats, getFollowerSupportRole, FOLLOWER_SUPPORT_ROLES, SIR_GRU_ABILITIES,
-    getBossProgressEntry, getGameStatsSummary, PMC_LEVEL_CAP, PMC_PRESTIGE_CAP, PMC_PRESTIGE_LEVEL_REQUIREMENT,
-    pmcBar, points
+    getBossProgressEntry, getGameStatsSummary, PMC_PRESTIGE_CAP, PMC_PRESTIGE_LEVEL_REQUIREMENT, points
 } from "../../utils";
 import { getLeaderboard } from "../../game/economy";
 import {
@@ -20,6 +19,8 @@ import { getPmcTierVisual } from "../pmc/visuals";
 import { PMC_PRESTIGE_IDS, PMC_PROFILE_IDS, PMC_PROFILE_VIEWS, type PmcProfileView } from "../ui/ids";
 import { activeRaidEncounters } from "./raids";
 import { getBestOwnedGear } from "../ui/autocomplete";
+import { withHubNavigation } from "../../features/inquiryPanel";
+import type { APIActionRowComponent, APIComponentInMessageActionRow } from "discord.js";
 
 export function buildRaidHistoryPayload(userId: string): string {
     const state = ensureUser(userId);
@@ -217,7 +218,6 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
     const prestigeBonuses = getPmcPrestigeBonuses(state.pmcPrestige);
     const prestigeEligible = progress.level >= PMC_PRESTIGE_LEVEL_REQUIREMENT && state.pmcPrestige < PMC_PRESTIGE_CAP;
     const nextPrestigeTier = getPmcPrestigeTier(Math.min(PMC_PRESTIGE_CAP, state.pmcPrestige + 1));
-    const buffs = getPmcBuffs(progress.level, state.pmcPrestige);
     const sirGru = state.followers?.sir_gru || null;
     const sirGruProgress = sirGru ? getSirGruProgress(sirGru) : null;
     const sirGruStats = sirGruProgress ? getSirGruStats(sirGruProgress.level) : null;
@@ -227,8 +227,6 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
         : null;
     const tier = getPmcTierForLevel(progress.level);
     const tierVisual = getPmcTierVisual(progress.level);
-    const raids = Math.max(0, state.pmcRaids);
-    const wins = Math.max(0, state.pmcRaidWins);
     const bossKills = Math.max(0, state.pmcBossKills || 0);
     const bossHeartNames = view === "collection" ? getUnlockedBossHeartNames(user.id) : [];
     const bossHeartsUnlocked = bossHeartNames.length;
@@ -256,38 +254,11 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
         const entry = getBossProgressEntry(user.id, boss.name);
         return `${boss.name} • ${entry.kills}/${entry.encounters} kills • best streak ${entry.bestStreak}`;
     });
-    const winRate = raids > 0 ? ((wins / raids) * 100).toFixed(1) : "0.0";
-    const recentTrend = state.raidHistory.slice(0, 5).map(entry => entry.success ? "W" : "L").join(" ") || "No recent raids";
-    const thresholdLine = progress.capped
-        ? `Final tier reached (${PMC_LEVEL_CAP}).`
-        : `${progress.intoLevel}/${Math.max(1, progress.nextThreshold - progress.currentThreshold)} XP in level | ${progress.needForNext} XP to next level`;
-    const prestigeLine = progress.capped
-        ? "🌌 Mythic Overlord achieved."
-        : tier
-            ? `${tier.badge} ${tier.label} unlocked at Level ${tier.level}.`
-            : "Tier badge unlocks at Level 1000.";
-    const tierProgressLine = tier
-        ? `${tier.badge} ${tier.label} (Lvl ${tier.level})`
-        : "No badge yet";
-
     const embed = new EmbedBuilder()
         .setColor(tierVisual.color)
         .setTitle(`🪖 ${state.pmcCallsign} • ${PMC_PROFILE_VIEWS[view]}`)
         .setDescription(`Level ${progress.level.toLocaleString()} • Prestige ${prestigeTier.numeral} • ${tier?.label || "Recruit"}`)
         .addFields(
-            {
-                name: "Recent Activity",
-                value: [
-                    `Win Rate: ${winRate}%`,
-                    `Recent Form: ${recentTrend}`
-                ].join("\n"),
-                inline: false
-            },
-            { name: "Milestone Badge", value: tierProgressLine, inline: true },
-            { name: "Badge Visual", value: tierVisual.label, inline: true },
-            { name: "Tier Status", value: prestigeLine, inline: true },
-            { name: "Raid Standing", value: `Raids ${raids} | Wins ${wins} | Boss Kills ${bossKills}`, inline: true },
-            { name: "Progress Track", value: `${pmcBar(state.pmcXP)}\n${thresholdLine}`, inline: false },
             {
                 name: `${prestigeTier.badge} Prestige`,
                 value: [
@@ -307,16 +278,6 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
                     `Network REP: ${totalMapReputation.toLocaleString()} • Mastered ${masteredMapCount}/${mapMastery.length}`,
                     ...mapMastery.slice(0, 3).map(item => `${RaidDomain.RAID_MAP_SHORT_LABELS[item.map.key]} • ${item.progress.tier.label} • ${item.entry.points} REP`)
                 ].join("\n"),
-                inline: false
-            },
-            {
-                name: "Raid Bonuses",
-                value: [
-                    `Success +${(buffs.successBonus * 100).toFixed(1)}%`,
-                    `Tokens +${(buffs.tokenBonus * 100).toFixed(1)}%`,
-                    `Defense +${(buffs.defenseBonus * 100).toFixed(1)}%`,
-                    `Raid XP +${(buffs.xpBonus * 100).toFixed(1)}%`
-                ].join(" • "),
                 inline: false
             },
             {
@@ -359,7 +320,7 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
         );
 
     const sections: Record<PmcProfileView, string[]> = {
-        overview: ["Recent Activity", "Progress Track", "Raid Standing", "Raid Bonuses"],
+        overview: [],
         follower: ["Follower: Sir Gru"],
         prestige: [`${prestigeTier.badge} Prestige`],
         mastery: ["Territory Mastery", "Lifetime Raid Economy"],
@@ -412,13 +373,13 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
         new ButtonBuilder().setCustomId(RAID_RESULT_ACTION_IDS.history).setLabel("Raid History").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(RAID_RESULT_ACTION_IDS.bosses).setLabel("Boss Intel").setStyle(ButtonStyle.Secondary)
     );
-    const components: unknown[] = [navigation.toJSON(), (view === "prestige" || view === "overview" ? prestigeRow : shortcuts).toJSON()];
+    const components: APIActionRowComponent<APIComponentInMessageActionRow>[] = [navigation.toJSON(), (view === "prestige" || view === "overview" ? prestigeRow : shortcuts).toJSON()];
     if (view === "follower" && sirGru) components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
         .setCustomId(`${PMC_PROFILE_IDS.followerRole}:${user.id}`)
         .setPlaceholder("Sir Gru support role")
         .setDisabled(activeRaidEncounters.has(user.id))
         .addOptions(Object.entries(FOLLOWER_SUPPORT_ROLES).map(([value, role]) => ({ value, label: role.label, description: role.description, default: value === getFollowerSupportRole(sirGru) })))).toJSON());
-    return JSON.stringify({ embed: embed.toJSON(), components, ...(view === "overview" ? { progressionCard: "pmc" } : {}) });
+    return JSON.stringify(withHubNavigation({ embed: embed.toJSON(), components, ...(view === "overview" ? { progressionCard: "pmc" as const } : {}) }, "pmc"));
 }
 
 function chunkDetailLines(lines: string[], maxLines = 8): string[] {

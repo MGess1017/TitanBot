@@ -9,6 +9,7 @@ exports.normalizeCosmeticState = normalizeCosmeticState;
 exports.normalizeProfilePreferences = normalizeProfilePreferences;
 exports.purchaseCosmetic = purchaseCosmetic;
 exports.equipCosmetic = equipCosmetic;
+const hubPreferences_1 = require("./hubPreferences");
 exports.DEFAULT_THEME_ID = "theme_fnt_purple";
 exports.MAX_SHOWCASE_BADGES = 3;
 exports.COSMETICS = [
@@ -66,7 +67,8 @@ function normalizeProfilePreferences(raw) {
     const defaults = defaultProfilePreferences();
     return {
         doubleXpDm: typeof source.doubleXpDm === "boolean" ? source.doubleXpDm : defaults.doubleXpDm,
-        showCheckpointRating: typeof source.showCheckpointRating === "boolean" ? source.showCheckpointRating : defaults.showCheckpointRating
+        showCheckpointRating: typeof source.showCheckpointRating === "boolean" ? source.showCheckpointRating : defaults.showCheckpointRating,
+        ...(source.hub ? { hub: (0, hubPreferences_1.normalizeHubPreferences)(source.hub) } : {})
     };
 }
 /** Validates and applies a purchase against the provided wallet; caller persists. */

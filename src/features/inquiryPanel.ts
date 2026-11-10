@@ -4,11 +4,30 @@ import {
 } from "discord.js";
 import { buildSlashCommands } from "../commands/slashCatalog";
 import { scoreText } from "./staffDesk";
+import { type HubPreferences } from "../game/hubPreferences";
 
-export const INQUIRY_TITLE = "FNT | Player Inquiry";
+export const INQUIRY_TITLE = "FNT | Command Hub";
+export const INQUIRY_LEGACY_TITLE = "FNT | Player Inquiry";
 export const INQUIRY_IDS = {
     browse: "inquiry:browse", search: "inquiry:search", rs3: "inquiry:rs3",
-    searchModal: "inquiry:search_modal", rs3Modal: "inquiry:rs3_modal", result: "inquiry:result"
+    searchModal: "inquiry:search_modal", rs3Modal: "inquiry:rs3_modal", result: "inquiry:result",
+    open: "inquiry:open:", refresh: "inquiry:refresh:", preference: "inquiry:preference:",
+    saveName: "inquiry:save_name", saveNameModal: "inquiry:save_name_modal"
+};
+export const HUB_SECTIONS = {
+    profiles: { title: "Profiles", description: "Your identity, cards and RuneScape", items: ["xp", "pmc", "profile", "rs3"] },
+    operations: { title: "Operations", description: "Raid preparation and field guides", items: ["inventory", "guide:raids", "guide:shop"] },
+    economy: { title: "Economy", description: "Wallet, banking and supply directory", items: ["wallet", "guide:bank", "guide:games"] },
+    guides: { title: "Guides & Support", description: "Quick answers and private assistance", items: ["guide:general", "guide:xp", "guide:rs3", "support"] }
+} as const;
+const HUB_DESTINATIONS: Record<string, { label: string; description: string }> = {
+    xp: { label: "XP Card", description: "Level, rank and next milestone" },
+    pmc: { label: "PMC Dossier", description: "Raid progression and deployment readiness" },
+    profile: { label: "Personal Profile", description: "Themes, achievements and preferences" },
+    rs3: { label: "RuneScape Profile", description: "Open your saved player or search by name" },
+    inventory: { label: "Inventory", description: "Your equipment and collected supplies" },
+    wallet: { label: "Wallet & Bank", description: "Your current balances" },
+    support: { label: "Private Support", description: "Find the designated support panel" }
 };
 export type InquiryPayload = {
     embed: APIEmbed;
@@ -54,17 +73,15 @@ export function searchInquiry(query: string, entries: InquiryEntry[] = buildInqu
 }
 
 export function inquiryControls(): APIActionRowComponent<APIComponentInMessageActionRow>[] {
-    const browse = new StringSelectMenuBuilder().setCustomId(INQUIRY_IDS.browse).setPlaceholder("Choose a guide or personal card").addOptions(
-        { label: "My XP Card", value: "xp", description: "Level, rank and voice bonus" },
-        { label: "My PMC Card", value: "pmc", description: "Raid character and dossier" },
-        { label: "My Profile", value: "profile", description: "Achievements, collections and preferences" },
-        ...INQUIRY_GUIDES.map(guide => ({ label: guide.title, value: `guide:${guide.id}`, description: guide.body.split(".")[0].slice(0, 100) }))
+    const browse = new StringSelectMenuBuilder().setCustomId(INQUIRY_IDS.browse).setPlaceholder("Choose your workspace").addOptions(
+        Object.entries(HUB_SECTIONS).map(([key, section]) => ({ label: section.title, value: `section:${key}`, description: section.description }))
     );
     return [
         new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(browse).toJSON(),
         new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(INQUIRY_IDS.search).setLabel("Search Guides & Commands").setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId(INQUIRY_IDS.rs3).setLabel("RuneScape Search").setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}shortcut`).setLabel("My Quick Access").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}settings`).setLabel("Customize").setStyle(ButtonStyle.Secondary)
         ).toJSON()
     ];
 }
@@ -72,7 +89,8 @@ export function inquiryControls(): APIActionRowComponent<APIComponentInMessageAc
 export function buildInquiryHome(): InquiryPayload {
     return {
         embed: new EmbedBuilder().setColor(0x9b59b6).setTitle(INQUIRY_TITLE)
-            .setDescription("Search guides and commands, view your progress, or look up a RuneScape player.\nChoose a topic below. Your results open privately.")
+            .setDescription("**Your server. Your workspace.**\nProfiles, operations, economy and answers in one place.\nChoose a workspace below. Everything opens privately.")
+            .setFooter({ text: "FNT / COMMAND HUB / PERSONAL WORKSPACE" })
             .toJSON(),
         components: inquiryControls()
     };
@@ -81,7 +99,7 @@ export function buildInquiryHome(): InquiryPayload {
 export function buildInquiryEntry(entry: InquiryEntry): InquiryPayload {
     return {
         embed: new EmbedBuilder().setColor(0x9b59b6).setTitle(entry.title).setDescription(entry.body).toJSON(),
-        components: inquiryControls()
+        components: []
     };
 }
 
@@ -98,17 +116,87 @@ export function buildInquirySearch(query: string): InquiryPayload {
                 new StringSelectMenuBuilder().setCustomId(INQUIRY_IDS.result).setPlaceholder("Open a result")
                     .addOptions(results.map(entry => ({ label: entry.title.slice(0, 100), value: entry.id, description: entry.kind === "guide" ? "Read guide" : "Command reference" })))
             ).toJSON(),
-            ...inquiryControls()
-        ] : inquiryControls()
+        ] : []
     };
 }
 
-export function buildInquiryModal(kind: "search" | "rs3"): ModalBuilder {
+export function buildInquiryModal(kind: "search" | "rs3" | "saveName", savedName?: string | null): ModalBuilder {
     const input = new TextInputBuilder().setCustomId("query").setStyle(TextInputStyle.Short).setRequired(true)
-        .setLabel(kind === "rs3" ? "RuneScape display name" : "Search topic or command")
-        .setPlaceholder(kind === "rs3" ? "GzaWizz" : "XP, boss fights, crates, bank...")
-        .setMinLength(1).setMaxLength(kind === "rs3" ? 12 : 100);
-    return new ModalBuilder().setCustomId(kind === "rs3" ? INQUIRY_IDS.rs3Modal : INQUIRY_IDS.searchModal)
-        .setTitle(kind === "rs3" ? "RuneScape Player Search" : "Search Player Inquiry")
+        .setLabel(kind !== "search" ? "RuneScape display name" : "Search topic or command")
+        .setPlaceholder(kind !== "search" ? "GzaWizz" : "XP, boss fights, crates, bank...")
+        .setMinLength(1).setMaxLength(kind !== "search" ? 12 : 100);
+    if (savedName && kind !== "search") input.setValue(savedName);
+    return new ModalBuilder().setCustomId(kind === "saveName" ? INQUIRY_IDS.saveNameModal : kind === "rs3" ? INQUIRY_IDS.rs3Modal : INQUIRY_IDS.searchModal)
+        .setTitle(kind === "saveName" ? "Save Preferred RuneScape Player" : kind === "rs3" ? "RuneScape Player Search" : "Search Command Hub")
         .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+}
+
+export function hubParent(target: string): string {
+    if (target.startsWith("rs3player:")) return "section:profiles";
+    if (target.startsWith("section:") || target === "settings" || target === "search") return "home";
+    for (const [key, section] of Object.entries(HUB_SECTIONS)) {
+        if ((section.items as readonly string[]).includes(target)) return `section:${key}`;
+    }
+    return "section:guides";
+}
+
+export function hubNavigation(target: string): APIActionRowComponent<APIComponentInMessageActionRow> {
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}home`).setLabel("Home").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}${hubParent(target)}`).setLabel("Back").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${INQUIRY_IDS.refresh}${target}`).setLabel("Refresh").setStyle(ButtonStyle.Primary)
+            .setDisabled(target === "search"),
+        new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}settings`).setLabel("Customize").setStyle(ButtonStyle.Secondary)
+    ).toJSON();
+}
+
+export function withHubNavigation(payload: InquiryPayload, target: string): InquiryPayload {
+    const components = (payload.components || []).filter(row => !row.components.some(component =>
+        "custom_id" in component && component.custom_id === `${INQUIRY_IDS.open}home`));
+    if (components.length >= 5) throw new Error("This view has too many controls.");
+    return { ...payload, components: [...components, hubNavigation(target)] };
+}
+
+export function buildHubSection(key: string): InquiryPayload {
+    if (!Object.prototype.hasOwnProperty.call(HUB_SECTIONS, key)) throw new Error("This workspace is no longer available.");
+    const section = HUB_SECTIONS[key as keyof typeof HUB_SECTIONS];
+    return {
+        embed: new EmbedBuilder().setColor(0x9b59b6).setTitle(`FNT | ${section.title}`)
+            .setDescription(section.description).setFooter({ text: "Choose an item / Home returns to your workspace" }).toJSON(),
+        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+            new StringSelectMenuBuilder().setCustomId(INQUIRY_IDS.browse).setPlaceholder(`Open ${section.title.toLowerCase()}`)
+                .addOptions(section.items.map(id => {
+                    const guide = INQUIRY_GUIDES.find(entry => `guide:${entry.id}` === id);
+                    return { value: id, label: guide?.title || HUB_DESTINATIONS[id].label,
+                        description: guide ? "Read a concise field guide" : HUB_DESTINATIONS[id].description };
+                }))
+        ).toJSON()]
+    };
+}
+
+export function buildHubSettings(preferences: HubPreferences): InquiryPayload {
+    const select = (key: string, label: string, options: Array<{ value: string; label: string }>, current: string) =>
+        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+            new StringSelectMenuBuilder().setCustomId(`${INQUIRY_IDS.preference}${key}`).setPlaceholder(label)
+                .addOptions(options.map(option => ({ ...option, default: option.value === current })))
+        ).toJSON();
+    return {
+        embed: new EmbedBuilder().setColor(0x9b59b6).setTitle("FNT | Your Workspace")
+            .setDescription("Personalize quick access and both tactical cards. These settings never change rewards or combat odds.")
+            .addFields({ name: "RuneScape Player", value: preferences.rs3Name ? `${preferences.rs3Name} (saved, not verified)` : "No preferred player saved." })
+            .setFooter({ text: "Changes apply to your account only and persist across restarts." }).toJSON(),
+        components: [
+            select("shortcut", "Quick access destination", ["xp", "pmc", "profile", "rs3"].map(value => ({ value, label: HUB_DESTINATIONS[value].label })), preferences.shortcut),
+            select("background", "Card background", [
+                { value: "automatic", label: "Automatic / Distinct XP and PMC art" },
+                { value: "checkpoint", label: "Extraction Checkpoint" }, { value: "radio", label: "Night Radio Station" }
+            ], preferences.background),
+            select("accent", "Card accent", [{ value: "tactical", label: "Tactical / XP violet, PMC gold" }, { value: "theme", label: "Use my equipped profile theme" }], preferences.accent),
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder().setCustomId(INQUIRY_IDS.saveName).setLabel("Save RuneScape Player").setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}clearName`).setLabel("Clear Saved Player").setStyle(ButtonStyle.Secondary).setDisabled(!preferences.rs3Name),
+                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}profile`).setLabel("Themes & Profile").setStyle(ButtonStyle.Secondary)
+            ).toJSON()
+        ]
+    };
 }

@@ -20,11 +20,12 @@ async function renderProgressionCard(snapshot) {
         }
         fontsReady = true;
     }
-    let background = backgrounds.get(snapshot.kind);
+    const backgroundKey = snapshot.background || (snapshot.kind === "xp" ? "radio" : "checkpoint");
+    let background = backgrounds.get(backgroundKey);
     if (!background) {
-        background = (0, canvas_1.loadImage)(node_path_1.default.join(ASSETS, "profile-cards", snapshot.kind === "xp" ? "radio-background.png" : "extraction-background.png"));
-        backgrounds.set(snapshot.kind, background);
-        background.catch(() => { backgrounds.delete(snapshot.kind); });
+        background = (0, canvas_1.loadImage)(node_path_1.default.join(ASSETS, "profile-cards", backgroundKey === "radio" ? "radio-background.png" : "extraction-background.png"));
+        backgrounds.set(backgroundKey, background);
+        background.catch(() => { backgrounds.delete(backgroundKey); });
     }
     const canvas = (0, canvas_1.createCanvas)(exports.PROGRESSION_CARD_WIDTH, exports.PROGRESSION_CARD_HEIGHT);
     const ctx = canvas.getContext("2d");
@@ -37,7 +38,7 @@ async function renderProgressionCard(snapshot) {
     shade.addColorStop(1, "rgba(5,10,14,0.05)");
     ctx.fillStyle = shade;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const accent = snapshot.kind === "xp" ? "#bda0ff" : "#dfba77";
+    const accent = snapshot.accent || (snapshot.kind === "xp" ? "#bda0ff" : "#dfba77");
     const text = (value, x, y, size, color = "#f4f4ef", width = 670) => {
         let fontSize = size;
         ctx.font = `${fontSize}px "Card Bold"`;

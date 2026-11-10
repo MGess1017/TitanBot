@@ -10,6 +10,7 @@ import {
 } from "./bot/core/config";
 import { ensureCheckpointCardPanel, handleCheckpointInteraction } from "./bot/panels/playerCards";
 import { ensureInquiryPanelForGuild, handleInquiryInteraction } from "./bot/panels/inquiry";
+import { ensureStaffEmbedPanelForGuild, handleStaffEmbedInteraction } from "./bot/panels/embedBuilder";
 import { client } from "./bot/core/client";
 import {
     awardEngagementXp, processVoiceXpSessions, seedConnectedVoiceXpSessions, trackVoiceXpConnection,
@@ -127,6 +128,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
                 await ensureInquiryPanelForGuild(guild);
+                await ensureStaffEmbedPanelForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
             await ensurePlayerCountPanelForGuild(guild);
@@ -153,6 +155,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
                 await ensureInquiryPanelForGuild(guild);
+                await ensureStaffEmbedPanelForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
             await ensurePlayerCountPanelForGuild(guild);
@@ -324,6 +327,7 @@ process.on("beforeExit", () => {
 
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
     if (shuttingDown) return;
+    if (await handleStaffEmbedInteraction(interaction)) return;
     if (await handleInquiryInteraction(interaction)) return;
     if (await handleProfileInteraction(interaction)) return;
     if (await handleStaffInteraction(interaction)) return;
