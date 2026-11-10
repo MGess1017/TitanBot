@@ -43,6 +43,7 @@ type GuildModerationState = {
         roleSelector?: string | null;
         voiceCreator?: string | null;
         playerCount?: string | null;
+        inquiry?: string | null;
         xpLeaderboard?: string | null;
         xpCrate?: string | null;
         checkpointCard?: string | null;

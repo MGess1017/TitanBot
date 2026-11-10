@@ -8,35 +8,25 @@ export type WhatsNewRelease = { id: string; title: string; intro: string; sectio
 export const WHATS_NEW_COLOR = 0x9b59b6;
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
-    id: "fnt-patch-002",
-    title: "FNT Bot — Patch 002: Support Workflow Upgrade",
-    intro: "Simpler requests, clearer replies, and safer ticket closure.",
+    id: "fnt-patch-004",
+    title: "FNT Bot — Patch 004: Player Inquiry & Tactical Cards",
+    intro: "A simpler way to find guides, look up players, and check your progress.",
     sections: [
         {
-            name: "01 • Member Experience",
+            name: "01 • Player Inquiry",
             lines: [
-                "Choose a support category instead of typing one. Failed requests can be edited and retried from saved 24-hour drafts.",
-                "Request closure without deleting the case. Ticket status shows whose reply is needed."
+                "The Player Inquiry panel offers private guide and command searches, personal profiles, and RuneScape player lookups."
             ]
         },
         {
-            name: "02 • Staff Workflow",
+            name: "02 • Tactical Progress Cards",
             lines: [
-                "A private Support Queue groups unclaimed cases, waiting members, and overdue staff replies.",
-                "Assign Handler and Request Information controls keep follow-up simple. KB is now labeled Help Articles.",
-                "Notifications target the handler; intervals and notification preferences are configurable from the queue."
-            ]
-        },
-        {
-            name: "03 • Reliability & Closure",
-            lines: [
-                "Staff must confirm permanent resolution. A complete, verified transcript is required before channel deletion.",
-                "Export failures preserve the ticket and alert staff. Unattended tickets now receive reminders instead of automatic closure.",
-                "Unchanged cards skip updates, saved panel IDs are reused, and simultaneous case actions are guarded."
+                "XP and PMC cards now use original AI-generated backgrounds with key progress stats. Detailed PMC sections remain available in the dossier menu.",
+                "RuneScape profiles show Jagex avatars and available RuneMetrics stats. Private or unavailable stats are clearly labeled."
             ]
         }
     ],
-    footer: "FNT Bot • Patch 002 • Member Update"
+    footer: "FNT Bot • Patch 004 • Member Update"
 };
 
 export function buildWhatsNewEmbed(release: WhatsNewRelease = WHATS_NEW_RELEASE): EmbedBuilder {

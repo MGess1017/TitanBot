@@ -11,6 +11,7 @@ const jsonPersistence_1 = require("../../runtime/jsonPersistence");
 const staffHub_1 = require("../../features/staffHub");
 const config_1 = require("../core/config");
 const playerCards_1 = require("../panels/playerCards");
+const inquiry_1 = require("../panels/inquiry");
 const client_1 = require("../core/client");
 const xpPanels_1 = require("../panels/xpPanels");
 const settings_1 = require("../core/settings");
@@ -124,6 +125,7 @@ async function runStaffHealthCheck(reason) {
             const channelChecks = [
                 { id: settings.channels.modAlerts, label: "Staff alerts", files: false },
                 { id: settings.channels.xpPanels, label: "XP panels", files: true },
+                { id: config_1.PLAYER_COUNT_CHANNEL_ID, label: "Player inquiry", files: true },
                 { id: settings.channels.checkpointCards, label: "Player rating", files: true },
                 { id: config_1.WHATS_NEW_CHANNEL_ID, label: "What's New", files: false },
                 { id: config_1.JOIN_WELCOME_CHANNEL_ID, label: "Welcome", files: false },
@@ -148,7 +150,8 @@ async function runStaffHealthCheck(reason) {
             const panels = [
                 { key: "xpLeaderboard", channelId: settings.channels.xpPanels, label: "XP leaderboard", repair: xpPanels_1.refreshXpLeaderboardPanel, enabled: true },
                 { key: "xpCrate", channelId: settings.channels.xpPanels, label: "FN Xp Panel", repair: xpPanels_1.ensureXpCratePanel, enabled: settings.features.xpCrates },
-                { key: "checkpointCard", channelId: settings.channels.checkpointCards, label: "Arena Player Rating panel", repair: playerCards_1.ensureCheckpointCardPanel, enabled: settings.features.checkpointCards }
+                { key: "checkpointCard", channelId: settings.channels.checkpointCards, label: "Arena Player Rating panel", repair: playerCards_1.ensureCheckpointCardPanel, enabled: settings.features.checkpointCards },
+                { key: "inquiry", channelId: config_1.PLAYER_COUNT_CHANNEL_ID, label: "Player inquiry panel", repair: () => (0, inquiry_1.ensureInquiryPanelForGuild)(guild), enabled: true }
             ];
             for (const panel of panels) {
                 if (!panel.enabled)

@@ -1,5 +1,5 @@
 // Interaction handler: slash command dispatch and reply rendering.
-import { APIEmbed, MessageFlags, type Interaction } from "discord.js";
+import { APIEmbed, MessageFlags, type APIActionRowComponent, type APIComponentInMessageActionRow, type Interaction } from "discord.js";
 import { getBossPortraitFiles } from "../../game/bossPortraits";
 import { xpCrateAttachment } from "../../features/xpCratePanel";
 import { type XpCrateId } from "../../game/xpCrates";
@@ -12,6 +12,8 @@ import { helpDropdown } from "../ui/help";
 import { clampText, embedFromPayload, embedFromText } from "../ui/embeds";
 import { commandHandlers } from "../commands/handlers";
 import { getCommandKey } from "../commands/keys";
+import { progressionCardAttachment } from "../profile/cards";
+import type { ProgressionCardKind } from "../../features/progressionCard";
 
 /** Runs a slash command handler and renders its reply. */
 export async function handleChatInputCommand(interaction: Interaction): Promise<void> {
@@ -55,14 +57,22 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
             channelId: interaction.channelId,
             durationMs: elapsedMs
         });
-        let parsed: { embed?: APIEmbed; embeds?: APIEmbed[]; withHelpNav?: boolean; helpPage?: string; components?: unknown[]; xpCrateId?: XpCrateId; bossPortraitName?: string; profilePayload?: boolean; staffPayload?: boolean } | null = null;
+        let parsed: { embed?: APIEmbed; embeds?: APIEmbed[]; withHelpNav?: boolean; helpPage?: string; components?: APIActionRowComponent<APIComponentInMessageActionRow>[]; xpCrateId?: XpCrateId; bossPortraitName?: string; profilePayload?: boolean; staffPayload?: boolean; progressionCard?: ProgressionCardKind } | null = null;
         try {
             parsed = JSON.parse(result);
         } catch {
             parsed = null;
         }
 
-        if (parsed?.profilePayload || parsed?.staffPayload) {
+        if (parsed?.embed && (parsed.progressionCard === "xp" || parsed.progressionCard === "pmc")) {
+            await interaction.editReply({
+                embeds: [parsed.embed],
+                components: parsed.components || [],
+                files: [await progressionCardAttachment(parsed.progressionCard, interaction.user, interaction.guild)],
+                attachments: [],
+                allowedMentions: { parse: [] }
+            });
+        } else if (parsed?.profilePayload || parsed?.staffPayload) {
             // Themed panels keep their own colors and controls instead of the generic outcome styling.
             await interaction.editReply({
                 embeds: parsed.embeds || (parsed.embed ? [parsed.embed] : []),

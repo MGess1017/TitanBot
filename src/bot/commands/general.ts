@@ -1,25 +1,22 @@
 // General, bank, trade, XP, and profile slash commands.
 import { EmbedBuilder } from "discord.js";
 import {
-    addTokens, addInventoryItem, depositToBank, ensureUser, getBankTokens, getInventoryCount, getPmcLevel,
-    getPmcPrestigeTier, formatProgressPercent, getPoints, getTokens, getXPLevel, removeInventoryItem,
-    transferWalletTokens, withdrawFromBank, XP_LEVEL_THRESHOLDS, xpBar
+    addTokens, addInventoryItem, depositToBank, ensureUser, getBankTokens, getInventoryCount,
+    getPoints, getTokens, removeInventoryItem, transferWalletTokens, withdrawFromBank
 } from "../../utils";
 import { ITEM_DEFS } from "../../game/catalog";
 import { handleCoreCommand } from "../../commands/coreCommands";
 import { buildStatusLines } from "../../runtime/health";
-import { addXpCrateProfile } from "../../features/xpCratePanel";
+import { buildRs3ProfileEmbed, DEFAULT_RS3_PLAYER, fetchRs3Profile } from "../../features/runescapeProfile";
 import { MAX_XP_ROLE_THRESHOLD } from "../core/config";
 import { client } from "../core/client";
-import { getCurrentVoiceXpMultiplier } from "../xp/engagement";
 import { runAsyncWithBoundary } from "../core/metrics";
 import { getGitDeploymentInfo } from "../core/announcements";
-import { getAccessPointBadge, getPmcTierVisual, getPrestigeBadge } from "../pmc/visuals";
 import { createTradeOffer, getOpenTradeOffer, saveTradeStore, tradeStore } from "../economy/trades";
 import { appendAuditEvent } from "../core/audit";
 import { sendModLog } from "../moderation/store";
 import {
-    drainXpRoleSyncQueue, ensureXpTierRoles, getEffectiveXpRoleEntries, retryXpRoleDeadLetters,
+    drainXpRoleSyncQueue, ensureXpTierRoles, retryXpRoleDeadLetters,
     runGuildXpRoleSyncJob, setXpRoleSyncPaused, upsertXpRoleEntry, XP_ROLE_SYNC_PAUSED, XP_ROLE_SYNC_RUNNING_GUILDS
 } from "../xp/roles";
 import { requireAdministrator, requireGuildOwner } from "../core/guards";
@@ -27,11 +24,16 @@ import { buildHelpPayload, buildThemedRoleSections, resolveXpRoleLines } from ".
 import { buildPmcProfilePayload } from "../raid/views";
 import { type CommandHandlerMap } from "./registry";
 import { buildProfilePayload } from "../profile/profile";
+import { buildXpProfilePayload } from "../profile/cards";
 
 /** General, bank, trade, XP, and profile commands. */
 export const generalCommands: CommandHandlerMap = {
     ping: async () => {
         return "Pong.";
+    },
+    rs3: async interaction => {
+        const playerName = interaction.options.getString("player")?.trim() || DEFAULT_RS3_PLAYER;
+        return JSON.stringify({ embed: buildRs3ProfileEmbed(await fetchRs3Profile(playerName)).toJSON() });
     },
     help: async interaction => {
         return JSON.stringify(await buildHelpPayload("general", interaction.guild));
@@ -250,119 +252,7 @@ export const generalCommands: CommandHandlerMap = {
         ensureUser(target.id);
         return `${target.username} has ${getPoints(target.id)} Access Points.`;
     },
-    xp: async interaction => {
-        const userId = interaction.user.id;
-        const voiceMultiplier = getCurrentVoiceXpMultiplier(interaction.guild, userId);
-        const user = ensureUser(userId);
-        const accessPoints = getPoints(userId);
-        const badge = getAccessPointBadge(accessPoints);
-        const prestigeBadge = getPrestigeBadge(user.prestige);
-        const pmcLevel = getPmcLevel(user.pmcXP);
-        const pmcPrestigeTier = getPmcPrestigeTier(user.pmcPrestige);
-        const tierVisual = getPmcTierVisual(pmcLevel);
-        const engagementLevel = getXPLevel(user.xp);
-        const currentThreshold = engagementLevel > 0 ? XP_LEVEL_THRESHOLDS[engagementLevel - 1] : 0;
-        const nextThreshold = XP_LEVEL_THRESHOLDS[engagementLevel] ?? currentThreshold;
-        const levelSpan = Math.max(1, nextThreshold - currentThreshold);
-        const xpIntoLevel = Math.max(0, user.xp - currentThreshold);
-        const xpToNextLevel = nextThreshold > currentThreshold ? Math.max(0, nextThreshold - user.xp) : 0;
-        const progressPercent = nextThreshold > currentThreshold
-            ? formatProgressPercent(xpIntoLevel / levelSpan)
-            : "100%";
-        const lastXpAt = user.lastXP > 0 ? `<t:${Math.floor(user.lastXP / 1000)}:R>` : "No XP earned yet";
-        const roleEntries = getEffectiveXpRoleEntries();
-        const currentRole = roleEntries.filter(entry => user.xp >= entry.xp).pop();
-        const nextRole = roleEntries.find(entry => entry.xp > user.xp);
-        const roleProgress = currentRole && nextRole
-            ? `${Math.max(0, user.xp - currentRole.xp).toLocaleString()}/${(nextRole.xp - currentRole.xp).toLocaleString()} XP`
-            : nextRole
-                ? `${user.xp.toLocaleString()}/${nextRole.xp.toLocaleString()} XP`
-                : "Highest configured role reached";
-        const streakText = user.dailyStreak > 0 ? `${user.dailyStreak} day streak` : "No active streak";
-        const achievements = user.achievements.length > 0
-            ? user.achievements.slice(0, 4).join("\n")
-            : "No achievements yet";
-        const embed = new EmbedBuilder()
-            .setColor(prestigeBadge.color)
-            .setTitle("📈 XP Progress Center")
-            .setDescription([
-                `🧠 **Live XP:** ${user.xp.toLocaleString()}`,
-                `🎚️ **Level ${engagementLevel}**${nextThreshold > currentThreshold ? ` • ${xpToNextLevel.toLocaleString()} XP to level ${engagementLevel + 1}` : " • Level cap reached"}`,
-                `${xpBar(user.xp)}`
-            ].join("\n"))
-            .setThumbnail("https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4c8.png")
-            .addFields(
-                {
-                    name: "XP Status",
-                    value: `Voice XP: **${voiceMultiplier}x** (${voiceMultiplier * 100} XP/minute)\n2x after 2 continuous hours in any VC. Disconnecting resets to 1x. Message XP is unchanged.`,
-                    inline: false
-                },
-                {
-                    name: "🎯 Engagement",
-                    value: [
-                        `Level: **${engagementLevel.toLocaleString()}**`,
-                        `In level: **${xpIntoLevel.toLocaleString()} / ${levelSpan.toLocaleString()} XP**`,
-                        `Completion: **${progressPercent}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🎖️ XP Role",
-                    value: [
-                        `Current: **${currentRole?.name || "No role yet"}**`,
-                        `Progress: **${roleProgress}**`,
-                        `Next: **${nextRole ? `${nextRole.name} at ${nextRole.xp.toLocaleString()} XP` : "Maximum tier"}**`,
-                        `Unlock history: **${user.xpRoleUnlocks.length}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "💼 Economy",
-                    value: [
-                        `🪙 FN Token$: **${user.fnTokens.toLocaleString()}**`,
-                        `🏦 Banked: **${user.bankTokens.toLocaleString()}**`,
-                        `🎯 Access Points: **${accessPoints.toLocaleString()}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🔥 Activity",
-                    value: [
-                        `📆 ${streakText}`,
-                        `⏱️ Last XP: **${lastXpAt}**`,
-                        `🏆 Achievements: **${user.achievements.length.toLocaleString()}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🪖 Raid Track",
-                    value: [
-                        `PMC Level: **${pmcLevel.toLocaleString()}**`,
-                        `Raid XP: **${user.pmcXP.toLocaleString()}**`,
-                        `Tier: **${tierVisual.label}**`,
-                        `PMC Prestige: **${pmcPrestigeTier.numeral} • ${pmcPrestigeTier.label}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "🌟 Status",
-                    value: [
-                        `Engagement Prestige: **${user.prestige.toLocaleString()}**`,
-                        `Badge: **${prestigeBadge.label}**`,
-                        `Access Tier: **${badge.label}**`
-                    ].join("\n"),
-                    inline: true
-                },
-                {
-                    name: "✨ Recent Unlocks",
-                    value: achievements,
-                    inline: true
-                }
-            )
-            .setFooter({ text: "Live data is pulled from persisted XP state." });
-        addXpCrateProfile(embed, user.latestXpCrate);
-        return JSON.stringify({ embed: embed.toJSON(), xpCrateId: user.latestXpCrate?.crateId });
-    },
+    xp: async interaction => buildXpProfilePayload(interaction.user, interaction.guild),
     pmc: async interaction => buildPmcProfilePayload(interaction.user),
     profile: async interaction => {
         const target = interaction.options.getUser("user") || interaction.user;

@@ -14,6 +14,7 @@ const help_1 = require("../ui/help");
 const embeds_1 = require("../ui/embeds");
 const handlers_1 = require("../commands/handlers");
 const keys_1 = require("../commands/keys");
+const cards_1 = require("../profile/cards");
 /** Runs a slash command handler and renders its reply. */
 async function handleChatInputCommand(interaction) {
     if (!interaction.isChatInputCommand())
@@ -62,7 +63,16 @@ async function handleChatInputCommand(interaction) {
         catch {
             parsed = null;
         }
-        if (parsed?.profilePayload || parsed?.staffPayload) {
+        if (parsed?.embed && (parsed.progressionCard === "xp" || parsed.progressionCard === "pmc")) {
+            await interaction.editReply({
+                embeds: [parsed.embed],
+                components: parsed.components || [],
+                files: [await (0, cards_1.progressionCardAttachment)(parsed.progressionCard, interaction.user, interaction.guild)],
+                attachments: [],
+                allowedMentions: { parse: [] }
+            });
+        }
+        else if (parsed?.profilePayload || parsed?.staffPayload) {
             // Themed panels keep their own colors and controls instead of the generic outcome styling.
             await interaction.editReply({
                 embeds: parsed.embeds || (parsed.embed ? [parsed.embed] : []),

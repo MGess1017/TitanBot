@@ -16,6 +16,7 @@ import { isUnknownInteractionError } from "../core/guards";
 import { HELP_IDS, ONBOARDING_IDS } from "../ui/ids";
 import { buildGettingStartedEmbed, buildHelpPayload, helpDropdown } from "../ui/help";
 import { embedFromPayload } from "../ui/embeds";
+import { resolveSelfRoleForGuild } from "../panels/community";
 
 /** Help menu, achievement titles, self roles, and temporary voice rooms. */
 export async function handleCommunityInteraction(interaction: Interaction): Promise<boolean> {
@@ -204,14 +205,13 @@ export async function handleCommunityInteraction(interaction: Interaction): Prom
             return true;
         }
 
-        if (member.roles.cache.has(configuredRole.id)) {
-            await interaction.reply({ content: `You already have ${configuredRole.label}.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
-            return true;
-        }
-
-        const role = guild.roles.cache.get(configuredRole.id) || await guild.roles.fetch(configuredRole.id).catch(() => null);
+        const role = await resolveSelfRoleForGuild(guild, configuredRole);
         if (!role) {
             await interaction.reply({ content: `${configuredRole.label} could not be found.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+            return true;
+        }
+        if (member.roles.cache.has(role.id)) {
+            await interaction.reply({ content: `You already have ${configuredRole.label}.`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
         if (role.managed || role.comparePositionTo(botMember.roles.highest) >= 0) {
@@ -219,7 +219,10 @@ export async function handleCommunityInteraction(interaction: Interaction): Prom
             return true;
         }
 
-        const succeeded = await member.roles.add(role).then(() => true).catch(() => false);
+        const succeeded = await member.roles.add(role).then(() => true).catch(error => {
+            console.warn(`[roleSelector] Could not add role ${role.id} to member ${member.id}:`, error);
+            return false;
+        });
         await interaction.reply({
             content: succeeded
                 ? `${configuredRole.label} added.`

@@ -13,6 +13,7 @@ const guards_1 = require("../core/guards");
 const ids_1 = require("../ui/ids");
 const help_1 = require("../ui/help");
 const embeds_1 = require("../ui/embeds");
+const community_1 = require("../panels/community");
 /** Help menu, achievement titles, self roles, and temporary voice rooms. */
 async function handleCommunityInteraction(interaction) {
     if (interaction.isButton() && interaction.customId === ids_1.ONBOARDING_IDS.start) {
@@ -187,20 +188,23 @@ async function handleCommunityInteraction(interaction) {
             await interaction.reply({ content: "Unable to verify your member roles right now. Please try again.", flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
-        if (member.roles.cache.has(configuredRole.id)) {
-            await interaction.reply({ content: `You already have ${configuredRole.label}.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
-            return true;
-        }
-        const role = guild.roles.cache.get(configuredRole.id) || await guild.roles.fetch(configuredRole.id).catch(() => null);
+        const role = await (0, community_1.resolveSelfRoleForGuild)(guild, configuredRole);
         if (!role) {
             await interaction.reply({ content: `${configuredRole.label} could not be found.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
+            return true;
+        }
+        if (member.roles.cache.has(role.id)) {
+            await interaction.reply({ content: `You already have ${configuredRole.label}.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
         if (role.managed || role.comparePositionTo(botMember.roles.highest) >= 0) {
             await interaction.reply({ content: `The bot cannot manage ${configuredRole.label}. Move its role above the selected role and grant Manage Roles.`, flags: discord_js_1.MessageFlags.Ephemeral }).catch(() => undefined);
             return true;
         }
-        const succeeded = await member.roles.add(role).then(() => true).catch(() => false);
+        const succeeded = await member.roles.add(role).then(() => true).catch(error => {
+            console.warn(`[roleSelector] Could not add role ${role.id} to member ${member.id}:`, error);
+            return false;
+        });
         await interaction.reply({
             content: succeeded
                 ? `${configuredRole.label} added.`

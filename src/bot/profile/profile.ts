@@ -90,10 +90,10 @@ function buildProfileSnapshot(target: User, guild: Guild | null): ProfileSnapsho
     };
 }
 
-export function buildProfilePayload(target: User, page: ProfilePage, viewerId: string, guild: Guild | null): { embed: APIEmbed; components: unknown[] } {
+export function buildProfilePayload(target: User, page: ProfilePage, viewerId: string, guild: Guild | null): { embed: APIEmbed; components: ReturnType<typeof buildProfileComponents> } {
     const snapshot = buildProfileSnapshot(target, guild);
     const embed = buildProfileEmbed(snapshot, page, page === "progression" ? buildXpIntelligenceEmbed({ user: { id: target.id } }).toJSON() : undefined);
-    const components: unknown[] = buildProfileComponents(snapshot, page, viewerId);
+    const components = buildProfileComponents(snapshot, page, viewerId);
     if (page === "achievements" && viewerId === target.id) {
         components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(ACHIEVEMENT_TITLE_BUTTON_ID).setLabel("Equip Achievement Title").setStyle(ButtonStyle.Secondary)).toJSON());

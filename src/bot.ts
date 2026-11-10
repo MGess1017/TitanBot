@@ -9,6 +9,7 @@ import {
     JOIN_WELCOME_CHANNEL_ID, PREFIX, VOICE_XP_TICK_MS, WEEKLY_BALANCE_REPORT_MS
 } from "./bot/core/config";
 import { ensureCheckpointCardPanel, handleCheckpointInteraction } from "./bot/panels/playerCards";
+import { ensureInquiryPanelForGuild, handleInquiryInteraction } from "./bot/panels/inquiry";
 import { client } from "./bot/core/client";
 import {
     awardEngagementXp, processVoiceXpSessions, seedConnectedVoiceXpSessions, trackVoiceXpConnection,
@@ -125,6 +126,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
                 await refreshTicketPanelsForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
+                await ensureInquiryPanelForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
             await ensurePlayerCountPanelForGuild(guild);
@@ -150,6 +152,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
                 await refreshTicketPanelsForGuild(guild);
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
+                await ensureInquiryPanelForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
             await ensurePlayerCountPanelForGuild(guild);
@@ -321,6 +324,7 @@ process.on("beforeExit", () => {
 
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
     if (shuttingDown) return;
+    if (await handleInquiryInteraction(interaction)) return;
     if (await handleProfileInteraction(interaction)) return;
     if (await handleStaffInteraction(interaction)) return;
     if (await handleCheckpointInteraction(interaction)) return;

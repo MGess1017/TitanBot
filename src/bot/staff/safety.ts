@@ -3,8 +3,9 @@ import { Guild, MessageFlags, PermissionFlagsBits, type Interaction } from "disc
 import { getJsonSaveFailures } from "../../runtime/jsonPersistence";
 import { type AntiRaidDetection } from "../../features/antiRaid";
 import { buildHealthPayload, buildIncidentAlert, healthSignature, type HealthIssue } from "../../features/staffHub";
-import { JOIN_WELCOME_CHANNEL_ID, PERMANENT_TICKET_PANEL_CHANNEL_ID, WHATS_NEW_CHANNEL_ID } from "../core/config";
+import { JOIN_WELCOME_CHANNEL_ID, PERMANENT_TICKET_PANEL_CHANNEL_ID, PLAYER_COUNT_CHANNEL_ID, WHATS_NEW_CHANNEL_ID } from "../core/config";
 import { ensureCheckpointCardPanel } from "../panels/playerCards";
+import { ensureInquiryPanelForGuild } from "../panels/inquiry";
 import { client } from "../core/client";
 import { ensureXpCratePanel, refreshXpLeaderboardPanel } from "../panels/xpPanels";
 import { antiRaidIncidents, botSettingsStore, isFeatureEnabled, SAVE_HEALTH } from "../core/settings";
@@ -111,6 +112,7 @@ export async function runStaffHealthCheck(reason: string): Promise<{ issues: Hea
             const channelChecks: Array<{ id: string; label: string; files: boolean }> = [
                 { id: settings.channels.modAlerts, label: "Staff alerts", files: false },
                 { id: settings.channels.xpPanels, label: "XP panels", files: true },
+                { id: PLAYER_COUNT_CHANNEL_ID, label: "Player inquiry", files: true },
                 { id: settings.channels.checkpointCards, label: "Player rating", files: true },
                 { id: WHATS_NEW_CHANNEL_ID, label: "What's New", files: false },
                 { id: JOIN_WELCOME_CHANNEL_ID, label: "Welcome", files: false },
@@ -134,7 +136,8 @@ export async function runStaffHealthCheck(reason: string): Promise<{ issues: Hea
             const panels: Array<{ key: GuildPanelKey; channelId: string; label: string; repair: () => Promise<void>; enabled: boolean }> = [
                 { key: "xpLeaderboard", channelId: settings.channels.xpPanels, label: "XP leaderboard", repair: refreshXpLeaderboardPanel, enabled: true },
                 { key: "xpCrate", channelId: settings.channels.xpPanels, label: "FN Xp Panel", repair: ensureXpCratePanel, enabled: settings.features.xpCrates },
-                { key: "checkpointCard", channelId: settings.channels.checkpointCards, label: "Arena Player Rating panel", repair: ensureCheckpointCardPanel, enabled: settings.features.checkpointCards }
+                { key: "checkpointCard", channelId: settings.channels.checkpointCards, label: "Arena Player Rating panel", repair: ensureCheckpointCardPanel, enabled: settings.features.checkpointCards },
+                { key: "inquiry", channelId: PLAYER_COUNT_CHANNEL_ID, label: "Player inquiry panel", repair: () => ensureInquiryPanelForGuild(guild), enabled: true }
             ];
             for (const panel of panels) {
                 if (!panel.enabled) continue;

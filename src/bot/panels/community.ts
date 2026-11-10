@@ -1,28 +1,61 @@
 // Self-role selector and temporary voice panel.
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, Guild } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, Guild, Role } from "discord.js";
 import {
-    ROLE_SELECTOR_CHANNEL_ID, SELF_ROLE_SELECTOR_ROLES, TEMP_VOICE_CATEGORY_ID, TEMP_VOICE_PANEL_BUTTON_ID,
-    TEMP_VOICE_PANEL_CHANNEL_NAME
+    ROLE_SELECTOR_CHANNEL_ID, SELF_ROLE_SELECTOR_ROLES, SelfRoleSelectorRole, TEMP_VOICE_CATEGORY_ID,
+    TEMP_VOICE_PANEL_BUTTON_ID, TEMP_VOICE_PANEL_CHANNEL_NAME
 } from "../core/config";
 import { getGuildPanelMessageId, setGuildPanelMessageId } from "../moderation/store";
 import { brandLiveEmbed } from "../ui/embeds";
 
-function buildSelfRoleSelectorPayload() {
+export async function resolveSelfRoleForGuild(
+    guild: Guild,
+    configuredRole: SelfRoleSelectorRole,
+    createIfMissing = false
+): Promise<Role | null> {
+    if (configuredRole.id) {
+        return guild.roles.cache.get(configuredRole.id)
+            || await guild.roles.fetch(configuredRole.id).catch(error => {
+                console.warn(`[roleSelector] Could not fetch configured role ${configuredRole.id}:`, error);
+                return null;
+            });
+    }
+
+    if (!configuredRole.roleName) return null;
+    let existing = guild.roles.cache.find(role => role.name.toLowerCase() === configuredRole.roleName?.toLowerCase()) || null;
+    if (!existing) {
+        const roles = await guild.roles.fetch().catch(error => {
+            console.warn(`[roleSelector] Could not fetch roles for guild ${guild.id}:`, error);
+            return null;
+        });
+        existing = roles?.find(role => role.name.toLowerCase() === configuredRole.roleName?.toLowerCase()) || null;
+    }
+    if (existing || !createIfMissing) return existing;
+
+    return guild.roles.create({
+        name: configuredRole.roleName,
+        reason: "Provision self-selectable RuneScape 3 role"
+    }).catch(error => {
+        console.warn(`[roleSelector] Could not create role ${configuredRole.roleName} in guild ${guild.id}:`, error);
+        return null;
+    });
+}
+
+function buildSelfRoleSelectorPayload(resolvedRoles: Array<{ configuredRole: SelfRoleSelectorRole; role: Role }>) {
     const embed = brandLiveEmbed(new EmbedBuilder()
         .setColor(0x0ea5e9)
         .setTitle("Choose Your Roles")
-        .setDescription("FNT Auto Role")
-        .addFields(SELF_ROLE_SELECTOR_ROLES.map(role => ({
-            name: role.label,
+        .setDescription("Select a role below to add it to your profile.")
+        .addFields(resolvedRoles.map(({ configuredRole, role }) => ({
+            name: configuredRole.label,
             value: `<@&${role.id}>`,
             inline: true
         }))), "Role Selector");
-    const buttons = SELF_ROLE_SELECTOR_ROLES.map(role => {
+    const buttons = resolvedRoles.map(({ configuredRole }) => {
         const button = new ButtonBuilder()
-            .setCustomId(role.buttonId)
-            .setLabel(role.label)
-            .setStyle(role.style);
-        if ("emoji" in role) button.setEmoji(role.emoji);
+            .setCustomId(configuredRole.buttonId)
+            .setLabel(configuredRole.label)
+            .setStyle(configuredRole.style);
+        if (configuredRole.emoji) button.setEmoji(configuredRole.emoji);
         return button;
     });
 
@@ -41,7 +74,17 @@ export async function upsertSelfRoleSelectorForGuild(guild: Guild): Promise<void
         return;
     }
 
-    const payload = buildSelfRoleSelectorPayload();
+    const resolvedRoles = await Promise.all(SELF_ROLE_SELECTOR_ROLES.map(async configuredRole => ({
+        configuredRole,
+        role: await resolveSelfRoleForGuild(guild, configuredRole, true)
+    })));
+    if (resolvedRoles.some(entry => !entry.role)) {
+        console.warn(`Role selector skipped for guild ${guild.id}: one or more configured roles could not be resolved.`);
+        return;
+    }
+    const payload = buildSelfRoleSelectorPayload(resolvedRoles.filter(
+        (entry): entry is { configuredRole: SelfRoleSelectorRole; role: Role } => Boolean(entry.role)
+    ));
     const storedMessageId = getGuildPanelMessageId(guild.id, "roleSelector");
     if (storedMessageId) {
         const stored = await channel.messages.fetch(storedMessageId).catch(() => null);

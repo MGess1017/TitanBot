@@ -7,6 +7,7 @@ const voiceXp_1 = require("./runtime/voiceXp");
 const jsonPersistence_1 = require("./runtime/jsonPersistence");
 const config_1 = require("./bot/core/config");
 const playerCards_1 = require("./bot/panels/playerCards");
+const inquiry_1 = require("./bot/panels/inquiry");
 const client_1 = require("./bot/core/client");
 const engagement_1 = require("./bot/xp/engagement");
 const playerCounts_1 = require("./bot/panels/playerCounts");
@@ -112,6 +113,7 @@ client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("c
                 await (0, opsPanel_1.refreshTicketPanelsForGuild)(guild);
                 await (0, welcome_1.ensureWelcomePanelForGuild)(guild);
                 await (0, community_1.upsertSelfRoleSelectorForGuild)(guild);
+                await (0, inquiry_1.ensureInquiryPanelForGuild)(guild);
             }
             await (0, community_1.ensureTemporaryVoicePanelForGuild)(guild);
             await (0, playerCounts_1.ensurePlayerCountPanelForGuild)(guild);
@@ -137,6 +139,7 @@ client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("c
                 await (0, opsPanel_1.refreshTicketPanelsForGuild)(guild);
                 await (0, welcome_1.ensureWelcomePanelForGuild)(guild);
                 await (0, community_1.upsertSelfRoleSelectorForGuild)(guild);
+                await (0, inquiry_1.ensureInquiryPanelForGuild)(guild);
             }
             await (0, community_1.ensureTemporaryVoicePanelForGuild)(guild);
             await (0, playerCounts_1.ensurePlayerCountPanelForGuild)(guild);
@@ -282,6 +285,8 @@ process.on("beforeExit", () => {
 });
 client_1.client.on("interactionCreate", interaction => (0, metrics_1.runAsyncWithBoundary)("interactionCreate", async () => {
     if (shuttingDown)
+        return;
+    if (await (0, inquiry_1.handleInquiryInteraction)(interaction))
         return;
     if (await (0, profile_1.handleProfileInteraction)(interaction))
         return;

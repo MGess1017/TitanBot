@@ -266,7 +266,6 @@ function buildPmcProfilePayload(user, view = "overview") {
         const entry = (0, utils_1.getBossProgressEntry)(user.id, boss.name);
         return `${boss.name} • ${entry.kills}/${entry.encounters} kills • best streak ${entry.bestStreak}`;
     });
-    const latestBossEncounter = state.raidHistory.find(entry => entry.bossSpawned && entry.bossName);
     const winRate = raids > 0 ? ((wins / raids) * 100).toFixed(1) : "0.0";
     const recentTrend = state.raidHistory.slice(0, 5).map(entry => entry.success ? "W" : "L").join(" ") || "No recent raids";
     const thresholdLine = progress.capped
@@ -363,14 +362,13 @@ function buildPmcProfilePayload(user, view = "overview") {
     if (view === "overview") {
         const weapon = (0, autocomplete_1.getBestOwnedGear)(user.id, catalog_1.WEAPON_IDS, "raidAttack");
         const armor = (0, autocomplete_1.getBestOwnedGear)(user.id, catalog_1.ARMOR_IDS, "raidDefense");
-        embed.addFields({ name: "Deployment Readiness", value: [
+        embed.setFields({ name: "Deployment Readiness", value: [
                 `Weapon: ${weapon?.name || "None"} • Armor: ${armor?.name || "None"}`,
                 `Med patches: ${state.inventory.med_patch || 0} • Repair kits: ${state.inventory.repair_kit || 0}`,
                 raids_1.activeRaidEncounters.has(user.id) ? "Raid in progress" : "Ready to deploy"
             ].join("\n"), inline: false });
-        embed.addFields({ name: "Boss Engagement", value: latestBossEncounter?.bossName
-                ? `${latestBossEncounter.bossName} • ${latestBossEncounter.bossDefeated ? "Defeated" : "Encountered"} • ${bossKills} total kills`
-                : `${bossKills} total kills • No recent boss encounter`, inline: false });
+        embed.setImage("attachment://pmc-profile.png");
+        embed.setFooter({ text: "More details: choose a dossier section below." });
     }
     if (view === "follower") {
         if (sirGru && sirGruStats)
@@ -408,7 +406,7 @@ function buildPmcProfilePayload(user, view = "overview") {
             .setPlaceholder("Sir Gru support role")
             .setDisabled(raids_1.activeRaidEncounters.has(user.id))
             .addOptions(Object.entries(utils_1.FOLLOWER_SUPPORT_ROLES).map(([value, role]) => ({ value, label: role.label, description: role.description, default: value === (0, utils_1.getFollowerSupportRole)(sirGru) })))).toJSON());
-    return JSON.stringify({ embed: embed.toJSON(), components });
+    return JSON.stringify({ embed: embed.toJSON(), components, ...(view === "overview" ? { progressionCard: "pmc" } : {}) });
 }
 function chunkDetailLines(lines, maxLines = 8) {
     const chunks = [];

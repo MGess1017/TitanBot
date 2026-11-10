@@ -120,6 +120,10 @@ function buildCommandDefinitions(input: {
             .setName("help")
             .setDescription("Show available bot commands."),
         new SlashCommandBuilder()
+            .setName("rs3")
+            .setDescription("Show a RuneScape 3 player profile and quest progress.")
+            .addStringOption(o => o.setName("player").setDescription("RuneScape display name (defaults to GzaWizz)").setRequired(false).setMaxLength(12)),
+        new SlashCommandBuilder()
             .setName("xproles")
             .setDescription("View XP rank roles in a randomized color embed."),
         new SlashCommandBuilder()

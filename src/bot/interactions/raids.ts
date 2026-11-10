@@ -16,6 +16,7 @@ import { buildPmcIdentityModal } from "../ui/modals";
 import { PMC_PRESTIGE_IDS, PMC_PROFILE_IDS, PMC_PROFILE_VIEWS, type PmcProfileView } from "../ui/ids";
 import { activeRaidDecisions, activeRaidEncounters } from "../raid/raids";
 import { embedFromPayload } from "../ui/embeds";
+import { progressionCardAttachment } from "../profile/cards";
 import {
     buildBossRosterPayload, buildMapMasteryPayload, buildPmcProfilePayload, buildRaidHistoryPayload
 } from "../raid/views";
@@ -84,8 +85,14 @@ export async function handleRaidInteraction(interaction: Interaction): Promise<b
             savePoints();
             view = "follower";
         } else if (Object.prototype.hasOwnProperty.call(PMC_PROFILE_VIEWS, value)) view = value as PmcProfileView;
+        await interaction.deferUpdate();
         const payload = JSON.parse(buildPmcProfilePayload(interaction.user, view));
-        await interaction.update({ embeds: [embedFromPayload("pmc", payload.embed, interaction.user)], components: payload.components }).catch(() => undefined);
+        await interaction.editReply({
+            embeds: [payload.embed], components: payload.components,
+            attachments: [],
+            files: view === "overview" ? [await progressionCardAttachment("pmc", interaction.user, interaction.guild)] : [],
+            allowedMentions: { parse: [] }
+        });
         return true;
     }
 
@@ -144,8 +151,13 @@ export async function handleRaidInteraction(interaction: Interaction): Promise<b
             return true;
         }
         appendAuditEvent("pmc_prestige", { userId: interaction.user.id, prestige: result.prestige, label: result.tier?.label || null });
+        await interaction.deferUpdate();
         const payload = JSON.parse(buildPmcProfilePayload(interaction.user));
-        await interaction.update({ embeds: [embedFromPayload("pmc", payload.embed, interaction.user)], components: payload.components || [] }).catch(() => undefined);
+        await interaction.editReply({
+            content: "", embeds: [payload.embed], components: payload.components || [], attachments: [],
+            files: [await progressionCardAttachment("pmc", interaction.user, interaction.guild)],
+            allowedMentions: { parse: [] }
+        });
         return true;
     }
 

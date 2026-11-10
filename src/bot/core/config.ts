@@ -58,10 +58,19 @@ export const TEMP_VOICE_PANEL_CHANNEL_NAME = "create-your-vc";
 export const TEMP_VOICE_PANEL_BUTTON_ID = "temporary_vc:create";
 export const VOICE_XP_TICK_MS = 15_000;
 export const VOICE_XP_REMAINDER_TTL_MS = 24 * 60 * 60 * 1000;
-export const SELF_ROLE_SELECTOR_ROLES = [
+export type SelfRoleSelectorRole = {
+    id?: string;
+    roleName?: string;
+    label: string;
+    buttonId: string;
+    style: ButtonStyle;
+    emoji?: string;
+};
+export const SELF_ROLE_SELECTOR_ROLES: readonly SelfRoleSelectorRole[] = [
     { id: "1523420005708861632", label: "Role ID number 1", buttonId: "self_role_selector:role_one", style: ButtonStyle.Success },
-    { id: "1491494698798551192", label: "Role ID number 2", buttonId: "self_role_selector:role_two", style: ButtonStyle.Secondary, emoji: "🟨" }
-] as const;
+    { id: "1491494698798551192", label: "Role ID number 2", buttonId: "self_role_selector:role_two", style: ButtonStyle.Secondary, emoji: "🟨" },
+    { roleName: "Rs3", label: "Rs3", buttonId: "self_role_selector:rs3", style: ButtonStyle.Primary }
+];
 const DEFAULT_MOD_LOG_CHANNEL_ID = "1529643338041659573";
 const DEFAULT_DEPLOYMENT_SUMMARY_CHANNEL_ID = "1534712078089060583";
 export const TICKET_HANDLER_ROLE_ID = process.env.TICKET_HANDLER_ROLE_ID || DEFAULT_TICKET_HANDLER_ROLE_ID;

@@ -46,6 +46,7 @@ const modals_1 = require("../ui/modals");
 const ids_1 = require("../ui/ids");
 const raids_1 = require("../raid/raids");
 const embeds_1 = require("../ui/embeds");
+const cards_1 = require("../profile/cards");
 const views_1 = require("../raid/views");
 /** Raid encounter, raid result, and PMC profile/prestige controls. */
 async function handleRaidInteraction(interaction) {
@@ -110,8 +111,14 @@ async function handleRaidInteraction(interaction) {
         }
         else if (Object.prototype.hasOwnProperty.call(ids_1.PMC_PROFILE_VIEWS, value))
             view = value;
+        await interaction.deferUpdate();
         const payload = JSON.parse((0, views_1.buildPmcProfilePayload)(interaction.user, view));
-        await interaction.update({ embeds: [(0, embeds_1.embedFromPayload)("pmc", payload.embed, interaction.user)], components: payload.components }).catch(() => undefined);
+        await interaction.editReply({
+            embeds: [payload.embed], components: payload.components,
+            attachments: [],
+            files: view === "overview" ? [await (0, cards_1.progressionCardAttachment)("pmc", interaction.user, interaction.guild)] : [],
+            allowedMentions: { parse: [] }
+        });
         return true;
     }
     if (interaction.isButton() && interaction.customId === ids_1.PMC_PRESTIGE_IDS.request) {
@@ -159,8 +166,13 @@ async function handleRaidInteraction(interaction) {
             return true;
         }
         (0, audit_1.appendAuditEvent)("pmc_prestige", { userId: interaction.user.id, prestige: result.prestige, label: result.tier?.label || null });
+        await interaction.deferUpdate();
         const payload = JSON.parse((0, views_1.buildPmcProfilePayload)(interaction.user));
-        await interaction.update({ embeds: [(0, embeds_1.embedFromPayload)("pmc", payload.embed, interaction.user)], components: payload.components || [] }).catch(() => undefined);
+        await interaction.editReply({
+            content: "", embeds: [payload.embed], components: payload.components || [], attachments: [],
+            files: [await (0, cards_1.progressionCardAttachment)("pmc", interaction.user, interaction.guild)],
+            allowedMentions: { parse: [] }
+        });
         return true;
     }
     if (interaction.isButton() && interaction.customId === ids_1.PMC_PRESTIGE_IDS.cancel) {

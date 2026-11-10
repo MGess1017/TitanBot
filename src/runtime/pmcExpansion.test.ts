@@ -164,7 +164,14 @@ try {
             assert.ok(payload.components.length <= 5);
             assert.ok(payload.components[0].components[0].custom_id.endsWith(`:${userId}`));
             assert.equal(payload.components[0].components[0].options.filter((option: { default: boolean }) => option.default).length, 1);
-            if (view === "overview") assert.ok(fields.length <= 6);
+            if (view === "overview") {
+                assert.ok(fields.length <= 1, "PMC overview must keep only key readiness information beside the card");
+                assert.equal(payload.progressionCard, "pmc");
+                assert.equal(payload.embed.image.url, "attachment://pmc-profile.png");
+            } else {
+                assert.equal(payload.progressionCard, undefined);
+                assert.equal(payload.embed.image, undefined);
+            }
         }
     }
     console.log("PMC, follower and prestige expansion tests passed");

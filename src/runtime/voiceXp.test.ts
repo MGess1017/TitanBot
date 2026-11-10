@@ -4,8 +4,7 @@ import path from "node:path";
 import vm from "node:vm";
 import ts from "typescript";
 import { EmbedBuilder } from "discord.js";
-import { addXpCrateProfile } from "../features/xpCratePanel";
-import type { XpCrateReward } from "../game/xpCrates";
+import { XP_CRATE_COOLDOWN_MS, type XpCrateReward } from "../game/xpCrates";
 import { accrueVoiceXp, getVoiceXpConfig, getVoiceXpMultiplier, isVoiceXpEligible, VOICE_XP_DOUBLE_AFTER_MS, type VoiceXpAccrualState } from "./voiceXp";
 import { restoreVoiceSession, type SavedVoiceSession } from "./voiceSessionStore";
 const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
@@ -217,12 +216,12 @@ async function verifyXpStatus(): Promise<void> {
     assert.ok(xpHandler, "/xp handler must exist");
     const user = {
         xp: 100, prestige: 0, pmcXP: 0, pmcPrestige: 0, lastXP: 0,
-        dailyStreak: 0, achievements: [], xpRoleUnlocks: [], fnTokens: 0, bankTokens: 0,
+        dailyStreak: 0, achievements: [], achievementIds: [], xpRoleUnlocks: [], fnTokens: 0, bankTokens: 0,
         latestXpCrate: null as XpCrateReward | null
     };
     const statusContext = vm.createContext({
         EmbedBuilder,
-        addXpCrateProfile,
+        XP_CRATE_COOLDOWN_MS,
         getCurrentVoiceXpMultiplier: (targetGuild: TestGuild | null, userId: string) =>
             runtime.getCurrentVoiceXpMultiplier(targetGuild, userId, Date.now()),
         ensureUser: () => user,
@@ -238,6 +237,12 @@ async function verifyXpStatus(): Promise<void> {
         getEffectiveXpRoleEntries: () => [],
         xpBar: () => "[progress]"
     });
+    const cardHelpers = source.statements.filter(node => ts.isFunctionDeclaration(node)
+        && ["getProgressionCardSnapshot", "buildXpProfilePayload"].includes(node.name?.text || ""));
+    assert.equal(cardHelpers.length, 2);
+    vm.runInContext(ts.transpileModule(cardHelpers.map(node => node.getText(source)).join("\n"), {
+        compilerOptions: { target: ts.ScriptTarget.ES2020 }
+    }).outputText, statusContext);
     vm.runInContext(ts.transpileModule(`const xpHandler = ${xpHandler.getText(source)};`, {
         compilerOptions: { target: ts.ScriptTarget.ES2020 }
     }).outputText + "\nthis.handleXp = xpHandler;", statusContext);
@@ -252,10 +257,9 @@ async function verifyXpStatus(): Promise<void> {
         session.connected = connected;
         session.connectedAt = connectedAt;
         const result = JSON.parse(await handle({ guild, user: { id: member.id } }));
-        const status = result.embed.fields.find((field: { name: string }) => field.name === "XP Status");
-        assert.ok(status, "/xp must show an XP Status field");
-        assert.ok(status.value.includes(`Voice XP: **${expected}x** (${expected * 100} XP/minute)`));
-        assert.ok(!status.value.includes("AFK"));
+        assert.ok(result.embed.description.includes(`Voice **${expected}x XP**`), "/xp must show the live voice multiplier");
+        assert.ok(result.embed.fields.length <= 2, "/xp must keep only key supporting fields");
+        assert.equal(result.progressionCard, "xp");
     }
     for (const reward of [
         { crateId: "emerald", xp: 1234, claimedAt: Date.now() },
@@ -263,8 +267,8 @@ async function verifyXpStatus(): Promise<void> {
     ] satisfies XpCrateReward[]) {
         user.latestXpCrate = reward;
         const result = JSON.parse(await handle({ guild, user: { id: member.id } }));
-        assert.equal(result.xpCrateId, reward.crateId, "attachment must match the profile snapshot");
-        assert.equal(result.embed.image.url, `attachment://${reward.crateId}.png`);
+        assert.equal(result.progressionCard, "xp");
+        assert.equal(result.embed.image.url, "attachment://xp-profile.png");
         assert.ok(result.embed.fields.some((field: { value: string }) =>
             field.value.includes(`+${reward.xp.toLocaleString("en-US")} XP`)
         ), "reopening /xp must immediately display the latest claimed crate");
