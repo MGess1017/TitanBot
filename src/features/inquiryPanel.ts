@@ -6,16 +6,17 @@ import { buildSlashCommands } from "../commands/slashCatalog";
 import { scoreText } from "./staffDesk";
 import { type HubPreferences } from "../game/hubPreferences";
 
-export const INQUIRY_TITLE = "FNT | Command Hub";
+export const INQUIRY_TITLE = "FNTCORD | Command Hub";
 export const INQUIRY_LEGACY_TITLE = "FNT | Player Inquiry";
+export const INQUIRY_PREVIOUS_TITLE = "FNT | Command Hub";
 export const INQUIRY_IDS = {
     browse: "inquiry:browse", search: "inquiry:search", rs3: "inquiry:rs3",
     searchModal: "inquiry:search_modal", rs3Modal: "inquiry:rs3_modal", result: "inquiry:result",
-    open: "inquiry:open:", refresh: "inquiry:refresh:", preference: "inquiry:preference:",
+    open: "inquiry:open:", back: "inquiry:back:", refresh: "inquiry:refresh:", preference: "inquiry:preference:",
     saveName: "inquiry:save_name", saveNameModal: "inquiry:save_name_modal"
 };
 export const HUB_SECTIONS = {
-    profiles: { title: "Profiles", description: "Your identity, cards and RuneScape", items: ["xp", "pmc", "profile", "rs3"] },
+    profiles: { title: "Profiles", description: "Your identity, cards and RuneScape", items: ["xp", "pmc", "profile", "arena", "rs3"] },
     operations: { title: "Operations", description: "Raid preparation and field guides", items: ["inventory", "guide:raids", "guide:shop"] },
     economy: { title: "Economy", description: "Wallet, banking and supply directory", items: ["wallet", "guide:bank", "guide:games"] },
     guides: { title: "Guides & Support", description: "Quick answers and private assistance", items: ["guide:general", "guide:xp", "guide:rs3", "support"] }
@@ -24,6 +25,7 @@ const HUB_DESTINATIONS: Record<string, { label: string; description: string }> =
     xp: { label: "XP Card", description: "Level, rank and next milestone" },
     pmc: { label: "PMC Dossier", description: "Raid progression and deployment readiness" },
     profile: { label: "Personal Profile", description: "Themes, achievements and preferences" },
+    arena: { label: "Arena Player Card", description: "Edit your stats, preview and refresh your rating" },
     rs3: { label: "RuneScape Profile", description: "Open your saved player or search by name" },
     inventory: { label: "Inventory", description: "Your equipment and collected supplies" },
     wallet: { label: "Wallet & Bank", description: "Your current balances" },
@@ -80,7 +82,7 @@ export function inquiryControls(): APIActionRowComponent<APIComponentInMessageAc
         new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(browse).toJSON(),
         new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(INQUIRY_IDS.search).setLabel("Search Guides & Commands").setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}shortcut`).setLabel("My Quick Access").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}home`).setLabel("My Dashboard").setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}settings`).setLabel("Customize").setStyle(ButtonStyle.Secondary)
         ).toJSON()
     ];
@@ -90,9 +92,29 @@ export function buildInquiryHome(): InquiryPayload {
     return {
         embed: new EmbedBuilder().setColor(0x9b59b6).setTitle(INQUIRY_TITLE)
             .setDescription("**Your server. Your workspace.**\nProfiles, operations, economy and answers in one place.\nChoose a workspace below. Everything opens privately.")
-            .setFooter({ text: "FNT / COMMAND HUB / PERSONAL WORKSPACE" })
+            .setFooter({ text: "FNTCORD / COMMAND HUB / PRIVATE WORKSPACES" })
             .toJSON(),
         components: inquiryControls()
+    };
+}
+
+export function buildHubDashboard(data: { xpLevel: number; pmcLevel: number; next: string; arenaProgress: string; rs3Name: string | null; shortcut: string }): InquiryPayload {
+    const home = buildInquiryHome();
+    return {
+        embed: new EmbedBuilder().setColor(0x9b59b6).setTitle("FNTCORD | My Dashboard")
+            .setDescription("Your private command center. Choose a workspace or jump to your favorite.")
+            .addFields(
+                { name: "Progression", value: `Server level **${data.xpLevel}** / PMC level **${data.pmcLevel}**\n${data.next}` },
+                { name: "Player Card", value: data.arenaProgress, inline: true },
+                { name: "Linked Games", value: data.rs3Name ? `RuneScape: **${data.rs3Name}**\nSaved name / ownership not verified` : "No RuneScape player saved.", inline: true }
+            ).setFooter({ text: "FNTCORD / PRIVATE / BOT-TRACKED PROGRESS" }).toJSON(),
+        components: [
+            home.components![0],
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}shortcut`).setLabel(`Open ${HUB_DESTINATIONS[data.shortcut]?.label || "XP Card"}`).setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(INQUIRY_IDS.search).setLabel("Search").setStyle(ButtonStyle.Secondary)
+            ).toJSON()
+        ]
     };
 }
 
@@ -132,6 +154,11 @@ export function buildInquiryModal(kind: "search" | "rs3" | "saveName", savedName
 }
 
 export function hubParent(target: string): string {
+    if (target === "home") return "home";
+    if (target.startsWith("settings:")) return "settings";
+    if (target.startsWith("preview:")) return "settings:appearance";
+    if (target === "themes") return "settings:appearance";
+    if (target.endsWith(":details")) return target.slice(0, -":details".length);
     if (target.startsWith("rs3player:")) return "section:profiles";
     if (target.startsWith("section:") || target === "settings" || target === "search") return "home";
     for (const [key, section] of Object.entries(HUB_SECTIONS)) {
@@ -143,7 +170,7 @@ export function hubParent(target: string): string {
 export function hubNavigation(target: string): APIActionRowComponent<APIComponentInMessageActionRow> {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}home`).setLabel("Home").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}${hubParent(target)}`).setLabel("Back").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${INQUIRY_IDS.back}${hubParent(target)}`).setLabel("Back").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`${INQUIRY_IDS.refresh}${target}`).setLabel("Refresh").setStyle(ButtonStyle.Primary)
             .setDisabled(target === "search"),
         new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}settings`).setLabel("Customize").setStyle(ButtonStyle.Secondary)
@@ -161,7 +188,7 @@ export function buildHubSection(key: string): InquiryPayload {
     if (!Object.prototype.hasOwnProperty.call(HUB_SECTIONS, key)) throw new Error("This workspace is no longer available.");
     const section = HUB_SECTIONS[key as keyof typeof HUB_SECTIONS];
     return {
-        embed: new EmbedBuilder().setColor(0x9b59b6).setTitle(`FNT | ${section.title}`)
+        embed: new EmbedBuilder().setColor(0x9b59b6).setTitle(`FNTCORD | ${section.title}`)
             .setDescription(section.description).setFooter({ text: "Choose an item / Home returns to your workspace" }).toJSON(),
         components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
             new StringSelectMenuBuilder().setCustomId(INQUIRY_IDS.browse).setPlaceholder(`Open ${section.title.toLowerCase()}`)
@@ -174,29 +201,60 @@ export function buildHubSection(key: string): InquiryPayload {
     };
 }
 
-export function buildHubSettings(preferences: HubPreferences): InquiryPayload {
+export function buildHubSettings(preferences: HubPreferences, category = "", options = { doubleXpDm: true, showCheckpointRating: true }): InquiryPayload {
     const select = (key: string, label: string, options: Array<{ value: string; label: string }>, current: string) =>
         new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
             new StringSelectMenuBuilder().setCustomId(`${INQUIRY_IDS.preference}${key}`).setPlaceholder(label)
                 .addOptions(options.map(option => ({ ...option, default: option.value === current })))
         ).toJSON();
-    return {
-        embed: new EmbedBuilder().setColor(0x9b59b6).setTitle("FNT | Your Workspace")
-            .setDescription("Personalize quick access and both tactical cards. These settings never change rewards or combat odds.")
-            .addFields({ name: "RuneScape Player", value: preferences.rs3Name ? `${preferences.rs3Name} (saved, not verified)` : "No preferred player saved." })
-            .setFooter({ text: "Changes apply to your account only and persist across restarts." }).toJSON(),
-        components: [
-            select("shortcut", "Quick access destination", ["xp", "pmc", "profile", "rs3"].map(value => ({ value, label: HUB_DESTINATIONS[value].label })), preferences.shortcut),
+    const categories = { appearance: "Appearance", privacy: "Privacy", notifications: "Notifications", games: "Linked Games" };
+    if (category && !Object.prototype.hasOwnProperty.call(categories, category)) throw new Error("Unknown settings category. Reopen Customize.");
+    const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle(`FNTCORD | ${categories[category as keyof typeof categories] || "Customize"}`)
+        .setDescription("Your account only. Changes persist across restarts and never affect rewards or combat odds.")
+        .setFooter({ text: "FNTCORD / PERSONAL SETTINGS" });
+    let components: NonNullable<InquiryPayload["components"]>;
+    if (category === "appearance") {
+        embed.setDescription("Card Studio: choose art, use your owned equipped theme, and select visible highlights. Previews are private.");
+        components = [
             select("background", "Card background", [
                 { value: "automatic", label: "Automatic / Distinct XP and PMC art" },
                 { value: "checkpoint", label: "Extraction Checkpoint" }, { value: "radio", label: "Night Radio Station" }
             ], preferences.background),
             select("accent", "Card accent", [{ value: "tactical", label: "Tactical / XP violet, PMC gold" }, { value: "theme", label: "Use my equipped profile theme" }], preferences.accent),
+            select("highlights", "Visible card highlights", [
+                { value: "all", label: "All three highlights" }, { value: "primary", label: "Primary highlight only" }, { value: "none", label: "Progress only" }
+            ], preferences.highlights),
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}preview:xp`).setLabel("Preview XP").setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}preview:pmc`).setLabel("Preview PMC").setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}themes`).setLabel("Owned Themes").setStyle(ButtonStyle.Secondary)
+            ).toJSON()
+        ];
+    } else if (category === "privacy") {
+        embed.setDescription("Private cards: future XP, PMC and profile command replies are private; your public Arena card is removed. Existing command messages and leaderboards are not erased.");
+        components = [
+            select("cardVisibility", "Card visibility", [{ value: "public", label: "Public / Share cards" }, { value: "private", label: "Private / Only me" }], preferences.cardVisibility),
+            select("showCheckpointRating", "Arena rating in profile", [{ value: "true", label: "Show Arena rating" }, { value: "false", label: "Hide Arena rating" }], String(options.showCheckpointRating))
+        ];
+    } else if (category === "notifications") {
+        embed.setDescription("Choose whether the bot sends you a DM when your continuous voice session unlocks double XP.");
+        components = [select("doubleXpDm", "Double XP notifications", [{ value: "true", label: "Enabled" }, { value: "false", label: "Disabled" }], String(options.doubleXpDm))];
+    } else if (category === "games") {
+        embed.addFields({ name: "RuneScape Player", value: preferences.rs3Name ? `${preferences.rs3Name} (saved, not verified)` : "No preferred player saved." });
+        components = [
             new ActionRowBuilder<ButtonBuilder>().addComponents(
                 new ButtonBuilder().setCustomId(INQUIRY_IDS.saveName).setLabel("Save RuneScape Player").setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}clearName`).setLabel("Clear Saved Player").setStyle(ButtonStyle.Secondary).setDisabled(!preferences.rs3Name),
-                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}profile`).setLabel("Themes & Profile").setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}clearName`).setLabel("Clear Saved Player").setStyle(ButtonStyle.Secondary).setDisabled(!preferences.rs3Name)
             ).toJSON()
-        ]
-    };
+        ];
+    } else {
+        components = [
+            new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+                new StringSelectMenuBuilder().setCustomId(INQUIRY_IDS.browse).setPlaceholder("Settings category")
+                    .addOptions(Object.entries(categories).map(([key, label]) => ({ value: `settings:${key}`, label })))
+            ).toJSON(),
+            select("shortcut", "Dashboard favorite", ["xp", "pmc", "profile", "rs3"].map(value => ({ value, label: HUB_DESTINATIONS[value].label })), preferences.shortcut)
+        ];
+    }
+    return { embed: embed.toJSON(), components };
 }

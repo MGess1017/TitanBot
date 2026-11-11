@@ -49,6 +49,7 @@ async function shutdown(reason, exitCode) {
     if (shuttingDown)
         return;
     shuttingDown = true;
+    (0, embedBuilder_1.stopStaffEmbedScheduler)();
     const deadline = setTimeout(() => {
         console.error("[shutdown] Persistence flush timed out; pending saves may not be durable.");
         (0, ops_1.releaseInstanceLock)();
@@ -100,6 +101,7 @@ client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("c
     if (config_1.DISCORD_GUILD_ID) {
         const guild = await client_1.client.guilds.fetch(config_1.DISCORD_GUILD_ID).catch(() => null);
         if (guild) {
+            await (0, embedBuilder_1.ensureStaffEmbedSchedulerForGuild)(guild);
             await guild.commands.set(registry_1.slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
             await (0, roles_1.ensureXpTierRoles)(guild);
@@ -130,6 +132,7 @@ client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("c
     }
     if (client_1.client.guilds.cache.size > 0) {
         for (const guild of client_1.client.guilds.cache.values()) {
+            await (0, embedBuilder_1.ensureStaffEmbedSchedulerForGuild)(guild);
             await guild.commands.set(registry_1.slashCommands).catch(() => undefined);
             (0, records_1.purgeLegacyImportedTicketRecords)(guild.id);
             await (0, channels_1.ensureArchiveCategory)(guild);

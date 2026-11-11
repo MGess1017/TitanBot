@@ -1,4 +1,4 @@
-import { AttachmentBuilder, EmbedBuilder, type Guild, type User } from "discord.js";
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, type Guild, type User } from "discord.js";
 import { ensureUser, getPmcPrestigeTier, getPmcProgress, getXPLevel, XP_LEVEL_THRESHOLDS } from "../../utils";
 import { XP_CRATE_COOLDOWN_MS } from "../../game/xpCrates";
 import { renderProgressionCard, type ProgressionCardKind, type ProgressionCardSnapshot } from "../../features/progressionCard";
@@ -6,7 +6,22 @@ import { getCurrentVoiceXpMultiplier } from "../xp/engagement";
 import { getEffectiveXpRoleEntries } from "../xp/roles";
 import { normalizeHubPreferences } from "../../game/hubPreferences";
 import { getThemeColor } from "../../features/profileHub";
-import { withHubNavigation } from "../../features/inquiryPanel";
+import { buildHubDashboard, INQUIRY_IDS, withHubNavigation } from "../../features/inquiryPanel";
+import { CHECKPOINT_SECTION_IDS, isSectionComplete } from "../../game/checkpointRating";
+
+export function buildDashboardPayload(user: User, guild: Guild | null) {
+    const state = ensureUser(user.id);
+    const preferences = normalizeHubPreferences(state.preferences.hub);
+    const xp = getProgressionCardSnapshot("xp", user, guild);
+    const pmc = getProgressionCardSnapshot("pmc", user, guild);
+    const profile = state.checkpointProfile;
+    const steps = Number(Boolean(profile?.ingameName))
+        + CHECKPOINT_SECTION_IDS.filter(id => isSectionComplete(profile?.stats || {}, id)).length;
+    return buildHubDashboard({
+        xpLevel: xp.level, pmcLevel: pmc.level, next: xp.next,
+        arenaProgress: `${steps}/5 setup steps complete`, rs3Name: preferences.rs3Name, shortcut: preferences.shortcut
+    });
+}
 
 export function getProgressionCardSnapshot(kind: ProgressionCardKind, user: User, guild: Guild | null): ProgressionCardSnapshot {
     const state = ensureUser(user.id);
@@ -49,22 +64,28 @@ export function buildXpProfilePayload(user: User, guild: Guild | null): string {
     const crate = state.latestXpCrate;
     const embed = new EmbedBuilder()
         .setColor(0x9b59b6)
-        .setTitle("XP Progress Center")
+        .setTitle("FNTCORD | XP Card")
         .setDescription(`Level **${snapshot.level}** | **${state.xp.toLocaleString("en-US")} XP** | Voice **${snapshot.stats[0].value}**`)
         .setImage("attachment://xp-profile.png")
         .addFields(
             { name: "Rank", value: `${current?.name || "Unranked"}\n${next ? `${Math.max(0, next.xp - state.xp).toLocaleString("en-US")} XP to ${next.name}` : "Highest configured rank"}`, inline: true },
             { name: "Daily Crate", value: `${crate ? `Latest: ${crate.crateId} (+${crate.xp.toLocaleString("en-US")} XP)\n` : "No crate claimed yet.\n"}${nextCrateAt > Date.now() ? `Next: <t:${Math.floor(nextCrateAt / 1000)}:R>` : "Ready to claim"}`, inline: true }
         )
-        .setFooter({ text: "Server XP and PMC raid XP are separate. More details in Profile." });
-    return JSON.stringify(withHubNavigation({ embed: embed.toJSON(), progressionCard: "xp" }, "xp"));
+        .setFooter({ text: "FNTCORD / BOT-TRACKED / SNAPSHOT AT REFRESH" }).setTimestamp();
+    return JSON.stringify(withHubNavigation({ embed: embed.toJSON(), progressionCard: "xp", components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}xp:details`).setLabel("Detailed Breakdown").setStyle(ButtonStyle.Secondary)
+        ).toJSON()
+    ] }, "xp"));
 }
 
 export async function progressionCardAttachment(kind: ProgressionCardKind, user: User, guild: Guild | null): Promise<AttachmentBuilder> {
     const state = ensureUser(user.id);
     const preferences = normalizeHubPreferences(state.preferences.hub);
+    const snapshot = getProgressionCardSnapshot(kind, user, guild);
     return new AttachmentBuilder(await renderProgressionCard({
-        ...getProgressionCardSnapshot(kind, user, guild),
+        ...snapshot,
+        stats: preferences.highlights === "none" ? [] : preferences.highlights === "primary" ? snapshot.stats.slice(0, 1) : snapshot.stats,
         ...(preferences.background !== "automatic" ? { background: preferences.background } : {}),
         ...(preferences.accent === "theme" ? { accent: `#${getThemeColor(state.cosmetics).toString(16).padStart(6, "0")}` } : {})
     }), {

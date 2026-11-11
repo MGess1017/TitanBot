@@ -14,6 +14,8 @@ const embeds_1 = require("../ui/embeds");
 const handlers_1 = require("../commands/handlers");
 const keys_1 = require("../commands/keys");
 const cards_1 = require("../profile/cards");
+const utils_1 = require("../../utils");
+const hubPreferences_1 = require("../../game/hubPreferences");
 /** Runs a slash command handler and renders its reply. */
 async function handleChatInputCommand(interaction) {
     if (!interaction.isChatInputCommand())
@@ -40,7 +42,10 @@ async function handleChatInputCommand(interaction) {
     try {
         const startedAt = Date.now();
         await interaction.deferReply({
-            flags: ids_1.PRIVATE_SLASH_COMMANDS.has(commandKey) ? discord_js_1.MessageFlags.Ephemeral : undefined
+            flags: ids_1.PRIVATE_SLASH_COMMANDS.has(commandKey)
+                || (["xp", "pmc", "profile"].includes(commandKey)
+                    && (0, hubPreferences_1.normalizeHubPreferences)((0, utils_1.ensureUser)(interaction.user.id).preferences.hub).cardVisibility === "private")
+                ? discord_js_1.MessageFlags.Ephemeral : undefined
         });
         const rawResult = await handler(interaction);
         const result = typeof rawResult === "string"

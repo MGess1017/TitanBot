@@ -1,6 +1,6 @@
 // /profile pages and the cosmetic shop.
 import {
-    ActionRowBuilder, APIEmbed, ButtonBuilder, ButtonStyle, Guild, MessageFlags, User, type Interaction
+    ActionRowBuilder, APIEmbed, ButtonBuilder, ButtonStyle, EmbedBuilder, Guild, MessageFlags, User, type Interaction
 } from "discord.js";
 import {
     ensureUser, getPmcLevel, getGameStatsSummary, getXPLevel, savePoints, syncProgressAchievements,
@@ -24,7 +24,8 @@ import { botSettingsStore, isFeatureEnabled } from "../core/settings";
 import { getPrestigeBadge } from "../pmc/visuals";
 import { appendAuditEvent } from "../core/audit";
 import { buildXpIntelligenceEmbed, getXpRoleProgress } from "../xp/roles";
-import { withHubNavigation } from "../../features/inquiryPanel";
+import { buildHubSettings, withHubNavigation } from "../../features/inquiryPanel";
+import { normalizeHubPreferences } from "../../game/hubPreferences";
 
 // ---------- Unified profile ----------
 
@@ -92,6 +93,16 @@ function buildProfileSnapshot(target: User, guild: Guild | null): ProfileSnapsho
 }
 
 export function buildProfilePayload(target: User, page: ProfilePage, viewerId: string, guild: Guild | null): { embed: APIEmbed; components: ReturnType<typeof buildProfileComponents> } {
+    const state = ensureUser(target.id);
+    const preferences = normalizeHubPreferences(state.preferences.hub);
+    if (preferences.cardVisibility === "private" && viewerId !== target.id) {
+        return { embed: new EmbedBuilder().setColor(0x9b59b6).setTitle("FNTCORD | Private Profile")
+            .setDescription("This player keeps their profile private.").toJSON(), components: [] };
+    }
+    if (page === "preferences" && viewerId === target.id) {
+        const payload = withHubNavigation(buildHubSettings(preferences, "", state.preferences), "settings");
+        return { embed: payload.embed, components: payload.components || [] };
+    }
     const snapshot = buildProfileSnapshot(target, guild);
     const embed = buildProfileEmbed(snapshot, page, page === "progression" ? buildXpIntelligenceEmbed({ user: { id: target.id } }).toJSON() : undefined);
     const components = buildProfileComponents(snapshot, page, viewerId);
@@ -106,7 +117,14 @@ export function buildProfilePayload(target: User, page: ProfilePage, viewerId: s
 function buildShopReply(userId: string, kind: CosmeticKind, notice?: string) {
     const user = ensureUser(userId);
     const payload = buildCosmeticShopPayload(user.cosmetics, user.fnTokens, kind, botSettingsStore.get().rewards.cosmeticPriceMultiplier);
-    return { content: notice || "", embeds: payload.embeds, components: payload.components };
+    const navigable = withHubNavigation({ embed: payload.embeds[0], components: payload.components }, "themes");
+    return { content: notice || "", embeds: [navigable.embed], components: navigable.components };
+}
+
+export function buildThemeStudioPayload(userId: string) {
+    if (!isFeatureEnabled("cosmeticShop")) throw new Error("The cosmetic shop is closed by staff right now.");
+    const payload = buildShopReply(userId, "theme");
+    return { embed: payload.embeds[0], components: payload.components };
 }
 
 export async function handleProfileInteraction(interaction: Interaction): Promise<boolean> {
@@ -118,7 +136,10 @@ export async function handleProfileInteraction(interaction: Interaction): Promis
         if (!Object.prototype.hasOwnProperty.call(PROFILE_PAGES, page)) return true;
         const target = await client.users.fetch(ownerId);
         const payload = buildProfilePayload(target, page, interaction.user.id, interaction.guild);
-        if (interaction.user.id === ownerId) {
+        if (interaction.user.id === ownerId
+            && (page !== "preferences" || interaction.message.flags.has(MessageFlags.Ephemeral))
+            && (interaction.message.flags.has(MessageFlags.Ephemeral)
+                || normalizeHubPreferences(ensureUser(ownerId).preferences.hub).cardVisibility === "public")) {
             await interaction.update({ embeds: [payload.embed], components: payload.components });
         } else {
             await interaction.reply({ embeds: [payload.embed], components: payload.components, flags: MessageFlags.Ephemeral });
@@ -134,11 +155,18 @@ export async function handleProfileInteraction(interaction: Interaction): Promis
         }
         if (key !== "doubleXpDm" && key !== "showCheckpointRating") return true;
         const user = ensureUser(interaction.user.id);
+        const previous = user.preferences[key];
         user.preferences[key] = !user.preferences[key];
-        savePoints();
+        try { savePoints(); } catch (error) {
+            user.preferences[key] = previous;
+            console.error("[profile] Preference save failed:", error);
+            await interaction.reply({ content: "Your preference could not be saved. Please try again.", flags: MessageFlags.Ephemeral });
+            return true;
+        }
         appendAuditEvent("profile_preference_changed", { userId: interaction.user.id, key, value: user.preferences[key] });
         const payload = buildProfilePayload(interaction.user, "preferences", interaction.user.id, interaction.guild);
-        await interaction.update({ embeds: [payload.embed], components: payload.components });
+        if (interaction.message.flags.has(MessageFlags.Ephemeral)) await interaction.update({ embeds: [payload.embed], components: payload.components });
+        else await interaction.reply({ embeds: [payload.embed], components: payload.components, flags: MessageFlags.Ephemeral });
         return true;
     }
 

@@ -10,33 +10,54 @@ const node_path_1 = __importDefault(require("node:path"));
 const discord_js_1 = require("discord.js");
 exports.WHATS_NEW_COLOR = 0x9b59b6;
 exports.WHATS_NEW_RELEASE = {
-    id: "fnt-patch-006",
-    title: "FNT Bot — Patch 006: Staff Announcement Studio",
-    intro: "Organized personal workspaces and polished staff announcements.",
+    id: "fnt-patch-008",
+    title: "FNTCORD — Patch 008: Workspace Navigation Repair",
+    intro: "Clean public launchers. Private workspaces. Your FNTCORD experience.",
     sections: [
         {
-            name: "01 • Organized Navigation",
+            name: "01 • My Dashboard",
             lines: [
-                "The Command Hub groups Profiles, Operations, Economy, and Guides & Support. Home, Back, and Refresh keep private navigation tidy.",
-                "The existing inquiry panel updates in place. Your commands, player data, leaderboards and crate panels remain available."
+                "Your private dashboard brings together server and PMC levels, your next XP milestone, Arena setup progress, and a favorite shortcut.",
+                "Home, Back, Refresh, and Customize keep navigation consistent without adding channel clutter."
             ]
         },
         {
-            name: "02 • Staff Embed Studio",
+            name: "02 • Card Studio & Settings",
             lines: [
-                "Staff can select a destination channel, named color and optional user or role mentions, then compose and publish from a private preview.",
-                "Publishing checks destination and mention permissions. Drafts are owner-only, expire after 30 minutes and cannot be submitted twice."
+                "Settings are grouped into Appearance, Privacy, Notifications, and Linked Games. Preview XP/PMC art, owned theme accents, and visible highlights privately.",
+                "Private mode keeps future profile replies private and removes your stored public Arena card. Old command messages and leaderboards are not erased."
             ]
         },
         {
-            name: "03 • Personal Customization",
+            name: "03 • Player Card Workflow",
             lines: [
-                "Choose a quick-access destination, tactical card background, and equipped-theme accent. Save or clear a preferred RuneScape player.",
-                "Preferences persist across restarts and affect only your experience, never rewards or combat odds."
+                "Track setup, edit your profile, refresh cards, and retry failed publication without reentering stats.",
+                "Cards show only key information; Detailed Breakdown keeps full statistics one button away."
+            ]
+        },
+        {
+            name: "04 • Clear Data Sources",
+            lines: [
+                "Arena ratings are labeled Self-reported. XP/PMC progression is Bot-tracked. RuneScape results are API-sourced with a fetch timestamp.",
+                "Saved player names are preferences, not proof of account ownership. Cards are snapshots, not live gameplay."
+            ]
+        },
+        {
+            name: "05 • Staff Studio",
+            lines: [
+                "Reusable templates, saved drafts, confirmed scheduled announcements, and publication history keep staff workflows organized.",
+                "Staff access, destination permissions, and mention safeguards remain enforced."
+            ]
+        },
+        {
+            name: "06 • Inquiry Navigation Repair",
+            lines: [
+                "Home and Back now use distinct controls even when they lead to the same workspace, fixing Discord's duplicate-component rejection.",
+                "Dashboard, workspace menus, settings, and nested navigation are regression-tested for unique component IDs."
             ]
         }
     ],
-    footer: "FNT Bot • Patch 006 • Member Update"
+    footer: "FNTCORD • Patch 008 • Member Update"
 };
 function buildWhatsNewEmbed(release = exports.WHATS_NEW_RELEASE) {
     return new discord_js_1.EmbedBuilder()

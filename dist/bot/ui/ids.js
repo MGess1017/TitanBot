@@ -115,7 +115,7 @@ exports.PMC_PROFILE_IDS = {
     view: "pmc_profile_view",
     followerRole: "pmc_follower_role"
 };
-exports.PMC_PROFILE_VIEWS = { overview: "Overview", follower: "Follower", prestige: "Prestige", mastery: "Mastery", collection: "Collection" };
+exports.PMC_PROFILE_VIEWS = { overview: "Overview", details: "Detailed Breakdown", follower: "Follower", prestige: "Prestige", mastery: "Mastery", collection: "Collection" };
 exports.GEAR_MODAL_PREFIX = "gear_modal:";
 exports.CASINO_GAME_ORDER = [
     "dice",

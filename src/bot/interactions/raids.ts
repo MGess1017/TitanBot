@@ -17,6 +17,7 @@ import { PMC_PRESTIGE_IDS, PMC_PROFILE_IDS, PMC_PROFILE_VIEWS, type PmcProfileVi
 import { activeRaidDecisions, activeRaidEncounters } from "../raid/raids";
 import { embedFromPayload } from "../ui/embeds";
 import { progressionCardAttachment } from "../profile/cards";
+import { normalizeHubPreferences } from "../../game/hubPreferences";
 import {
     buildBossRosterPayload, buildMapMasteryPayload, buildPmcProfilePayload, buildRaidHistoryPayload
 } from "../raid/views";
@@ -85,7 +86,10 @@ export async function handleRaidInteraction(interaction: Interaction): Promise<b
             savePoints();
             view = "follower";
         } else if (Object.prototype.hasOwnProperty.call(PMC_PROFILE_VIEWS, value)) view = value as PmcProfileView;
-        await interaction.deferUpdate();
+        const privateReply = normalizeHubPreferences(ensureUser(ownerId).preferences.hub).cardVisibility === "private"
+            && !interaction.message.flags.has(MessageFlags.Ephemeral);
+        if (privateReply) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        else await interaction.deferUpdate();
         const payload = JSON.parse(buildPmcProfilePayload(interaction.user, view));
         await interaction.editReply({
             embeds: [payload.embed], components: payload.components,

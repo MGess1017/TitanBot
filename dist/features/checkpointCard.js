@@ -3,9 +3,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CHECKPOINT_CARD_FILE = exports.CHECKPOINT_NAME_INPUT_ID = exports.CHECKPOINT_NAME_MODAL_ID = exports.CHECKPOINT_NAME_ID = exports.CHECKPOINT_VIEW_ID = exports.CHECKPOINT_MODAL_PREFIX = exports.CHECKPOINT_EDIT_PREFIX = exports.CHECKPOINT_PANEL_TITLE = void 0;
+exports.CHECKPOINT_CARD_FILE = exports.CHECKPOINT_NAME_INPUT_ID = exports.CHECKPOINT_NAME_MODAL_ID = exports.CHECKPOINT_NAME_ID = exports.CHECKPOINT_VIEW_ID = exports.CHECKPOINT_MODAL_PREFIX = exports.CHECKPOINT_EDIT_PREFIX = exports.CHECKPOINT_RETRY_ID = exports.CHECKPOINT_REFRESH_ID = exports.CHECKPOINT_WORKSPACE_ID = exports.CHECKPOINT_LEGACY_PANEL_TITLE = exports.CHECKPOINT_PANEL_TITLE = void 0;
 exports.renderCheckpointCard = renderCheckpointCard;
 exports.buildCheckpointPanel = buildCheckpointPanel;
+exports.buildCheckpointWorkspace = buildCheckpointWorkspace;
 exports.buildCheckpointNameModal = buildCheckpointNameModal;
 exports.buildCheckpointModal = buildCheckpointModal;
 exports.describeCheckpointProgress = describeCheckpointProgress;
@@ -17,7 +18,11 @@ const node_path_1 = __importDefault(require("node:path"));
 const canvas_1 = require("@napi-rs/canvas");
 const discord_js_1 = require("discord.js");
 const checkpointRating_1 = require("../game/checkpointRating");
-exports.CHECKPOINT_PANEL_TITLE = "Arena Player Rating";
+exports.CHECKPOINT_PANEL_TITLE = "FNTCORD | Arena Player Cards";
+exports.CHECKPOINT_LEGACY_PANEL_TITLE = "Arena Player Rating";
+exports.CHECKPOINT_WORKSPACE_ID = "checkpoint_card:workspace";
+exports.CHECKPOINT_REFRESH_ID = "checkpoint_card:refresh";
+exports.CHECKPOINT_RETRY_ID = "checkpoint_card:retry";
 exports.CHECKPOINT_EDIT_PREFIX = "checkpoint_card:edit:";
 exports.CHECKPOINT_MODAL_PREFIX = "checkpoint_card:modal:";
 exports.CHECKPOINT_VIEW_ID = "checkpoint_card:view";
@@ -105,7 +110,7 @@ async function renderCheckpointCard(input) {
     ctx.textBaseline = "alphabetic";
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.font = '24px "FNT Bold"';
-    ctx.fillText("FNT ARENA  •  CHECKPOINT", 70, 92);
+    ctx.fillText("FNTCORD ARENA  •  CHECKPOINT", 70, 92);
     ctx.textAlign = "right";
     ctx.font = '40px "FNT Display"';
     const tierWidth = ctx.measureText(tier.name).width + 36;
@@ -157,20 +162,22 @@ async function renderCheckpointCard(input) {
     ctx.strokeStyle = tier.accent;
     ctx.lineWidth = 2;
     ctx.strokeRect(56, panelTop, CARD_WIDTH - 112, 352);
-    const columnWidth = (CARD_WIDTH - 112) / 4;
-    checkpointRating_1.CHECKPOINT_STAT_KEYS.forEach((key, index) => {
-        const column = index % 4;
-        const row = Math.floor(index / 4);
+    const columnWidth = (CARD_WIDTH - 112) / 3;
+    ["kd", "winRate", "matchesPlayed"].forEach((key, index) => {
+        const column = index;
         const x = 56 + columnWidth * column + columnWidth / 2;
-        const y = panelTop + 44 + row * 84;
+        const y = panelTop + 128;
         ctx.fillStyle = "rgba(255,255,255,0.62)";
         ctx.font = '16px "FNT Semi"';
         ctx.fillText(checkpointRating_1.CHECKPOINT_STATS[key].short, x, y);
         const value = (0, checkpointRating_1.formatCheckpointStat)(key, input.stats[key]);
         ctx.fillStyle = "#ffffff";
         fitFont(ctx, value, "FNT Bold", 34, columnWidth - 16);
-        ctx.fillText(value, x, y + 38);
+        ctx.fillText(value, x, y + 50);
     });
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.font = '20px "FNT Semi"';
+    ctx.fillText("FULL BREAKDOWN IN YOUR PRIVATE WORKSPACE", CARD_WIDTH / 2, panelTop + 280);
     ctx.fillStyle = "rgba(255,255,255,0.55)";
     ctx.font = '17px "FNT Semi"';
     const updated = new Date(input.updatedAt).toISOString().slice(0, 10);
@@ -178,28 +185,35 @@ async function renderCheckpointCard(input) {
     return { buffer: canvas.toBuffer("image/png"), rating, tier };
 }
 function buildCheckpointPanel() {
+    return {
+        embeds: [new discord_js_1.EmbedBuilder().setColor(0x9b59b6).setTitle(exports.CHECKPOINT_PANEL_TITLE)
+                .setDescription("Create and manage your Arena player card. Setup, editing and detailed stats open privately.")
+                .setFooter({ text: "FNTCORD / SELF-REPORTED ARENA STATS" })],
+        components: [new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_WORKSPACE_ID).setLabel("My Player Card").setStyle(discord_js_1.ButtonStyle.Primary))],
+        allowedMentions: { parse: [] }
+    };
+}
+function buildCheckpointWorkspace(profile, visibility) {
+    const stats = profile?.stats || {};
+    const complete = Boolean(profile?.ingameName) && checkpointRating_1.CHECKPOINT_SECTION_IDS.every(id => (0, checkpointRating_1.isSectionComplete)(stats, id));
     const sectionButtons = checkpointRating_1.CHECKPOINT_SECTION_IDS.map(id => new discord_js_1.ButtonBuilder()
         .setCustomId(`${exports.CHECKPOINT_EDIT_PREFIX}${id}`)
         .setLabel(checkpointRating_1.CHECKPOINT_SECTIONS[id].title)
         .setStyle(discord_js_1.ButtonStyle.Secondary));
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle("FNTCORD | My Arena Card")
+        .setDescription(describeCheckpointProgress(stats, profile?.ingameName || null))
+        .addFields({ name: "Visibility", value: visibility === "private" ? "Private / Preview only" : "Public / Updates in the player-card channel" })
+        .setFooter({ text: "FNTCORD / SELF-REPORTED / STATS UPDATED AT TIMESTAMP" });
+    if (profile?.updatedAt)
+        embed.setTimestamp(profile.updatedAt);
     return {
-        embeds: [new discord_js_1.EmbedBuilder()
-                .setColor(0x9b59b6)
-                .setTitle(exports.CHECKPOINT_PANEL_TITLE)
-                .setDescription([
-                "Enter your **Arena in-game name** and **CheckPoint statistics** to generate your FNT PMC player card and **rating out of 100**.",
-                "",
-                "1. Set your **In-Game Name** — it's the name shown on your card.",
-                "2. Fill all four stat sections below (each opens a short form).",
-                "3. Your card posts in this channel automatically once your name and every stat are saved.",
-                "4. Edit your name or any section at any time; your card and rating update live."
-            ].join("\n"))
-                .setFooter({ text: "Stats are player-reported. Rating weighs K/D, win rate, headshot rate, MVPs, and consistency." })],
+        embed: embed.toJSON(),
         components: [
-            new discord_js_1.ActionRowBuilder().addComponents(sectionButtons),
-            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_NAME_ID).setLabel("In-Game Name").setEmoji("🪪").setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_VIEW_ID).setLabel("My Rating Breakdown").setStyle(discord_js_1.ButtonStyle.Primary))
-        ],
-        allowedMentions: { parse: [] }
+            new discord_js_1.ActionRowBuilder().addComponents(sectionButtons).toJSON(),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_NAME_ID).setLabel("Edit Profile").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_REFRESH_ID).setLabel("Refresh Card").setStyle(discord_js_1.ButtonStyle.Primary).setDisabled(!complete), new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_RETRY_ID).setLabel("Retry Publish").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(!complete || visibility === "private"), new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_VIEW_ID).setLabel("Detailed Breakdown").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(!complete)).toJSON()
+        ]
     };
 }
 function buildCheckpointNameModal(current) {
@@ -243,7 +257,7 @@ function describeCheckpointProgress(stats, ingameName) {
         ...checkpointRating_1.CHECKPOINT_SECTION_IDS.map(id => `${(0, checkpointRating_1.isSectionComplete)(stats, id) ? "✅" : "⬜"} ${checkpointRating_1.CHECKPOINT_SECTIONS[id].title}`)
     ].join("\n");
 }
-function buildCheckpointBreakdownEmbed(stats, cardUrl) {
+function buildCheckpointBreakdownEmbed(stats, cardUrl, updatedAt) {
     const result = (0, checkpointRating_1.calculateCheckpointRating)(stats);
     const tier = (0, checkpointRating_1.getCheckpointTier)(result.rating);
     const lines = result.parts.map(part => `${part.label}: **${part.points}** / ${part.max}`);
@@ -251,27 +265,37 @@ function buildCheckpointBreakdownEmbed(stats, cardUrl) {
         lines.push(`Quit penalty: **-${result.quitPenalty}**`);
     if (result.sampleFactor < 1)
         lines.push(`Small sample (<50 matches): rating blended toward average`);
-    return new discord_js_1.EmbedBuilder()
+    const embed = new discord_js_1.EmbedBuilder()
         .setColor(tier.color)
-        .setTitle(`PMC Rating ${result.rating} • ${tier.name}`)
-        .setDescription(lines.join("\n") + (cardUrl ? `\n\n[View your card](${cardUrl})` : ""));
+        .setTitle(`FNTCORD | PMC Rating ${result.rating} • ${tier.name}`)
+        .setDescription(lines.join("\n") + (cardUrl ? `\n\n[View your card](${cardUrl})` : ""))
+        .addFields(checkpointRating_1.CHECKPOINT_SECTION_IDS.map(id => ({
+        name: checkpointRating_1.CHECKPOINT_SECTIONS[id].title,
+        value: checkpointRating_1.CHECKPOINT_SECTIONS[id].keys.map(key => `${checkpointRating_1.CHECKPOINT_STATS[key].label}: **${(0, checkpointRating_1.formatCheckpointStat)(key, stats[key])}**`).join("\n")
+    })))
+        .setFooter({ text: "FNTCORD / SELF-REPORTED / NOT GAME-VERIFIED" });
+    if (updatedAt)
+        embed.setTimestamp(updatedAt);
+    return embed;
 }
-function buildCheckpointCardMessage(userId, ingameName, rating, tier, buffer) {
+function buildCheckpointCardMessage(userId, ingameName, rating, tier, buffer, updatedAt = Date.now()) {
     return {
         content: `<@${userId}>`,
         embeds: [new discord_js_1.EmbedBuilder()
                 .setColor(tier.color)
                 .setTitle(`${(0, discord_js_1.escapeMarkdown)(ingameName)} • PMC Rating ${rating}`)
-                .setDescription(`Tier: **${tier.name}**`)
+                .setDescription(`Tier: **${tier.name}** / Self-reported stats`)
+                .setFooter({ text: "FNTCORD / SELF-REPORTED / STATS UPDATED AT TIMESTAMP" })
                 .setImage(`attachment://${exports.CHECKPOINT_CARD_FILE}`)
-                .setTimestamp(new Date())],
+                .setTimestamp(updatedAt)],
         files: [new discord_js_1.AttachmentBuilder(buffer, { name: exports.CHECKPOINT_CARD_FILE })],
         attachments: [],
-        allowedMentions: { parse: [] }
+        allowedMentions: { parse: [] },
+        components: [new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_WORKSPACE_ID).setLabel("My Card Workspace").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(exports.CHECKPOINT_VIEW_ID).setLabel("My Detailed Breakdown").setStyle(discord_js_1.ButtonStyle.Secondary))]
     };
 }
 function isCheckpointPanel(message, botId) {
-    return message.author.id === botId && message.embeds[0]?.title === exports.CHECKPOINT_PANEL_TITLE;
+    return message.author.id === botId && [exports.CHECKPOINT_PANEL_TITLE, exports.CHECKPOINT_LEGACY_PANEL_TITLE].includes(message.embeds[0]?.title || "");
 }
 async function upsertCheckpointPanel(channel, botId, storedId) {
     const payload = buildCheckpointPanel();

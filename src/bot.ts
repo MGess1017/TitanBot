@@ -10,7 +10,7 @@ import {
 } from "./bot/core/config";
 import { ensureCheckpointCardPanel, handleCheckpointInteraction } from "./bot/panels/playerCards";
 import { ensureInquiryPanelForGuild, handleInquiryInteraction } from "./bot/panels/inquiry";
-import { ensureStaffEmbedPanelForGuild, handleStaffEmbedInteraction } from "./bot/panels/embedBuilder";
+import { ensureStaffEmbedPanelForGuild, ensureStaffEmbedSchedulerForGuild, handleStaffEmbedInteraction, stopStaffEmbedScheduler } from "./bot/panels/embedBuilder";
 import { client } from "./bot/core/client";
 import {
     awardEngagementXp, processVoiceXpSessions, seedConnectedVoiceXpSessions, trackVoiceXpConnection,
@@ -63,6 +63,7 @@ let shuttingDown = false;
 async function shutdown(reason: string, exitCode: number): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopStaffEmbedScheduler();
     const deadline = setTimeout(() => {
         console.error("[shutdown] Persistence flush timed out; pending saves may not be durable.");
         releaseInstanceLock();
@@ -113,6 +114,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
     if (DISCORD_GUILD_ID) {
         const guild = await client.guilds.fetch(DISCORD_GUILD_ID).catch(() => null);
         if (guild) {
+            await ensureStaffEmbedSchedulerForGuild(guild);
             await guild.commands.set(slashCommands);
             console.log(`Registered slash commands for guild ${guild.id}`);
             await ensureXpTierRoles(guild);
@@ -143,6 +145,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
 
     if (client.guilds.cache.size > 0) {
         for (const guild of client.guilds.cache.values()) {
+            await ensureStaffEmbedSchedulerForGuild(guild);
             await guild.commands.set(slashCommands).catch(() => undefined);
             purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);

@@ -9,6 +9,7 @@ export type Rs3Profile = {
     quests: Quest[];
     stats: { combat: number; totalLevel: number; totalXp: number } | null;
     statsNotice: string | null;
+    fetchedAt: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,7 +28,7 @@ export function normalizeRs3Name(value: string): string {
     return name;
 }
 
-export function parseRs3QuestProfile(value: unknown): Omit<Rs3Profile, "stats" | "statsNotice"> {
+export function parseRs3QuestProfile(value: unknown): Omit<Rs3Profile, "stats" | "statsNotice" | "fetchedAt"> {
     if (!isRecord(value) || typeof value.name !== "string" || !value.name.trim()
         || !isCount(value.qp) || !isCount(value.qp_max) || !isRecord(value.quests)) {
         throw new Error("Jagex did not return a readable profile. Check the display name and profile privacy.");
@@ -74,21 +75,21 @@ export async function fetchRs3Profile(name: string, request: typeof fetch = fetc
             : `Jagex profile lookup failed (HTTP ${response.status}). Please try again later.`);
     }
     const profile = parseRs3QuestProfile(await response.json());
-    return { ...profile, ...await metrics };
+    return { ...profile, ...await metrics, fetchedAt: Date.now() };
 }
 
 export function buildRs3ProfileEmbed(profile: Rs3Profile): EmbedBuilder {
     const count = (status: Quest["status"]) => profile.quests.filter(quest => quest.status === status).length;
     const embed = new EmbedBuilder()
         .setColor(0x2e8b57)
-        .setTitle(`RuneScape 3 | ${profile.name}`.slice(0, 256))
+        .setTitle(`FNTCORD | RuneScape 3 | ${profile.name}`.slice(0, 256))
         .setThumbnail(`https://secure.runescape.com/m=avatar-rs/${encodeURIComponent(profile.name)}/chat.png`)
         .addFields(
             { name: "Quest Points", value: `${profile.questPoints} / ${profile.maxQuestPoints}`, inline: true },
             { name: "Quests", value: `${count("COMPLETED")} complete\n${count("STARTED")} started / ${count("NOT_STARTED")} remaining`, inline: true }
         )
-        .setFooter({ text: "Jagex-published avatar and data; updates may be delayed." })
-        .setTimestamp();
+        .setFooter({ text: "FNTCORD / API-SOURCED / Fetched at timestamp; updates may be delayed. Ownership not verified." })
+        .setTimestamp(profile.fetchedAt);
     if (profile.stats) embed.addFields({
         name: "Player Stats",
         value: `Combat **${profile.stats.combat}** | Total level **${profile.stats.totalLevel.toLocaleString("en-US")}**\nTotal XP **${profile.stats.totalXp.toLocaleString("en-US")}**`

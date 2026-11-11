@@ -65,17 +65,17 @@ async function fetchRs3Profile(name, request = fetch) {
             : `Jagex profile lookup failed (HTTP ${response.status}). Please try again later.`);
     }
     const profile = parseRs3QuestProfile(await response.json());
-    return { ...profile, ...await metrics };
+    return { ...profile, ...await metrics, fetchedAt: Date.now() };
 }
 function buildRs3ProfileEmbed(profile) {
     const count = (status) => profile.quests.filter(quest => quest.status === status).length;
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(0x2e8b57)
-        .setTitle(`RuneScape 3 | ${profile.name}`.slice(0, 256))
+        .setTitle(`FNTCORD | RuneScape 3 | ${profile.name}`.slice(0, 256))
         .setThumbnail(`https://secure.runescape.com/m=avatar-rs/${encodeURIComponent(profile.name)}/chat.png`)
         .addFields({ name: "Quest Points", value: `${profile.questPoints} / ${profile.maxQuestPoints}`, inline: true }, { name: "Quests", value: `${count("COMPLETED")} complete\n${count("STARTED")} started / ${count("NOT_STARTED")} remaining`, inline: true })
-        .setFooter({ text: "Jagex-published avatar and data; updates may be delayed." })
-        .setTimestamp();
+        .setFooter({ text: "FNTCORD / API-SOURCED / Fetched at timestamp; updates may be delayed. Ownership not verified." })
+        .setTimestamp(profile.fetchedAt);
     if (profile.stats)
         embed.addFields({
             name: "Player Stats",

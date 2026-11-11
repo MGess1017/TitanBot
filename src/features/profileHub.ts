@@ -78,8 +78,9 @@ function header(snapshot: ProfileSnapshot, page: ProfilePage): EmbedBuilder {
     const embed = new EmbedBuilder()
         .setColor(getThemeColor(snapshot.cosmetics))
         .setAuthor({ name: `${snapshot.username}${title ? ` • ${title.text}` : ""}`, ...(snapshot.avatarUrl ? { iconURL: snapshot.avatarUrl } : {}) })
-        .setTitle(`${PROFILE_PAGES[page].emoji} FNT Profile • ${PROFILE_PAGES[page].label}`)
-        .setFooter({ text: `FNT • ${getCosmetic(snapshot.cosmetics.themeId)?.name || "FNT Signature Purple"} • Live data` });
+        .setTitle(`${PROFILE_PAGES[page].emoji} FNTCORD Profile • ${PROFILE_PAGES[page].label}`)
+        .setFooter({ text: `FNTCORD • ${getCosmetic(snapshot.cosmetics.themeId)?.name || "FNT Signature Purple"} • Bot-tracked / Arena self-reported` })
+        .setTimestamp();
     if (snapshot.avatarUrl) embed.setThumbnail(snapshot.avatarUrl);
     return embed;
 }
@@ -103,7 +104,7 @@ export function buildProfileEmbed(snapshot: ProfileSnapshot, page: ProfilePage, 
                 {
                     name: "Arena Rating",
                     value: snapshot.checkpoint && snapshot.preferences.showCheckpointRating
-                        ? `**${snapshot.checkpoint.rating}/100** • ${snapshot.checkpoint.tier}${snapshot.checkpoint.url ? ` • [Card](${snapshot.checkpoint.url})` : ""}`
+                        ? `**${snapshot.checkpoint.rating}/100** • ${snapshot.checkpoint.tier} • Self-reported${snapshot.checkpoint.url ? ` • [Card](${snapshot.checkpoint.url})` : ""}`
                         : snapshot.checkpoint ? "Hidden by player" : "No card yet",
                     inline: true
                 },
@@ -138,7 +139,7 @@ export function buildProfileEmbed(snapshot: ProfileSnapshot, page: ProfilePage, 
                 {
                     name: "Arena Player Card",
                     value: snapshot.checkpoint && snapshot.preferences.showCheckpointRating
-                        ? `**${snapshot.checkpoint.rating}/100** ${snapshot.checkpoint.tier}${snapshot.checkpoint.url ? `\n[Open card](${snapshot.checkpoint.url})` : ""}`
+                        ? `**${snapshot.checkpoint.rating}/100** ${snapshot.checkpoint.tier} / Self-reported${snapshot.checkpoint.url ? `\n[Open card](${snapshot.checkpoint.url})` : ""}`
                         : snapshot.checkpoint ? "Hidden by player" : "Not created",
                     inline: true
                 }
@@ -199,7 +200,7 @@ export function buildShopPayload(state: CosmeticState, fnTokens: number, kind: C
     const items = COSMETICS.filter(item => item.kind === kind);
     const embed = new EmbedBuilder()
         .setColor(getThemeColor(state))
-        .setTitle(`🛍️ FNT Cosmetic Shop • ${KIND_LABEL[kind]}`)
+        .setTitle(`🛍️ FNTCORD Cosmetic Shop • ${KIND_LABEL[kind]}`)
         .setDescription([
             "Cosmetic only — no XP, raid, or game advantage.",
             `Wallet: **${fnTokens.toLocaleString()} FN Token$**`,

@@ -130,7 +130,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "titan-staff-"));
     const embed = buildWhatsNewEmbed().toJSON();
     assert.equal(embed.color, WHATS_NEW_COLOR);
     assert.match(WHATS_NEW_RELEASE.id, /^fnt-patch-\d{3,}$/);
-    assert.match(embed.title!, /^FNT Bot — Patch \d{3,}: /);
+    assert.match(embed.title!, /^FNTCORD — Patch \d{3,}: /);
     WHATS_NEW_RELEASE.sections.forEach((section, index) => {
         assert.ok(section.name.startsWith(`${String(index + 1).padStart(2, "0")} • `), "patch sections are numbered in order");
     });

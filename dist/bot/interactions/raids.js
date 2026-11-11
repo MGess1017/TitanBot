@@ -47,6 +47,7 @@ const ids_1 = require("../ui/ids");
 const raids_1 = require("../raid/raids");
 const embeds_1 = require("../ui/embeds");
 const cards_1 = require("../profile/cards");
+const hubPreferences_1 = require("../../game/hubPreferences");
 const views_1 = require("../raid/views");
 /** Raid encounter, raid result, and PMC profile/prestige controls. */
 async function handleRaidInteraction(interaction) {
@@ -111,7 +112,12 @@ async function handleRaidInteraction(interaction) {
         }
         else if (Object.prototype.hasOwnProperty.call(ids_1.PMC_PROFILE_VIEWS, value))
             view = value;
-        await interaction.deferUpdate();
+        const privateReply = (0, hubPreferences_1.normalizeHubPreferences)((0, utils_1.ensureUser)(ownerId).preferences.hub).cardVisibility === "private"
+            && !interaction.message.flags.has(discord_js_1.MessageFlags.Ephemeral);
+        if (privateReply)
+            await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        else
+            await interaction.deferUpdate();
         const payload = JSON.parse((0, views_1.buildPmcProfilePayload)(interaction.user, view));
         await interaction.editReply({
             embeds: [payload.embed], components: payload.components,

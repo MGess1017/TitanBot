@@ -12,6 +12,8 @@ import { commandHandlers } from "../commands/handlers";
 import { getCommandKey } from "../commands/keys";
 import { progressionCardAttachment } from "../profile/cards";
 import type { ProgressionCardKind } from "../../features/progressionCard";
+import { ensureUser } from "../../utils";
+import { normalizeHubPreferences } from "../../game/hubPreferences";
 
 /** Runs a slash command handler and renders its reply. */
 export async function handleChatInputCommand(interaction: Interaction): Promise<void> {
@@ -40,7 +42,10 @@ export async function handleChatInputCommand(interaction: Interaction): Promise<
     try {
         const startedAt = Date.now();
         await interaction.deferReply({
-            flags: PRIVATE_SLASH_COMMANDS.has(commandKey) ? MessageFlags.Ephemeral : undefined
+            flags: PRIVATE_SLASH_COMMANDS.has(commandKey)
+                || (["xp", "pmc", "profile"].includes(commandKey)
+                    && normalizeHubPreferences(ensureUser(interaction.user.id).preferences.hub).cardVisibility === "private")
+                ? MessageFlags.Ephemeral : undefined
         });
         const rawResult = await handler(interaction);
         const result = typeof rawResult === "string"

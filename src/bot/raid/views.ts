@@ -256,7 +256,7 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
     });
     const embed = new EmbedBuilder()
         .setColor(tierVisual.color)
-        .setTitle(`🪖 ${state.pmcCallsign} • ${PMC_PROFILE_VIEWS[view]}`)
+        .setTitle(`FNTCORD | ${state.pmcCallsign} • ${PMC_PROFILE_VIEWS[view]}`)
         .setDescription(`Level ${progress.level.toLocaleString()} • Prestige ${prestigeTier.numeral} • ${tier?.label || "Recruit"}`)
         .addFields(
             {
@@ -321,12 +321,22 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
 
     const sections: Record<PmcProfileView, string[]> = {
         overview: [],
+        details: ["Lifetime Raid Economy"],
         follower: ["Follower: Sir Gru"],
         prestige: [`${prestigeTier.badge} Prestige`],
         mastery: ["Territory Mastery", "Lifetime Raid Economy"],
         collection: ["Boss Trophy Case", "Boss Records", "Collector Vault"]
     };
     embed.setFields((embed.data.fields || []).filter(field => sections[view].includes(field.name)));
+    if (view === "details") {
+        embed.addFields({ name: "Raid Record", value: [
+            `Raid XP: ${state.pmcXP.toLocaleString()} / Level ${progress.level}`,
+            `Raids: ${state.pmcRaids} / Extractions: ${state.pmcRaidWins}`,
+            `Extraction rate: ${state.pmcRaids ? (state.pmcRaidWins / state.pmcRaids * 100).toFixed(1) : "0"}%`,
+            `Boss kills: ${bossKills}`
+        ].join("\n") });
+    }
+    embed.setFooter({ text: "FNTCORD / BOT-TRACKED / SNAPSHOT AT REFRESH" }).setTimestamp();
     if (view === "overview") {
         const weapon = getBestOwnedGear(user.id, WEAPON_IDS, "raidAttack");
         const armor = getBestOwnedGear(user.id, ARMOR_IDS, "raidDefense");
@@ -336,7 +346,7 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
             activeRaidEncounters.has(user.id) ? "Raid in progress" : "Ready to deploy"
         ].join("\n"), inline: false });
         embed.setImage("attachment://pmc-profile.png");
-        embed.setFooter({ text: "More details: choose a dossier section below." });
+        embed.setFooter({ text: "FNTCORD / BOT-TRACKED / DETAILS BELOW" });
     }
     if (view === "follower") {
         if (sirGru && sirGruStats) embed.addFields({ name: "Support", value: [
@@ -367,6 +377,9 @@ export function buildPmcProfilePayload(user: User, view: PmcProfileView = "overv
             .setLabel(state.pmcPrestige >= PMC_PRESTIGE_CAP ? "Prestige X Achieved" : `Review Prestige ${nextPrestigeTier.numeral}`)
             .setStyle(ButtonStyle.Primary)
             .setDisabled(!prestigeEligible || activeRaidEncounters.has(user.id))
+    );
+    if (view === "overview") prestigeRow.addComponents(
+        new ButtonBuilder().setCustomId("inquiry:open:pmc:details").setLabel("Detailed Breakdown").setStyle(ButtonStyle.Secondary)
     );
     const shortcuts = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(RAID_RESULT_ACTION_IDS.inventory).setLabel("Inventory").setStyle(ButtonStyle.Secondary),

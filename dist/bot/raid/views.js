@@ -266,7 +266,7 @@ function buildPmcProfilePayload(user, view = "overview") {
     });
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(tierVisual.color)
-        .setTitle(`🪖 ${state.pmcCallsign} • ${ids_1.PMC_PROFILE_VIEWS[view]}`)
+        .setTitle(`FNTCORD | ${state.pmcCallsign} • ${ids_1.PMC_PROFILE_VIEWS[view]}`)
         .setDescription(`Level ${progress.level.toLocaleString()} • Prestige ${prestigeTier.numeral} • ${tier?.label || "Recruit"}`)
         .addFields({
         name: `${prestigeTier.badge} Prestige`,
@@ -322,12 +322,22 @@ function buildPmcProfilePayload(user, view = "overview") {
     });
     const sections = {
         overview: [],
+        details: ["Lifetime Raid Economy"],
         follower: ["Follower: Sir Gru"],
         prestige: [`${prestigeTier.badge} Prestige`],
         mastery: ["Territory Mastery", "Lifetime Raid Economy"],
         collection: ["Boss Trophy Case", "Boss Records", "Collector Vault"]
     };
     embed.setFields((embed.data.fields || []).filter(field => sections[view].includes(field.name)));
+    if (view === "details") {
+        embed.addFields({ name: "Raid Record", value: [
+                `Raid XP: ${state.pmcXP.toLocaleString()} / Level ${progress.level}`,
+                `Raids: ${state.pmcRaids} / Extractions: ${state.pmcRaidWins}`,
+                `Extraction rate: ${state.pmcRaids ? (state.pmcRaidWins / state.pmcRaids * 100).toFixed(1) : "0"}%`,
+                `Boss kills: ${bossKills}`
+            ].join("\n") });
+    }
+    embed.setFooter({ text: "FNTCORD / BOT-TRACKED / SNAPSHOT AT REFRESH" }).setTimestamp();
     if (view === "overview") {
         const weapon = (0, autocomplete_1.getBestOwnedGear)(user.id, catalog_1.WEAPON_IDS, "raidAttack");
         const armor = (0, autocomplete_1.getBestOwnedGear)(user.id, catalog_1.ARMOR_IDS, "raidDefense");
@@ -337,7 +347,7 @@ function buildPmcProfilePayload(user, view = "overview") {
                 raids_1.activeRaidEncounters.has(user.id) ? "Raid in progress" : "Ready to deploy"
             ].join("\n"), inline: false });
         embed.setImage("attachment://pmc-profile.png");
-        embed.setFooter({ text: "More details: choose a dossier section below." });
+        embed.setFooter({ text: "FNTCORD / BOT-TRACKED / DETAILS BELOW" });
     }
     if (view === "follower") {
         if (sirGru && sirGruStats)
@@ -367,6 +377,8 @@ function buildPmcProfilePayload(user, view = "overview") {
         .setLabel(state.pmcPrestige >= utils_1.PMC_PRESTIGE_CAP ? "Prestige X Achieved" : `Review Prestige ${nextPrestigeTier.numeral}`)
         .setStyle(discord_js_1.ButtonStyle.Primary)
         .setDisabled(!prestigeEligible || raids_1.activeRaidEncounters.has(user.id)));
+    if (view === "overview")
+        prestigeRow.addComponents(new discord_js_1.ButtonBuilder().setCustomId("inquiry:open:pmc:details").setLabel("Detailed Breakdown").setStyle(discord_js_1.ButtonStyle.Secondary));
     const shortcuts = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(payloads_1.RAID_RESULT_ACTION_IDS.inventory).setLabel("Inventory").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(payloads_1.RAID_RESULT_ACTION_IDS.history).setLabel("Raid History").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(payloads_1.RAID_RESULT_ACTION_IDS.bosses).setLabel("Boss Intel").setStyle(discord_js_1.ButtonStyle.Secondary));
     const components = [navigation.toJSON(), (view === "prestige" || view === "overview" ? prestigeRow : shortcuts).toJSON()];
     if (view === "follower" && sirGru)

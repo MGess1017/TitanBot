@@ -50,7 +50,7 @@ async function renderProgressionCard(snapshot) {
     };
     ctx.fillStyle = accent;
     ctx.fillRect(38, 42, 5, 490);
-    text(snapshot.kind === "xp" ? "FNT / ENGAGEMENT" : "FNT / PMC DOSSIER", 65, 75, 24, accent);
+    text(snapshot.kind === "xp" ? "FNTCORD / ENGAGEMENT" : "FNTCORD / PMC DOSSIER", 65, 75, 24, accent);
     text(snapshot.name, 65, 139, 48);
     text(`LEVEL ${snapshot.level.toLocaleString("en-US")}`, 65, 216, 64);
     text(`PRESTIGE ${snapshot.prestige}`, 65, 253, 24, "#d0d5d4");
@@ -65,6 +65,6 @@ async function renderProgressionCard(snapshot) {
         text(stat.label.toUpperCase(), x, 448, 20, "#b8c0bf", 200);
         text(stat.value, x, 488, 32, "#f4f4ef", 200);
     }
-    text("LIVE BOT PROGRESS / REFRESH TO UPDATE", 65, 543, 16, "#9fa8a7");
+    text("BOT-TRACKED / SNAPSHOT / REFRESH TO UPDATE", 65, 543, 16, "#9fa8a7");
     return canvas.toBuffer("image/png");
 }

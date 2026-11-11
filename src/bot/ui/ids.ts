@@ -91,7 +91,7 @@ export const PMC_PROFILE_IDS = {
     view: "pmc_profile_view",
     followerRole: "pmc_follower_role"
 } as const;
-export const PMC_PROFILE_VIEWS = { overview: "Overview", follower: "Follower", prestige: "Prestige", mastery: "Mastery", collection: "Collection" } as const;
+export const PMC_PROFILE_VIEWS = { overview: "Overview", details: "Detailed Breakdown", follower: "Follower", prestige: "Prestige", mastery: "Mastery", collection: "Collection" } as const;
 export type PmcProfileView = keyof typeof PMC_PROFILE_VIEWS;
 export const GEAR_MODAL_PREFIX = "gear_modal:";
 

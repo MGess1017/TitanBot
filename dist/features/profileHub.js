@@ -37,8 +37,9 @@ function header(snapshot, page) {
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(getThemeColor(snapshot.cosmetics))
         .setAuthor({ name: `${snapshot.username}${title ? ` • ${title.text}` : ""}`, ...(snapshot.avatarUrl ? { iconURL: snapshot.avatarUrl } : {}) })
-        .setTitle(`${exports.PROFILE_PAGES[page].emoji} FNT Profile • ${exports.PROFILE_PAGES[page].label}`)
-        .setFooter({ text: `FNT • ${(0, cosmetics_1.getCosmetic)(snapshot.cosmetics.themeId)?.name || "FNT Signature Purple"} • Live data` });
+        .setTitle(`${exports.PROFILE_PAGES[page].emoji} FNTCORD Profile • ${exports.PROFILE_PAGES[page].label}`)
+        .setFooter({ text: `FNTCORD • ${(0, cosmetics_1.getCosmetic)(snapshot.cosmetics.themeId)?.name || "FNT Signature Purple"} • Bot-tracked / Arena self-reported` })
+        .setTimestamp();
     if (snapshot.avatarUrl)
         embed.setThumbnail(snapshot.avatarUrl);
     return embed;
@@ -57,7 +58,7 @@ function buildProfileEmbed(snapshot, page, progressionEmbed) {
             ].join("\n")).addFields({ name: "Engagement", value: `Level **${snapshot.level}** • **${snapshot.xp.toLocaleString()} XP**\n${snapshot.xpBar}\nRole: **${snapshot.xpRole}**`, inline: false }, { name: "Voice", value: snapshot.inVoice ? `In VC • **${snapshot.voiceMultiplier}x XP**` : "Not in VC • 1x", inline: true }, { name: "FN Token$", value: `Wallet **${snapshot.fnTokens.toLocaleString()}**\nBank **${snapshot.bankTokens.toLocaleString()}**`, inline: true }, { name: "PMC", value: `Level **${snapshot.pmcLevel}** • ${snapshot.pmcRaids} raids`, inline: true }, {
                 name: "Arena Rating",
                 value: snapshot.checkpoint && snapshot.preferences.showCheckpointRating
-                    ? `**${snapshot.checkpoint.rating}/100** • ${snapshot.checkpoint.tier}${snapshot.checkpoint.url ? ` • [Card](${snapshot.checkpoint.url})` : ""}`
+                    ? `**${snapshot.checkpoint.rating}/100** • ${snapshot.checkpoint.tier} • Self-reported${snapshot.checkpoint.url ? ` • [Card](${snapshot.checkpoint.url})` : ""}`
                     : snapshot.checkpoint ? "Hidden by player" : "No card yet",
                 inline: true
             }, { name: "Prestige", value: snapshot.prestigeLabel, inline: true }, { name: "Achievement Title", value: snapshot.achievementTitle || "None equipped", inline: true });
@@ -77,7 +78,7 @@ function buildProfileEmbed(snapshot, page, progressionEmbed) {
             }, { name: "Next Crate", value: snapshot.nextCrateAt && snapshot.nextCrateAt > Date.now() ? rel(snapshot.nextCrateAt) : "Ready now", inline: true }, { name: `Boss Hearts (${snapshot.bossHearts.length})`, value: snapshot.bossHearts.slice(0, 10).join(", ") || "None", inline: true }, {
                 name: "Arena Player Card",
                 value: snapshot.checkpoint && snapshot.preferences.showCheckpointRating
-                    ? `**${snapshot.checkpoint.rating}/100** ${snapshot.checkpoint.tier}${snapshot.checkpoint.url ? `\n[Open card](${snapshot.checkpoint.url})` : ""}`
+                    ? `**${snapshot.checkpoint.rating}/100** ${snapshot.checkpoint.tier} / Self-reported${snapshot.checkpoint.url ? `\n[Open card](${snapshot.checkpoint.url})` : ""}`
                     : snapshot.checkpoint ? "Hidden by player" : "Not created",
                 inline: true
             });
@@ -119,7 +120,7 @@ function buildShopPayload(state, fnTokens, kind, multiplier) {
     const items = cosmetics_1.COSMETICS.filter(item => item.kind === kind);
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(getThemeColor(state))
-        .setTitle(`🛍️ FNT Cosmetic Shop • ${KIND_LABEL[kind]}`)
+        .setTitle(`🛍️ FNTCORD Cosmetic Shop • ${KIND_LABEL[kind]}`)
         .setDescription([
         "Cosmetic only — no XP, raid, or game advantage.",
         `Wallet: **${fnTokens.toLocaleString()} FN Token$**`,

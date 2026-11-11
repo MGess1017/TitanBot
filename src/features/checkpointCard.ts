@@ -5,12 +5,17 @@ import {
     TextInputBuilder, TextInputStyle, type Message, type MessageCreateOptions, type MessageEditOptions, type TextChannel
 } from "discord.js";
 import {
-    calculateCheckpointRating, CHECKPOINT_SECTION_IDS, CHECKPOINT_SECTIONS, CHECKPOINT_STAT_KEYS, CHECKPOINT_STATS,
-    formatCheckpointStat, getCheckpointTier, INGAME_NAME_MAX, INGAME_NAME_MIN, isSectionComplete, type CheckpointSectionId,
+    calculateCheckpointRating, CHECKPOINT_SECTION_IDS, CHECKPOINT_SECTIONS, CHECKPOINT_STATS,
+    formatCheckpointStat, getCheckpointTier, INGAME_NAME_MAX, INGAME_NAME_MIN, isSectionComplete, type CheckpointProfile, type CheckpointSectionId,
     type CheckpointStatKey, type CheckpointStats, type CheckpointTier
 } from "../game/checkpointRating";
+import { type InquiryPayload } from "./inquiryPanel";
 
-export const CHECKPOINT_PANEL_TITLE = "Arena Player Rating";
+export const CHECKPOINT_PANEL_TITLE = "FNTCORD | Arena Player Cards";
+export const CHECKPOINT_LEGACY_PANEL_TITLE = "Arena Player Rating";
+export const CHECKPOINT_WORKSPACE_ID = "checkpoint_card:workspace";
+export const CHECKPOINT_REFRESH_ID = "checkpoint_card:refresh";
+export const CHECKPOINT_RETRY_ID = "checkpoint_card:retry";
 export const CHECKPOINT_EDIT_PREFIX = "checkpoint_card:edit:";
 export const CHECKPOINT_MODAL_PREFIX = "checkpoint_card:modal:";
 export const CHECKPOINT_VIEW_ID = "checkpoint_card:view";
@@ -114,7 +119,7 @@ export async function renderCheckpointCard(input: CheckpointCardInput): Promise<
     ctx.textBaseline = "alphabetic";
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.font = '24px "FNT Bold"';
-    ctx.fillText("FNT ARENA  •  CHECKPOINT", 70, 92);
+    ctx.fillText("FNTCORD ARENA  •  CHECKPOINT", 70, 92);
 
     ctx.textAlign = "right";
     ctx.font = '40px "FNT Display"';
@@ -171,20 +176,22 @@ export async function renderCheckpointCard(input: CheckpointCardInput): Promise<
     ctx.lineWidth = 2;
     ctx.strokeRect(56, panelTop, CARD_WIDTH - 112, 352);
 
-    const columnWidth = (CARD_WIDTH - 112) / 4;
-    CHECKPOINT_STAT_KEYS.forEach((key, index) => {
-        const column = index % 4;
-        const row = Math.floor(index / 4);
+    const columnWidth = (CARD_WIDTH - 112) / 3;
+    (["kd", "winRate", "matchesPlayed"] as const).forEach((key, index) => {
+        const column = index;
         const x = 56 + columnWidth * column + columnWidth / 2;
-        const y = panelTop + 44 + row * 84;
+        const y = panelTop + 128;
         ctx.fillStyle = "rgba(255,255,255,0.62)";
         ctx.font = '16px "FNT Semi"';
         ctx.fillText(CHECKPOINT_STATS[key].short, x, y);
         const value = formatCheckpointStat(key, input.stats[key]);
         ctx.fillStyle = "#ffffff";
         fitFont(ctx, value, "FNT Bold", 34, columnWidth - 16);
-        ctx.fillText(value, x, y + 38);
+        ctx.fillText(value, x, y + 50);
     });
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.font = '20px "FNT Semi"';
+    ctx.fillText("FULL BREAKDOWN IN YOUR PRIVATE WORKSPACE", CARD_WIDTH / 2, panelTop + 280);
 
     ctx.fillStyle = "rgba(255,255,255,0.55)";
     ctx.font = '17px "FNT Semi"';
@@ -195,32 +202,43 @@ export async function renderCheckpointCard(input: CheckpointCardInput): Promise<
 }
 
 export function buildCheckpointPanel() {
+    return {
+        embeds: [new EmbedBuilder().setColor(0x9b59b6).setTitle(CHECKPOINT_PANEL_TITLE)
+            .setDescription("Create and manage your Arena player card. Setup, editing and detailed stats open privately.")
+            .setFooter({ text: "FNTCORD / SELF-REPORTED ARENA STATS" })],
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(CHECKPOINT_WORKSPACE_ID).setLabel("My Player Card").setStyle(ButtonStyle.Primary)
+        )],
+        allowedMentions: { parse: [] }
+    } satisfies MessageCreateOptions & MessageEditOptions;
+}
+
+export function buildCheckpointWorkspace(profile: CheckpointProfile | null | undefined, visibility: "public" | "private"): InquiryPayload {
+    const stats = profile?.stats || {};
+    const complete = Boolean(profile?.ingameName) && CHECKPOINT_SECTION_IDS.every(id => isSectionComplete(stats, id));
     const sectionButtons = CHECKPOINT_SECTION_IDS.map(id => new ButtonBuilder()
         .setCustomId(`${CHECKPOINT_EDIT_PREFIX}${id}`)
         .setLabel(CHECKPOINT_SECTIONS[id].title)
         .setStyle(ButtonStyle.Secondary));
-    return {
-        embeds: [new EmbedBuilder()
+    const embed = new EmbedBuilder()
             .setColor(0x9b59b6)
-            .setTitle(CHECKPOINT_PANEL_TITLE)
-            .setDescription([
-                "Enter your **Arena in-game name** and **CheckPoint statistics** to generate your FNT PMC player card and **rating out of 100**.",
-                "",
-                "1. Set your **In-Game Name** — it's the name shown on your card.",
-                "2. Fill all four stat sections below (each opens a short form).",
-                "3. Your card posts in this channel automatically once your name and every stat are saved.",
-                "4. Edit your name or any section at any time; your card and rating update live."
-            ].join("\n"))
-            .setFooter({ text: "Stats are player-reported. Rating weighs K/D, win rate, headshot rate, MVPs, and consistency." })],
+            .setTitle("FNTCORD | My Arena Card")
+            .setDescription(describeCheckpointProgress(stats, profile?.ingameName || null))
+            .addFields({ name: "Visibility", value: visibility === "private" ? "Private / Preview only" : "Public / Updates in the player-card channel" })
+            .setFooter({ text: "FNTCORD / SELF-REPORTED / STATS UPDATED AT TIMESTAMP" });
+    if (profile?.updatedAt) embed.setTimestamp(profile.updatedAt);
+    return {
+        embed: embed.toJSON(),
         components: [
-            new ActionRowBuilder<ButtonBuilder>().addComponents(sectionButtons),
+            new ActionRowBuilder<ButtonBuilder>().addComponents(sectionButtons).toJSON(),
             new ActionRowBuilder<ButtonBuilder>().addComponents(
-                new ButtonBuilder().setCustomId(CHECKPOINT_NAME_ID).setLabel("In-Game Name").setEmoji("🪪").setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(CHECKPOINT_VIEW_ID).setLabel("My Rating Breakdown").setStyle(ButtonStyle.Primary)
-            )
-        ],
-        allowedMentions: { parse: [] }
-    } satisfies MessageCreateOptions & MessageEditOptions;
+                new ButtonBuilder().setCustomId(CHECKPOINT_NAME_ID).setLabel("Edit Profile").setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(CHECKPOINT_REFRESH_ID).setLabel("Refresh Card").setStyle(ButtonStyle.Primary).setDisabled(!complete),
+                new ButtonBuilder().setCustomId(CHECKPOINT_RETRY_ID).setLabel("Retry Publish").setStyle(ButtonStyle.Secondary).setDisabled(!complete || visibility === "private"),
+                new ButtonBuilder().setCustomId(CHECKPOINT_VIEW_ID).setLabel("Detailed Breakdown").setStyle(ButtonStyle.Secondary).setDisabled(!complete)
+            ).toJSON()
+        ]
+    };
 }
 
 export function buildCheckpointNameModal(current: string | null): ModalBuilder {
@@ -265,35 +283,47 @@ export function describeCheckpointProgress(stats: CheckpointStats, ingameName: s
     ].join("\n");
 }
 
-export function buildCheckpointBreakdownEmbed(stats: Record<CheckpointStatKey, number>, cardUrl: string | null): EmbedBuilder {
+export function buildCheckpointBreakdownEmbed(stats: Record<CheckpointStatKey, number>, cardUrl: string | null, updatedAt?: number): EmbedBuilder {
     const result = calculateCheckpointRating(stats);
     const tier = getCheckpointTier(result.rating);
     const lines = result.parts.map(part => `${part.label}: **${part.points}** / ${part.max}`);
     if (result.quitPenalty > 0) lines.push(`Quit penalty: **-${result.quitPenalty}**`);
     if (result.sampleFactor < 1) lines.push(`Small sample (<50 matches): rating blended toward average`);
-    return new EmbedBuilder()
+    const embed = new EmbedBuilder()
         .setColor(tier.color)
-        .setTitle(`PMC Rating ${result.rating} • ${tier.name}`)
-        .setDescription(lines.join("\n") + (cardUrl ? `\n\n[View your card](${cardUrl})` : ""));
+        .setTitle(`FNTCORD | PMC Rating ${result.rating} • ${tier.name}`)
+        .setDescription(lines.join("\n") + (cardUrl ? `\n\n[View your card](${cardUrl})` : ""))
+        .addFields(CHECKPOINT_SECTION_IDS.map(id => ({
+            name: CHECKPOINT_SECTIONS[id].title,
+            value: CHECKPOINT_SECTIONS[id].keys.map(key => `${CHECKPOINT_STATS[key].label}: **${formatCheckpointStat(key, stats[key])}**`).join("\n")
+        })))
+        .setFooter({ text: "FNTCORD / SELF-REPORTED / NOT GAME-VERIFIED" });
+    if (updatedAt) embed.setTimestamp(updatedAt);
+    return embed;
 }
 
-export function buildCheckpointCardMessage(userId: string, ingameName: string, rating: number, tier: CheckpointTier, buffer: Buffer) {
+export function buildCheckpointCardMessage(userId: string, ingameName: string, rating: number, tier: CheckpointTier, buffer: Buffer, updatedAt = Date.now()) {
     return {
         content: `<@${userId}>`,
         embeds: [new EmbedBuilder()
             .setColor(tier.color)
             .setTitle(`${escapeMarkdown(ingameName)} • PMC Rating ${rating}`)
-            .setDescription(`Tier: **${tier.name}**`)
+            .setDescription(`Tier: **${tier.name}** / Self-reported stats`)
+            .setFooter({ text: "FNTCORD / SELF-REPORTED / STATS UPDATED AT TIMESTAMP" })
             .setImage(`attachment://${CHECKPOINT_CARD_FILE}`)
-            .setTimestamp(new Date())],
+            .setTimestamp(updatedAt)],
         files: [new AttachmentBuilder(buffer, { name: CHECKPOINT_CARD_FILE })],
         attachments: [],
-        allowedMentions: { parse: [] as [] }
+        allowedMentions: { parse: [] as [] },
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(CHECKPOINT_WORKSPACE_ID).setLabel("My Card Workspace").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(CHECKPOINT_VIEW_ID).setLabel("My Detailed Breakdown").setStyle(ButtonStyle.Secondary)
+        )]
     };
 }
 
 function isCheckpointPanel(message: Message, botId: string): boolean {
-    return message.author.id === botId && message.embeds[0]?.title === CHECKPOINT_PANEL_TITLE;
+    return message.author.id === botId && [CHECKPOINT_PANEL_TITLE, CHECKPOINT_LEGACY_PANEL_TITLE].includes(message.embeds[0]?.title || "");
 }
 
 export async function upsertCheckpointPanel(channel: TextChannel, botId: string, storedId: string | null): Promise<string> {
