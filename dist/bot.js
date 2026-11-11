@@ -9,6 +9,8 @@ const config_1 = require("./bot/core/config");
 const playerCards_1 = require("./bot/panels/playerCards");
 const inquiry_1 = require("./bot/panels/inquiry");
 const embedBuilder_1 = require("./bot/panels/embedBuilder");
+const owner_1 = require("./bot/panels/owner");
+const store_1 = require("./bot/panels/store");
 const client_1 = require("./bot/core/client");
 const engagement_1 = require("./bot/xp/engagement");
 const playerCounts_1 = require("./bot/panels/playerCounts");
@@ -20,7 +22,7 @@ const ops_1 = require("./bot/core/ops");
 const giveaways_1 = require("./bot/giveaways/giveaways");
 const audit_1 = require("./bot/core/audit");
 const checkpoint_1 = require("./bot/core/checkpoint");
-const store_1 = require("./bot/moderation/store");
+const store_2 = require("./bot/moderation/store");
 const roles_1 = require("./bot/xp/roles");
 const records_1 = require("./bot/tickets/records");
 const reports_1 = require("./bot/core/reports");
@@ -109,6 +111,8 @@ client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("c
             (0, records_1.purgeLegacyImportedTicketRecords)(guild.id);
             await (0, channels_1.ensureArchiveCategory)(guild);
             if (config_1.ENABLE_STARTUP_AUTOPANELS) {
+                (0, metrics_1.runAsyncWithBoundary)("ownerPanelInit", () => (0, owner_1.ensureOwnerPanelForGuild)(guild));
+                (0, metrics_1.runAsyncWithBoundary)("storePanelsInit", () => (0, store_1.ensureStorePanelsForGuild)(guild));
                 await (0, ticketPanels_1.removeLegacyReportPanelForGuild)(guild);
                 await (0, ticketPanels_1.ensureAdminReportPanelForGuild)(guild);
                 await (0, ticketPanels_1.ensurePermanentTicketPanelForGuild)(guild);
@@ -137,6 +141,8 @@ client_1.client.once("clientReady", () => (0, metrics_1.runAsyncWithBoundary)("c
             (0, records_1.purgeLegacyImportedTicketRecords)(guild.id);
             await (0, channels_1.ensureArchiveCategory)(guild);
             if (config_1.ENABLE_STARTUP_AUTOPANELS) {
+                (0, metrics_1.runAsyncWithBoundary)("ownerPanelInit", () => (0, owner_1.ensureOwnerPanelForGuild)(guild));
+                (0, metrics_1.runAsyncWithBoundary)("storePanelsInit", () => (0, store_1.ensureStorePanelsForGuild)(guild));
                 await (0, ticketPanels_1.removeLegacyReportPanelForGuild)(guild);
                 await (0, ticketPanels_1.ensureAdminReportPanelForGuild)(guild);
                 await (0, ticketPanels_1.ensurePermanentTicketPanelForGuild)(guild);
@@ -170,7 +176,7 @@ client_1.client.on("guildBanAdd", ban => (0, metrics_1.runAsyncWithBoundary)("gu
     });
     const moderatorId = entry?.executor?.id;
     const reason = entry?.reason || "No reason provided";
-    await (0, store_1.sendModLog)(guildId, "Ban", [
+    await (0, store_2.sendModLog)(guildId, "Ban", [
         { name: "Moderator", value: moderatorId ? `<@${moderatorId}>` : "Unknown", inline: true },
         { name: "Target", value: `<@${userId}>`, inline: true },
         { name: "Reason", value: reason }
@@ -223,7 +229,7 @@ client_1.client.on("guildMemberRemove", member => (0, metrics_1.runAsyncWithBoun
         return;
     const moderatorId = entry.executor?.id;
     const reason = entry.reason || "No reason provided";
-    await (0, store_1.sendModLog)(guildId, "Kick", [
+    await (0, store_2.sendModLog)(guildId, "Kick", [
         { name: "Moderator", value: moderatorId ? `<@${moderatorId}>` : "Unknown", inline: true },
         { name: "Target", value: `<@${userId}>`, inline: true },
         { name: "Reason", value: reason }
@@ -292,6 +298,10 @@ process.on("beforeExit", () => {
 client_1.client.on("interactionCreate", interaction => (0, metrics_1.runAsyncWithBoundary)("interactionCreate", async () => {
     if (shuttingDown)
         return;
+    if (await (0, owner_1.handleOwnerInteraction)(interaction))
+        return;
+    if (await (0, store_1.handleStoreInteraction)(interaction))
+        return;
     if (await (0, embedBuilder_1.handleStaffEmbedInteraction)(interaction))
         return;
     if (await (0, inquiry_1.handleInquiryInteraction)(interaction))
@@ -342,7 +352,7 @@ client_1.client.on("messageCreate", message => (0, metrics_1.runAsyncWithBoundar
         return;
     await (0, experience_1.trackTicketReply)(message);
     if (message.guildId) {
-        const state = (0, store_1.ensureGuildModeration)(message.guildId);
+        const state = (0, store_2.ensureGuildModeration)(message.guildId);
         if (state.lockdownChannelId && message.channelId === state.lockdownChannelId) {
             const member = message.member ?? await message.guild?.members.fetch(message.author.id).catch(() => null);
             const isAdmin = Boolean(member?.permissions?.has(discord_js_1.PermissionFlagsBits.Administrator));
@@ -352,7 +362,7 @@ client_1.client.on("messageCreate", message => (0, metrics_1.runAsyncWithBoundar
                 if (member) {
                     await member.ban({ reason }).catch(() => undefined);
                 }
-                await (0, store_1.sendModLog)(message.guildId, "Lockdown Ban", [
+                await (0, store_2.sendModLog)(message.guildId, "Lockdown Ban", [
                     { name: "Target", value: `<@${message.author.id}>`, inline: true },
                     { name: "Channel", value: `<#${message.channelId}>`, inline: true },
                     { name: "Reason", value: reason }

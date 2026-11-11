@@ -1,7 +1,7 @@
 import type { TicketStatus } from "./ticketState";
 
 export type TicketPriority = "low" | "normal" | "high";
-export type TicketCategory = "general" | "bug" | "appeal" | "billing" | "account" | "report";
+export type TicketCategory = "general" | "bug" | "appeal" | "billing" | "account" | "report" | "store";
 
 export type TicketSlaPolicy = {
     name: string;
@@ -37,6 +37,7 @@ export type TicketCsatRecord = {
 
 export function classifyTicketCategory(reason: string): TicketCategory {
     const text = String(reason || "").toLowerCase();
+    if (text === "store") return "store";
     if (/appeal|ban|mute|timeout/.test(text)) return "appeal";
     if (/billing|payment|purchase|refund|charge/.test(text)) return "billing";
     if (/account|login|password|verify|2fa/.test(text)) return "account";
@@ -127,6 +128,7 @@ export function getTicketSlaPolicy(category: string, priority: TicketPriority): 
     const normalized = classifyTicketCategory(category);
     const base: Record<TicketCategory, TicketSlaPolicy> = {
         general: { name: "General", firstResponseMs: 15 * 60 * 1000, resolveMs: 24 * 60 * 60 * 1000 },
+        store: { name: "Store Inquiry", firstResponseMs: 15 * 60 * 1000, resolveMs: 24 * 60 * 60 * 1000 },
         bug: { name: "Bug", firstResponseMs: 12 * 60 * 1000, resolveMs: 18 * 60 * 60 * 1000 },
         appeal: { name: "Appeal", firstResponseMs: 10 * 60 * 1000, resolveMs: 12 * 60 * 60 * 1000 },
         billing: { name: "Billing", firstResponseMs: 8 * 60 * 1000, resolveMs: 8 * 60 * 60 * 1000 },

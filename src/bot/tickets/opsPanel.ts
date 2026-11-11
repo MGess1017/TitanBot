@@ -90,7 +90,7 @@ export function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
     });
     const embed = new EmbedBuilder()
         .setColor(0x9b59b6)
-        .setTitle(`Support Ticket #${ticket.id}`)
+        .setTitle(ticket.category === "store" ? `FNTCORD | Store Request #${ticket.id}` : `Support Ticket #${ticket.id}`)
         .setDescription(intake.summary.slice(0, 120))
         .addFields(
             { name: "Member", value: `<@${ticket.ownerId}>`, inline: true },
@@ -109,7 +109,8 @@ export function buildTicketOpsEmbed(ticket: TicketEntry): EmbedBuilder {
     }
     embed.setFooter({ text: status === "archived" || status === "resolved"
         ? "This ticket is closed. Contact staff if you need it reviewed."
-        : "Reply here to continue. You can add screenshots or files." });
+        : ticket.category === "store" ? "Catalog inquiry only. No payment taken. Full request snapshot is attached to the opening message."
+            : "Reply here to continue. You can add screenshots or files." });
     return sanitizeEmbedBuilder(embed);
 }
 

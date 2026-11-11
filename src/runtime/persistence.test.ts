@@ -7,7 +7,7 @@ import ts from "typescript";
 import { spawn } from "node:child_process";
 import { EmbedBuilder } from "discord.js";
 import {
-    flushJsonWrites, getJsonSaveFailures, getJsonSaveHealth, queueJsonWrite, readJsonSnapshot
+    flushJsonWrites, getJsonSaveFailures, getJsonSaveHealth, queueJsonWrite, readJsonSnapshot, writeJsonSnapshotSync
 } from "./jsonPersistence";
 import { readVoiceSessions, restoreVoiceSession, saveVoiceSessions, type SavedVoiceSession } from "./voiceSessionStore";
 import { accrueVoiceXp, getVoiceXpMultiplier, VOICE_XP_DOUBLE_AFTER_MS } from "./voiceXp";
@@ -38,6 +38,19 @@ async function run(): Promise<void> {
         await inFlight;
         assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { value: 102 },
             "a newer save queued during an in-flight write must finish last");
+        queueJsonWrite(file, { value: 999 });
+        writeJsonSnapshotSync(file, { value: 5 });
+        await flushJsonWrites();
+        assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { value: 5 }, "an older queued write must never restore a corrected value");
+        queueJsonWrite(file, { value: 6 });
+        const writing = flushJsonWrites();
+        assert.throws(() => writeJsonSnapshotSync(file, { value: 4 }), /currently being saved/, "administrative writes must reject an in-flight writer");
+        await writing;
+        assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { value: 6 });
+        queueJsonWrite(file, { value: 7 });
+        assert.throws(() => writeJsonSnapshotSync(file, { value: BigInt(1) }), /BigInt/);
+        await flushJsonWrites();
+        assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { value: 7 }, "a failed administrative write must retain queued normal saves");
         const adminSource = fs.readFileSync(path.resolve(__dirname, "../bot/commands/admin.ts"), "utf8");
         const adminAst = ts.createSourceFile("admin.ts", adminSource, ts.ScriptTarget.ES2020, true);
         let verifier: ts.ArrowFunction | undefined;

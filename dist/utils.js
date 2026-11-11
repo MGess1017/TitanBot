@@ -13,6 +13,7 @@ exports.getSirGruRaidBonuses = getSirGruRaidBonuses;
 exports.ensureSirGruFollower = ensureSirGruFollower;
 exports.awardSirGruRaidXp = awardSirGruRaidXp;
 exports.savePoints = savePoints;
+exports.applyOwnerValueChange = applyOwnerValueChange;
 exports.getPointsSaveHealth = getPointsSaveHealth;
 exports.withDeferredPointsSave = withDeferredPointsSave;
 exports.getPointsSaveDiagnostics = getPointsSaveDiagnostics;
@@ -62,6 +63,7 @@ exports.rollSirGruRaidAssist = rollSirGruRaidAssist;
 const fs_extra_1 = __importDefault(require("fs-extra"));
 const path_1 = __importDefault(require("path"));
 const jsonPersistence_1 = require("./runtime/jsonPersistence");
+const ownerControls_1 = require("./game/ownerControls");
 const achievements_1 = require("./game/achievements");
 const xpCrates_1 = require("./game/xpCrates");
 const checkpointRating_1 = require("./game/checkpointRating");
@@ -346,6 +348,55 @@ function savePoints() {
     if (shouldSkipPointsPersistence())
         return;
     writePointsFileAtomic({ users: exports.points });
+}
+/** Owner corrections and their receipt are one durable snapshot; never use the monotonic XP grant path. */
+function applyOwnerValueChange(change) {
+    if (pointsSaveBatchDepth > 0)
+        throw new Error("Player data is in a batch update. Please retry shortly.");
+    if (![change.actorId, change.guildId, change.targetId].every(id => /^\d{17,21}$/.test(id))
+        || !/^[0-9a-f-]{36}$/i.test(change.id) || !Number.isSafeInteger(change.at) || change.at <= 0)
+        throw new Error("Invalid adjustment receipt.");
+    if (!Object.prototype.hasOwnProperty.call(ownerControls_1.OWNER_VALUE_FIELDS, change.field))
+        throw new Error("Unknown player value.");
+    if (!change.reason.trim() || change.reason.length > 300)
+        throw new Error("A reason of 1-300 characters is required.");
+    const user = ensureUser(change.targetId);
+    if (user.ownerValueChanges?.some(receipt => receipt.id === change.id))
+        throw new Error("This adjustment has already been applied.");
+    if (user[change.field] !== change.before)
+        throw new Error("This player's value changed after the preview. Reopen the form to review the latest value.");
+    if ((0, ownerControls_1.previewOwnerValue)(change.before, change.operation, change.amount) !== change.after)
+        throw new Error("Invalid adjustment preview.");
+    const previous = structuredClone(user);
+    try {
+        user[change.field] = change.after;
+        if (change.field === "xp") {
+            user.lastXP = Date.now();
+            grantProgressAchievements(user);
+        }
+        if (change.field === "pmcXP") {
+            user.rxp = change.after;
+            // Administrative XP is not a reward grant and cannot create deferred milestone payouts.
+            const level = getPmcLevel(change.after);
+            for (let milestone = 1000; milestone <= level; milestone += 1000) {
+                if (!user.pmcMilestonesClaimed.includes(milestone))
+                    user.pmcMilestonesClaimed.push(milestone);
+            }
+            user.pmcMasteryLevel = Math.max(user.pmcMasteryLevel, getPmcMasteryLevel(change.after));
+        }
+        if (change.field === "bankTokens")
+            user.bankUpdatedAt = Date.now();
+        user.ownerValueChanges = [...(user.ownerValueChanges || []), change].slice(-50);
+        if (!shouldSkipPointsPersistence())
+            (0, jsonPersistence_1.writeJsonSnapshotSync)(pointsFile, { users: exports.points });
+    }
+    catch (error) {
+        for (const key of Object.keys(user))
+            if (!(key in previous))
+                delete user[key];
+        Object.assign(user, previous);
+        throw error;
+    }
 }
 function getPointsSaveHealth() {
     return (0, jsonPersistence_1.getJsonSaveHealth)(pointsFile);

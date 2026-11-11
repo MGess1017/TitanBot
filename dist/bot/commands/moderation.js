@@ -7,6 +7,7 @@ const utils_1 = require("../../utils");
 const ops_1 = require("../core/ops");
 const store_1 = require("../moderation/store");
 const guards_1 = require("../core/guards");
+const quotas_1 = require("../moderation/quotas");
 const registry_1 = require("./registry");
 /** Moderation commands. */
 exports.moderationSlashCommands = {
@@ -69,17 +70,22 @@ exports.moderationSlashCommands = {
         const kickDedupeError = (0, ops_1.rejectIfDuplicateCommand)(interaction, `kick:user:${target.id}`);
         if (kickDedupeError)
             return kickDedupeError;
-        const member = interaction.guild ? await interaction.guild.members.fetch(target.id).catch(() => null) : null;
-        if (!member)
-            return "Unable to find that member in this server.";
-        await member.kick("Kick by administrator action");
+        const authorized = await (0, quotas_1.authorizeModerationAction)(interaction, target.id, "kick");
+        if ("error" in authorized)
+            return authorized.error;
+        const result = await (0, quotas_1.executeModerationQuotaAction)({
+            guildId: authorized.guild.id, action: "kick", userId: interaction.user.id, targetId: target.id,
+            requestId: interaction.id, ownerId: authorized.guild.ownerId, reason: "Kick by administrator action"
+        }, () => authorized.member.kick("Kick by administrator action"));
+        if (!result.ok && !result.discordSucceeded)
+            return result.message;
         (0, ops_1.rememberModerationLog)("kick", interaction.guildId, target.id);
         await (0, store_1.sendModLog)(interaction.guildId, "Kick", [
             { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
             { name: "Target", value: `<@${target.id}>`, inline: true },
             { name: "Reason", value: "Kick by administrator action" }
         ]);
-        return `${target.username} has been kicked.`;
+        return result.ok ? `${target.username} has been kicked.` : result.message;
     },
     ban: async (interaction) => {
         const adminError = (0, guards_1.requireAdministrator)(interaction);
@@ -89,17 +95,22 @@ exports.moderationSlashCommands = {
         const banDedupeError = (0, ops_1.rejectIfDuplicateCommand)(interaction, `ban:user:${target.id}`);
         if (banDedupeError)
             return banDedupeError;
-        const member = interaction.guild ? await interaction.guild.members.fetch(target.id).catch(() => null) : null;
-        if (!member)
-            return "Unable to find that member in this server.";
-        await member.ban({ reason: "Ban by administrator action" });
+        const authorized = await (0, quotas_1.authorizeModerationAction)(interaction, target.id, "ban");
+        if ("error" in authorized)
+            return authorized.error;
+        const result = await (0, quotas_1.executeModerationQuotaAction)({
+            guildId: authorized.guild.id, action: "ban", userId: interaction.user.id, targetId: target.id,
+            requestId: interaction.id, ownerId: authorized.guild.ownerId, reason: "Ban by administrator action"
+        }, () => authorized.member.ban({ reason: "Ban by administrator action" }));
+        if (!result.ok && !result.discordSucceeded)
+            return result.message;
         (0, ops_1.rememberModerationLog)("ban", interaction.guildId, target.id);
         await (0, store_1.sendModLog)(interaction.guildId, "Ban", [
             { name: "Moderator", value: `<@${interaction.user.id}>`, inline: true },
             { name: "Target", value: `<@${target.id}>`, inline: true },
             { name: "Reason", value: "Ban by administrator action" }
         ]);
-        return `${target.username} has been banned.`;
+        return result.ok ? `${target.username} has been banned.` : result.message;
     },
     unban: async (interaction) => {
         const adminError = (0, guards_1.requireAdministrator)(interaction);

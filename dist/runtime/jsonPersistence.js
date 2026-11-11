@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueJsonWrite = queueJsonWrite;
+exports.writeJsonSnapshotSync = writeJsonSnapshotSync;
 exports.getJsonSaveHealth = getJsonSaveHealth;
 exports.getJsonSaveFailures = getJsonSaveFailures;
 exports.flushJsonWrites = flushJsonWrites;
@@ -109,6 +110,47 @@ function queueJsonWrite(filePath, data) {
     catch (error) {
         recordFailure(file, queue, error);
         throw error;
+    }
+}
+/** Commit an administrative correction without an older queued snapshot restoring it. */
+function writeJsonSnapshotSync(filePath, data) {
+    const file = node_path_1.default.resolve(filePath);
+    const queue = getQueue(file);
+    if (queue.running)
+        throw new Error("This data is currently being saved. Please retry shortly.");
+    const temporary = `${file}.${process.pid}.${(0, node_crypto_1.randomUUID)()}.tmp`;
+    try {
+        const snapshot = JSON.stringify(data, null, 2);
+        if (snapshot === undefined)
+            throw new Error("Cannot persist an undefined JSON value");
+        node_fs_1.default.mkdirSync(node_path_1.default.dirname(file), { recursive: true });
+        const handle = node_fs_1.default.openSync(temporary, "wx");
+        try {
+            node_fs_1.default.writeFileSync(handle, snapshot, "utf8");
+            node_fs_1.default.fsyncSync(handle);
+        }
+        finally {
+            node_fs_1.default.closeSync(handle);
+        }
+        for (const [source, target] of [[`${file}.bak.1`, `${file}.bak.2`], [`${file}.bak`, `${file}.bak.1`], [file, `${file}.bak`]]) {
+            if (node_fs_1.default.existsSync(source))
+                node_fs_1.default.copyFileSync(source, target);
+        }
+        node_fs_1.default.renameSync(temporary, file);
+        if (queue.timer)
+            clearTimeout(queue.timer);
+        queue.timer = undefined;
+        queue.pending = undefined;
+        queue.health.lastSuccessAt = Date.now();
+        queue.health.lastError = "";
+    }
+    catch (error) {
+        recordFailure(file, queue, error);
+        throw error;
+    }
+    finally {
+        if (node_fs_1.default.existsSync(temporary))
+            node_fs_1.default.rmSync(temporary);
     }
 }
 function getJsonSaveHealth(filePath) {

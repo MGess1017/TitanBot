@@ -8,6 +8,7 @@ import { TICKET_DEFAULT_CATEGORY_ID, TICKET_HANDLER_ROLE_ID } from "../core/conf
 import { rejectIfDuplicateCommand } from "../core/ops";
 import { appendAuditEvent } from "../core/audit";
 import { ensureGuildModeration, parseDurationMs, saveModerationStore, sendModLog } from "../moderation/store";
+import { authorizeModerationAction, executeModerationQuotaAction } from "../moderation/quotas";
 import {
     canTransitionTicketStatus, ensureTicketConfig, findArchivedTicketByChannel, findOpenTicketByChannel,
     findTicketByChannel, normalizeTicketPriority, normalizeTicketStatus, normalizeTicketWorkflowStatus,
@@ -77,6 +78,8 @@ export const moderationCommandHandlers = buildModerationCommandHandlers({
     rejectIfDuplicateCommand,
     sendModLog,
     parseDurationMs,
+    authorizeModerationAction,
+    executeModerationQuotaAction,
     getAvatar
 });
 

@@ -13,13 +13,15 @@ const config_1 = require("../core/config");
 const playerCards_1 = require("../panels/playerCards");
 const inquiry_1 = require("../panels/inquiry");
 const embedBuilder_1 = require("../panels/embedBuilder");
+const owner_1 = require("../panels/owner");
+const store_1 = require("../panels/store");
 const client_1 = require("../core/client");
 const xpPanels_1 = require("../panels/xpPanels");
 const settings_1 = require("../core/settings");
 const metrics_1 = require("../core/metrics");
 const ops_1 = require("../core/ops");
 const audit_1 = require("../core/audit");
-const store_1 = require("../moderation/store");
+const store_2 = require("../moderation/store");
 const reports_1 = require("../core/reports");
 const embeds_1 = require("../ui/embeds");
 const staffDesk_1 = require("./staffDesk");
@@ -128,6 +130,9 @@ async function runStaffHealthCheck(reason) {
                 { id: settings.channels.xpPanels, label: "XP panels", files: true },
                 { id: config_1.PLAYER_COUNT_CHANNEL_ID, label: "Player inquiry", files: true },
                 { id: config_1.STAFF_EMBED_CHANNEL_ID, label: "Staff embed builder", files: false },
+                { id: config_1.OWNER_PANEL_CHANNEL_ID, label: "Owner Control", files: false },
+                { id: config_1.STORE_CHANNEL_ID, label: "Store", files: false },
+                { id: config_1.STORE_ADMIN_CHANNEL_ID, label: "Store management", files: false },
                 { id: settings.channels.checkpointCards, label: "Player rating", files: true },
                 { id: config_1.WHATS_NEW_CHANNEL_ID, label: "What's New", files: false },
                 { id: config_1.JOIN_WELCOME_CHANNEL_ID, label: "Welcome", files: false },
@@ -154,13 +159,16 @@ async function runStaffHealthCheck(reason) {
                 { key: "xpCrate", channelId: settings.channels.xpPanels, label: "FN Xp Panel", repair: xpPanels_1.ensureXpCratePanel, enabled: settings.features.xpCrates },
                 { key: "checkpointCard", channelId: settings.channels.checkpointCards, label: "Arena Player Rating panel", repair: playerCards_1.ensureCheckpointCardPanel, enabled: settings.features.checkpointCards },
                 { key: "inquiry", channelId: config_1.PLAYER_COUNT_CHANNEL_ID, label: "Player inquiry panel", repair: () => (0, inquiry_1.ensureInquiryPanelForGuild)(guild), enabled: true },
-                { key: "staffEmbed", channelId: config_1.STAFF_EMBED_CHANNEL_ID, label: "Staff embed builder", repair: () => (0, embedBuilder_1.ensureStaffEmbedPanelForGuild)(guild), enabled: true }
+                { key: "staffEmbed", channelId: config_1.STAFF_EMBED_CHANNEL_ID, label: "Staff embed builder", repair: () => (0, embedBuilder_1.ensureStaffEmbedPanelForGuild)(guild), enabled: true },
+                { key: "owner", channelId: config_1.OWNER_PANEL_CHANNEL_ID, label: "Owner Control", repair: () => (0, owner_1.ensureOwnerPanelForGuild)(guild), enabled: true },
+                { key: "store", channelId: config_1.STORE_CHANNEL_ID, label: "Store", repair: () => (0, store_1.ensureStorePanelsForGuild)(guild), enabled: true },
+                { key: "storeAdmin", channelId: config_1.STORE_ADMIN_CHANNEL_ID, label: "Store management", repair: () => (0, store_1.ensureStorePanelsForGuild)(guild), enabled: true }
             ];
             for (const panel of panels) {
                 if (!panel.enabled)
                     continue;
                 const channel = await (0, staffDesk_1.fetchGuildTextChannel)(panel.channelId);
-                const messageId = (0, store_1.getGuildPanelMessageId)(guild.id, panel.key);
+                const messageId = (0, store_2.getGuildPanelMessageId)(guild.id, panel.key);
                 const exists = Boolean(channel && messageId && await channel.messages.fetch(messageId).catch(() => null));
                 if (exists)
                     continue;

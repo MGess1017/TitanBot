@@ -11,6 +11,8 @@ import {
 import { ensureCheckpointCardPanel, handleCheckpointInteraction } from "./bot/panels/playerCards";
 import { ensureInquiryPanelForGuild, handleInquiryInteraction } from "./bot/panels/inquiry";
 import { ensureStaffEmbedPanelForGuild, ensureStaffEmbedSchedulerForGuild, handleStaffEmbedInteraction, stopStaffEmbedScheduler } from "./bot/panels/embedBuilder";
+import { ensureOwnerPanelForGuild, handleOwnerInteraction } from "./bot/panels/owner";
+import { ensureStorePanelsForGuild, handleStoreInteraction } from "./bot/panels/store";
 import { client } from "./bot/core/client";
 import {
     awardEngagementXp, processVoiceXpSessions, seedConnectedVoiceXpSessions, trackVoiceXpConnection,
@@ -122,6 +124,8 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
             purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
+                runAsyncWithBoundary("ownerPanelInit", () => ensureOwnerPanelForGuild(guild));
+                runAsyncWithBoundary("storePanelsInit", () => ensureStorePanelsForGuild(guild));
                 await removeLegacyReportPanelForGuild(guild);
                 await ensureAdminReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
@@ -150,6 +154,8 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
             purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
+                runAsyncWithBoundary("ownerPanelInit", () => ensureOwnerPanelForGuild(guild));
+                runAsyncWithBoundary("storePanelsInit", () => ensureStorePanelsForGuild(guild));
                 await removeLegacyReportPanelForGuild(guild);
                 await ensureAdminReportPanelForGuild(guild);
                 await ensurePermanentTicketPanelForGuild(guild);
@@ -330,6 +336,8 @@ process.on("beforeExit", () => {
 
 client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionCreate", async () => {
     if (shuttingDown) return;
+    if (await handleOwnerInteraction(interaction)) return;
+    if (await handleStoreInteraction(interaction)) return;
     if (await handleStaffEmbedInteraction(interaction)) return;
     if (await handleInquiryInteraction(interaction)) return;
     if (await handleProfileInteraction(interaction)) return;

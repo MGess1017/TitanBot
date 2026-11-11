@@ -45,6 +45,9 @@ type GuildModerationState = {
         playerCount?: string | null;
         inquiry?: string | null;
         staffEmbed?: string | null;
+        owner?: string | null;
+        store?: string | null;
+        storeAdmin?: string | null;
         xpLeaderboard?: string | null;
         xpCrate?: string | null;
         checkpointCard?: string | null;

@@ -165,10 +165,15 @@ function buildModerationCommandHandlers(deps) {
             const durationMs = deps.parseDurationMs(durationRaw);
             if (!durationMs)
                 return "Invalid duration. Use values like 30m, 6h, or 2d.";
-            const member = await guild.members.fetch(target.id).catch(() => null);
-            if (!member)
-                return "Unable to find that member in this server.";
-            await member.ban({ reason: `Tempban: ${reason}` });
+            const authorized = await deps.authorizeModerationAction(interaction, target.id, "ban");
+            if ("error" in authorized)
+                return authorized.error;
+            const result = await deps.executeModerationQuotaAction({
+                guildId: authorized.guild.id, action: "ban", userId: interaction.user.id, targetId: target.id,
+                requestId: interaction.id, ownerId: authorized.guild.ownerId, reason: `Tempban: ${reason}`
+            }, () => authorized.member.ban({ reason: `Tempban: ${reason}` }));
+            if (!result.ok && !result.discordSucceeded)
+                return result.message;
             setTimeout(() => {
                 void guild.members.unban(target.id, "Tempban expired").catch(() => undefined);
             }, durationMs);
@@ -178,7 +183,7 @@ function buildModerationCommandHandlers(deps) {
                 { name: "Duration", value: durationRaw, inline: true },
                 { name: "Reason", value: reason }
             ]);
-            return `⛔ ${target.username} has been temp-banned for ${durationRaw}.`;
+            return result.ok ? `⛔ ${target.username} has been temp-banned for ${durationRaw}.` : result.message;
         },
         purge: async (interaction) => {
             const adminError = deps.requireAdministrator(interaction);

@@ -393,10 +393,11 @@ export function ensureTicketConfig(guildId: string): TicketConfig {
     return cfg;
 }
 
-export type TicketCaseBucket = "support" | "report";
+export type TicketCaseBucket = "support" | "report" | "store";
 
 export function getTicketCaseBucket(categoryOrReason: string | null | undefined): TicketCaseBucket {
-    return classifyTicketCategory(categoryOrReason || "general") === "report" ? "report" : "support";
+    const category = classifyTicketCategory(categoryOrReason || "general");
+    return category === "report" || category === "store" ? category : "support";
 }
 
 export function findOpenTicketByOwnerInBucket(guildId: string, ownerId: string, bucket: TicketCaseBucket): TicketEntry | null {
@@ -437,6 +438,7 @@ export function buildTicketSlaThresholds(ticket: TicketEntry): { firstResponseWa
 }
 
 export async function autoRouteTicket(guild: Guild, ticket: TicketEntry): Promise<void> {
+    if (ticket.category === "store") return;
     const role = guild.roles.cache.get(TICKET_HANDLER_ROLE_ID) || await guild.roles.fetch(TICKET_HANDLER_ROLE_ID).catch(() => null);
     if (!role) return;
 

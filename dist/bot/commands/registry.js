@@ -42,6 +42,7 @@ const config_1 = require("../core/config");
 const ops_1 = require("../core/ops");
 const audit_1 = require("../core/audit");
 const store_1 = require("../moderation/store");
+const quotas_1 = require("../moderation/quotas");
 const store_2 = require("../tickets/store");
 const records_1 = require("../tickets/records");
 const opsPanel_1 = require("../tickets/opsPanel");
@@ -99,5 +100,7 @@ exports.moderationCommandHandlers = (0, moderationCommands_1.buildModerationComm
     rejectIfDuplicateCommand: ops_1.rejectIfDuplicateCommand,
     sendModLog: store_1.sendModLog,
     parseDurationMs: store_1.parseDurationMs,
+    authorizeModerationAction: quotas_1.authorizeModerationAction,
+    executeModerationQuotaAction: quotas_1.executeModerationQuotaAction,
     getAvatar: help_1.getAvatar
 });

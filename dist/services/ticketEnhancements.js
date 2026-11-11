@@ -14,6 +14,8 @@ exports.buildTicketIntakeReason = buildTicketIntakeReason;
 exports.buildReportIntakeReason = buildReportIntakeReason;
 function classifyTicketCategory(reason) {
     const text = String(reason || "").toLowerCase();
+    if (text === "store")
+        return "store";
     if (/appeal|ban|mute|timeout/.test(text))
         return "appeal";
     if (/billing|payment|purchase|refund|charge/.test(text))
@@ -97,6 +99,7 @@ function getTicketSlaPolicy(category, priority) {
     const normalized = classifyTicketCategory(category);
     const base = {
         general: { name: "General", firstResponseMs: 15 * 60 * 1000, resolveMs: 24 * 60 * 60 * 1000 },
+        store: { name: "Store Inquiry", firstResponseMs: 15 * 60 * 1000, resolveMs: 24 * 60 * 60 * 1000 },
         bug: { name: "Bug", firstResponseMs: 12 * 60 * 1000, resolveMs: 18 * 60 * 60 * 1000 },
         appeal: { name: "Appeal", firstResponseMs: 10 * 60 * 1000, resolveMs: 12 * 60 * 60 * 1000 },
         billing: { name: "Billing", firstResponseMs: 8 * 60 * 1000, resolveMs: 8 * 60 * 60 * 1000 },

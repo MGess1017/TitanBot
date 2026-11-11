@@ -3,10 +3,12 @@ import { Guild, MessageFlags, PermissionFlagsBits, type Interaction } from "disc
 import { getJsonSaveFailures } from "../../runtime/jsonPersistence";
 import { type AntiRaidDetection } from "../../features/antiRaid";
 import { buildHealthPayload, buildIncidentAlert, healthSignature, type HealthIssue } from "../../features/staffHub";
-import { JOIN_WELCOME_CHANNEL_ID, PERMANENT_TICKET_PANEL_CHANNEL_ID, PLAYER_COUNT_CHANNEL_ID, STAFF_EMBED_CHANNEL_ID, WHATS_NEW_CHANNEL_ID } from "../core/config";
+import { JOIN_WELCOME_CHANNEL_ID, OWNER_PANEL_CHANNEL_ID, PERMANENT_TICKET_PANEL_CHANNEL_ID, PLAYER_COUNT_CHANNEL_ID, STAFF_EMBED_CHANNEL_ID, STORE_ADMIN_CHANNEL_ID, STORE_CHANNEL_ID, WHATS_NEW_CHANNEL_ID } from "../core/config";
 import { ensureCheckpointCardPanel } from "../panels/playerCards";
 import { ensureInquiryPanelForGuild } from "../panels/inquiry";
 import { ensureStaffEmbedPanelForGuild } from "../panels/embedBuilder";
+import { ensureOwnerPanelForGuild } from "../panels/owner";
+import { ensureStorePanelsForGuild } from "../panels/store";
 import { client } from "../core/client";
 import { ensureXpCratePanel, refreshXpLeaderboardPanel } from "../panels/xpPanels";
 import { antiRaidIncidents, botSettingsStore, isFeatureEnabled, SAVE_HEALTH } from "../core/settings";
@@ -115,6 +117,9 @@ export async function runStaffHealthCheck(reason: string): Promise<{ issues: Hea
                 { id: settings.channels.xpPanels, label: "XP panels", files: true },
                 { id: PLAYER_COUNT_CHANNEL_ID, label: "Player inquiry", files: true },
                 { id: STAFF_EMBED_CHANNEL_ID, label: "Staff embed builder", files: false },
+                { id: OWNER_PANEL_CHANNEL_ID, label: "Owner Control", files: false },
+                { id: STORE_CHANNEL_ID, label: "Store", files: false },
+                { id: STORE_ADMIN_CHANNEL_ID, label: "Store management", files: false },
                 { id: settings.channels.checkpointCards, label: "Player rating", files: true },
                 { id: WHATS_NEW_CHANNEL_ID, label: "What's New", files: false },
                 { id: JOIN_WELCOME_CHANNEL_ID, label: "Welcome", files: false },
@@ -140,7 +145,10 @@ export async function runStaffHealthCheck(reason: string): Promise<{ issues: Hea
                 { key: "xpCrate", channelId: settings.channels.xpPanels, label: "FN Xp Panel", repair: ensureXpCratePanel, enabled: settings.features.xpCrates },
                 { key: "checkpointCard", channelId: settings.channels.checkpointCards, label: "Arena Player Rating panel", repair: ensureCheckpointCardPanel, enabled: settings.features.checkpointCards },
                 { key: "inquiry", channelId: PLAYER_COUNT_CHANNEL_ID, label: "Player inquiry panel", repair: () => ensureInquiryPanelForGuild(guild), enabled: true },
-                { key: "staffEmbed", channelId: STAFF_EMBED_CHANNEL_ID, label: "Staff embed builder", repair: () => ensureStaffEmbedPanelForGuild(guild), enabled: true }
+                { key: "staffEmbed", channelId: STAFF_EMBED_CHANNEL_ID, label: "Staff embed builder", repair: () => ensureStaffEmbedPanelForGuild(guild), enabled: true },
+                { key: "owner", channelId: OWNER_PANEL_CHANNEL_ID, label: "Owner Control", repair: () => ensureOwnerPanelForGuild(guild), enabled: true },
+                { key: "store", channelId: STORE_CHANNEL_ID, label: "Store", repair: () => ensureStorePanelsForGuild(guild), enabled: true },
+                { key: "storeAdmin", channelId: STORE_ADMIN_CHANNEL_ID, label: "Store management", repair: () => ensureStorePanelsForGuild(guild), enabled: true }
             ];
             for (const panel of panels) {
                 if (!panel.enabled) continue;

@@ -90,9 +90,9 @@ async function reconcileOwnerTicketDuplicates(guild, owner, canonicalChannelId, 
         });
     }
 }
-async function createTicketChannel(guild, ownerId, reason, priority = "normal", bypassDeflection = false, submittedIntake) {
+async function createTicketChannel(guild, ownerId, reason, priority = "normal", bypassDeflection = false, submittedIntake, storeItem) {
     (0, metrics_1.recordTicketCreateAttempt)();
-    const requestedBucket = (0, store_1.getTicketCaseBucket)(submittedIntake?.category || reason);
+    const requestedBucket = storeItem ? "store" : (0, store_1.getTicketCaseBucket)(submittedIntake?.category || reason);
     if (!(0, ops_1.tryAcquireTicketCreateLock)(guild.id, ownerId)) {
         (0, metrics_1.recordTicketCreateFailure)("in_flight_lock");
         return { error: "Ticket creation is already in progress for your account. Please wait a moment and try again." };
@@ -101,6 +101,30 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
         (0, records_1.purgeLegacyImportedTicketRecords)(guild.id);
         await (0, records_1.pruneDeletedTicketRecords)(guild);
         await (0, records_1.pruneInaccessibleOwnerTicketRecords)(guild);
+        if (storeItem) {
+            await guild.fetch();
+            const channels = await guild.channels.fetch();
+            for (const channel of channels.values()) {
+                if (!channel || channel.type !== discord_js_1.ChannelType.GuildText || !/^Store item #\d+ revision \d+ inquiry for /.test(channel.topic || "")
+                    || (0, records_1.findChannelOwnerFromTopic)(channel.topic) !== ownerId)
+                    continue;
+                const tracked = (0, store_1.findTicketByChannel)(channel.id);
+                if (tracked && (tracked.category === "store" || !["open", "claimed"].includes(tracked.status)))
+                    continue;
+                const recovered = tracked || (0, records_1.createTicketEntry)(guild.id, ownerId, channel.id, "Recovered store inquiry: review the existing channel before requesting another item.", priority);
+                if (!recovered)
+                    return { error: `An existing store channel <#${channel.id}> needs owner review; its recovery could not be saved.` };
+                if (recovered.guildId !== guild.id || recovered.ownerId !== ownerId)
+                    throw new Error("Store ticket channel conflicts with an existing ticket record.");
+                recovered.category = "store";
+                recovered.intakeCategory = "store";
+                recovered.assignedToId = guild.ownerId;
+                recovered.status = "claimed";
+                if (!(0, store_1.saveTicketStore)())
+                    return { error: `An existing store channel <#${channel.id}> needs owner review; its routing could not be saved.` };
+                (0, audit_1.appendAuditEvent)("store_ticket_recovered", { guildId: guild.id, ownerId, channelId: channel.id, ticketId: recovered.id });
+            }
+        }
         if (!bypassDeflection) {
             const deflection = (0, store_1.evaluateTicketDeflection)(guild.id, ownerId, reason);
             if (deflection.blocked) {
@@ -122,6 +146,8 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
                 : false;
             // Keep exactly one valid visible open/claimed ticket for this owner.
             if (existingChannel && ownerCanViewExisting) {
+                if (storeItem)
+                    return { error: `You already have an open store inquiry: <#${existing.channelId}>. Add this item number there; the owner will help you.` };
                 break;
             }
             const idx = store_1.ticketStore.tickets.findIndex(t => t.id === stale.id);
@@ -164,25 +190,38 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
                     : `You already have an open support ticket: <#${canonical}>` };
         }
         const cfg = (0, store_1.ensureTicketConfig)(guild.id);
+        if (storeItem)
+            await guild.fetch();
+        const botMember = storeItem ? await guild.members.fetchMe({ force: true }) : guild.members.me;
+        if (storeItem && (!botMember?.permissions.has(discord_js_1.PermissionFlagsBits.ManageChannels)
+            || !botMember.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles)))
+            return { error: "The bot needs Manage Channels and Manage Roles to create a private owner ticket." };
+        if (storeItem)
+            await guild.members.fetch({ user: guild.ownerId, force: true });
         const configuredOrDefaultCategoryId = cfg.categoryId || config_1.TICKET_DEFAULT_CATEGORY_ID;
         const configuredOrDefaultCategory = await guild.channels.fetch(configuredOrDefaultCategoryId).catch(() => null);
         const parentCategoryId = configuredOrDefaultCategory && configuredOrDefaultCategory.type === discord_js_1.ChannelType.GuildCategory
             ? configuredOrDefaultCategory.id
             : undefined;
-        const channelName = `ops-${owner.user.username.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 18) || "member"}`;
+        const channelName = `${storeItem ? "store" : "ops"}-${owner.user.username.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 18) || "member"}`;
         const created = await guild.channels.create({
             name: channelName,
             type: discord_js_1.ChannelType.GuildText,
             parent: parentCategoryId,
-            topic: `Support ticket for ${owner.user.tag} (${owner.id})`,
+            topic: storeItem ? `Store item #${storeItem.number} revision ${storeItem.revision} inquiry for ${owner.user.tag} (${owner.id})`
+                : `Support ticket for ${owner.user.tag} (${owner.id})`,
             permissionOverwrites: [
                 { id: guild.roles.everyone.id, deny: [discord_js_1.PermissionFlagsBits.ViewChannel] },
                 { id: owner.id, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.ReadMessageHistory] },
-                { id: config_1.TICKET_HANDLER_ROLE_ID, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.ReadMessageHistory, discord_js_1.PermissionFlagsBits.ManageChannels] },
-                ...(guild.members.me ? [{ id: guild.members.me.id, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.ReadMessageHistory, discord_js_1.PermissionFlagsBits.ManageChannels] }] : [])
+                ...(storeItem && guild.ownerId === owner.id ? [] : [{ id: storeItem ? guild.ownerId : config_1.TICKET_HANDLER_ROLE_ID, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.ReadMessageHistory, discord_js_1.PermissionFlagsBits.ManageChannels] }]),
+                ...(botMember ? [{ id: botMember.id, allow: [discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.ReadMessageHistory, discord_js_1.PermissionFlagsBits.ManageChannels,
+                            ...(storeItem ? [discord_js_1.PermissionFlagsBits.EmbedLinks, discord_js_1.PermissionFlagsBits.AttachFiles] : [])] }] : [])
             ],
             reason: `Ticket opened by ${owner.user.tag}`
-        }).catch(() => null);
+        }).catch(error => {
+            console.error("[tickets] Channel creation failed:", error);
+            return null;
+        });
         if (!created || created.type !== discord_js_1.ChannelType.GuildText) {
             (0, metrics_1.recordTicketCreateFailure)("channel_create_failed");
             return { error: "Failed to create ticket channel." };
@@ -223,9 +262,15 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
         ticket.intakeOrderId = intake.orderId;
         ticket.intakeEvidence = intake.evidence;
         (0, store_1.applyTicketMetadata)(ticket, reason);
-        if (submittedIntake?.category) {
-            ticket.category = (0, ticketEnhancements_1.classifyTicketCategory)(submittedIntake.category);
+        if (submittedIntake?.category || storeItem) {
+            ticket.category = storeItem ? "store" : (0, ticketEnhancements_1.classifyTicketCategory)(submittedIntake.category);
             ticket.slaPolicy = (0, ticketEnhancements_1.getTicketSlaPolicy)(ticket.category, priority);
+        }
+        if (storeItem) {
+            ticket.intakeCategory = "store";
+            ticket.assignedToId = guild.ownerId;
+            ticket.status = "claimed";
+            ticket.tags = ["store", `item-${storeItem.number}`, `revision-${storeItem.revision}`];
         }
         if (!(0, store_1.saveTicketStore)()) {
             console.error(`Ticket #${ticket.id} intake fields could not be saved.`);
@@ -233,7 +278,10 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
         }
         (0, audit_1.appendAuditEvent)("ticket_open", { guildId: guild.id, ticketId: ticket.id, ownerId: owner.id, channelId: created.id, reason, intake });
         const intro = (0, opsPanel_1.buildTicketOpsEmbed)(ticket);
-        const panelMessage = await created.send({ content: `<@${owner.id}>`, embeds: [intro], components: (0, opsPanel_1.buildTicketOpsComponents)(ticket), allowedMentions: { parse: [], users: [owner.id] } }).catch(error => {
+        const panelMessage = await created.send({
+            content: `<@${owner.id}>`, embeds: [intro], components: (0, opsPanel_1.buildTicketOpsComponents)(ticket), allowedMentions: { parse: [], users: [owner.id] },
+            ...(storeItem ? { files: [new discord_js_1.AttachmentBuilder(Buffer.from(`FNTCORD STORE REQUEST / NOT A PURCHASE\nReference: ${ticket.intakeOrderId}\nItem #${storeItem.number}: ${storeItem.name}\nRevision: ${storeItem.revision}\n\n${ticket.intakeDetails}`, "utf8"), { name: `store-item-${storeItem.number}-request.txt` })] } : {})
+        }).catch(error => {
             console.error(`Could not post ticket #${ticket.id} panel:`, error);
             return null;
         });
@@ -247,8 +295,11 @@ async function createTicketChannel(guild, ownerId, reason, priority = "normal", 
             { name: "Channel", value: `<#${created.id}>`, inline: true },
             { name: "Reason", value: reason || "No reason provided" }
         ]);
-        await (0, store_1.autoRouteTicket)(guild, ticket);
+        if (!storeItem)
+            await (0, store_1.autoRouteTicket)(guild, ticket);
         await (0, experience_1.notifyTicketRecipient)(ticket, "member_reply", `created:${ticket.id}`);
+        if (storeItem && !panelMessage)
+            return { error: `Your owner ticket <#${created.id}> exists and its request details are saved, but the request card could not be posted. Check bot Send Messages, Embed Links and Attach Files permissions; do not open another ticket.` };
         await reconcileOwnerTicketDuplicates(guild, owner, created.id, requestedBucket);
         return { channelId: created.id, ticketId: ticket.id };
     }
@@ -329,7 +380,7 @@ async function performCloseTicketChannel(guild, channelId, closedById, closeReas
             ReadMessageHistory: true,
             SendMessages: false
         });
-        await channel.permissionOverwrites.edit(config_1.TICKET_HANDLER_ROLE_ID, {
+        await channel.permissionOverwrites.edit(ticket.category === "store" ? guild.ownerId : config_1.TICKET_HANDLER_ROLE_ID, {
             ViewChannel: true,
             ReadMessageHistory: true,
             SendMessages: true,

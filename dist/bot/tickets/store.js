@@ -310,7 +310,8 @@ function ensureTicketConfig(guildId) {
     return cfg;
 }
 function getTicketCaseBucket(categoryOrReason) {
-    return (0, ticketEnhancements_1.classifyTicketCategory)(categoryOrReason || "general") === "report" ? "report" : "support";
+    const category = (0, ticketEnhancements_1.classifyTicketCategory)(categoryOrReason || "general");
+    return category === "report" || category === "store" ? category : "support";
 }
 function findOpenTicketByOwnerInBucket(guildId, ownerId, bucket) {
     return exports.ticketStore.tickets.find(ticket => ticket.guildId === guildId
@@ -342,6 +343,8 @@ function buildTicketSlaThresholds(ticket) {
     };
 }
 async function autoRouteTicket(guild, ticket) {
+    if (ticket.category === "store")
+        return;
     const role = guild.roles.cache.get(config_1.TICKET_HANDLER_ROLE_ID) || await guild.roles.fetch(config_1.TICKET_HANDLER_ROLE_ID).catch(() => null);
     if (!role)
         return;

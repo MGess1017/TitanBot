@@ -1,0 +1,108 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.STORE_ADMIN_TITLE = exports.STORE_TITLE = exports.STORE_PREFIX = void 0;
+exports.catalogItemEmbed = catalogItemEmbed;
+exports.buildStoreLauncher = buildStoreLauncher;
+exports.storeNavigation = storeNavigation;
+exports.buildStoreWorkspace = buildStoreWorkspace;
+exports.buildStoreEditModal = buildStoreEditModal;
+exports.buildStoreSimpleModal = buildStoreSimpleModal;
+exports.buildStoreConfirmation = buildStoreConfirmation;
+const discord_js_1 = require("discord.js");
+exports.STORE_PREFIX = "catalog:";
+exports.STORE_TITLE = "FNTCORD | Store";
+exports.STORE_ADMIN_TITLE = "FNTCORD | Store Management";
+const purple = 0x9b59b6;
+const safe = (text) => text.replace(/([\\`*_~|>])/g, "\\$1");
+function catalogItemEmbed(item) {
+    return new discord_js_1.EmbedBuilder().setColor(purple).setTitle(`FNTCORD | Item #${item.number} - ${item.name}`)
+        .setDescription(item.description).addFields({ name: "Listed Cost", value: safe(item.price), inline: true }, { name: "Category", value: safe(item.category), inline: true }, { name: "Availability", value: item.archived ? "Archived / hidden" : item.available ? "Accepting requests" : "Unavailable", inline: true }).setFooter({ text: `CATALOG ONLY / NO AUTOMATIC CHARGE / ITEM #${item.number} / REVISION ${item.revision}` });
+}
+function buildStoreLauncher(items, admin = false) {
+    const visible = items.filter(item => !item.archived);
+    const embed = new discord_js_1.EmbedBuilder().setColor(purple).setTitle(admin ? exports.STORE_ADMIN_TITLE : exports.STORE_TITLE)
+        .setDescription(admin
+        ? "Owner-only catalog management. Add numbered items, descriptions and listed costs; edit or archive listings privately."
+        : "Browse the catalog privately or request an item by number to open a ticket directly with the server owner.\nCatalog only: requests are not purchases; no currency is deducted.");
+    if (!admin) {
+        if (!visible.length)
+            embed.addFields({ name: "Catalog", value: "The owner has not published any items yet." });
+        for (const item of visible.slice(0, 5))
+            embed.addFields({
+                name: `#${item.number} - ${item.name} | ${item.available ? item.price : "Unavailable"}`.slice(0, 256),
+                value: `${safe(item.description.slice(0, 140))}${item.description.length > 140 ? "..." : ""}`
+            });
+        embed.setFooter({ text: `${visible.length} LISTINGS / FULL DESCRIPTIONS INSIDE / FNTCORD` });
+    }
+    const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(`${exports.STORE_PREFIX}${admin ? "admin" : "browse"}`).setLabel(admin ? "Manage Store" : "Browse Catalog").setStyle(discord_js_1.ButtonStyle.Primary));
+    if (!admin)
+        row.addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}number`).setLabel("Request by Item #").setStyle(discord_js_1.ButtonStyle.Secondary));
+    return { embeds: [embed], components: [row], allowedMentions: { parse: [] } };
+}
+function storeNavigation(session) {
+    return new discord_js_1.ActionRowBuilder().addComponents(...[["home", "Home"], ["back", "Back"], ["refresh", "Refresh"], ["customize", session.admin ? "Customize" : "Search"]].map(([action, label]) => new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}${action}:${session.id}`).setLabel(label).setStyle(discord_js_1.ButtonStyle.Secondary)));
+}
+function buildStoreWorkspace(session, allItems) {
+    const id = (action) => `${exports.STORE_PREFIX}${action}:${session.id}`;
+    const selected = allItems.find(item => item.number === session.selected);
+    const filtered = allItems.filter(item => (session.admin || !item.archived) && (!session.search
+        || `${item.number} ${item.name} ${item.category} ${item.description}`.toLowerCase().includes(session.search.toLowerCase())));
+    const pages = Math.max(1, Math.ceil(filtered.length / 5));
+    session.page = Math.min(Math.max(0, session.page), pages - 1);
+    const page = filtered.slice(session.page * 5, session.page * 5 + 5);
+    const embed = selected ? catalogItemEmbed(selected) : new discord_js_1.EmbedBuilder().setColor(purple)
+        .setTitle(session.admin ? exports.STORE_ADMIN_TITLE : exports.STORE_TITLE)
+        .setDescription(`${session.search ? `Search: ${safe(session.search)}\n` : ""}${filtered.length} listings / Page ${session.page + 1} of ${pages}\n${session.admin ? "Choose an item to edit its details, availability or publication status." : "Select an item for full details, then request it in a private owner ticket. No payment is taken."}`);
+    if (!selected) {
+        if (!page.length)
+            embed.addFields({ name: "No items", value: session.admin ? "Add your first listing to publish the catalog." : "No matching items are published." });
+        for (const item of page)
+            embed.addFields({ name: `#${item.number} - ${item.name}`.slice(0, 256),
+                value: `${safe(item.price)} / ${safe(item.category)} / ${item.archived ? "Archived" : item.available ? "Available" : "Unavailable"}\n${safe(item.description.slice(0, 150))}${item.description.length > 150 ? "..." : ""}` });
+    }
+    const components = [];
+    if (page.length)
+        components.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder().setCustomId(id("item")).setPlaceholder(session.admin ? "Manage item number" : "View item number")
+            .addOptions(page.map(item => ({ label: `#${item.number} - ${item.name}`.slice(0, 100), value: String(item.number), description: item.price.slice(0, 100) })))));
+    const actions = new discord_js_1.ActionRowBuilder();
+    if (session.admin) {
+        actions.addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("add")).setLabel("Add Item").setStyle(discord_js_1.ButtonStyle.Primary));
+        if (selected)
+            actions.addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("edit")).setLabel("Edit Item").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(id("availability")).setLabel(selected.available ? "Mark Unavailable" : "Mark Available").setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId(id("archive")).setLabel(selected.archived ? "Restore Listing" : "Archive Listing").setStyle(discord_js_1.ButtonStyle.Danger));
+    }
+    else if (selected && !selected.archived)
+        actions.addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("request")).setLabel(`Request Item #${selected.number}`).setStyle(discord_js_1.ButtonStyle.Primary).setDisabled(!selected.available));
+    if (actions.components.length)
+        components.push(actions);
+    components.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("previous")).setLabel("Previous Page").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(session.page === 0), new discord_js_1.ButtonBuilder().setCustomId(id("next")).setLabel("Next Page").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(session.page >= pages - 1)), storeNavigation(session));
+    return { content: "", embeds: [embed], components, attachments: [], allowedMentions: { parse: [] } };
+}
+function input(id, label, max, value, paragraph = false, required = true) {
+    const field = new discord_js_1.TextInputBuilder().setCustomId(id).setLabel(label).setMaxLength(max).setRequired(required)
+        .setStyle(paragraph ? discord_js_1.TextInputStyle.Paragraph : discord_js_1.TextInputStyle.Short);
+    if (value)
+        field.setValue(value);
+    return new discord_js_1.ActionRowBuilder().addComponents(field);
+}
+function buildStoreEditModal(session, item) {
+    return new discord_js_1.ModalBuilder().setCustomId(`${exports.STORE_PREFIX}save:${session.id}:${item?.number || 0}:${item?.revision || 0}`)
+        .setTitle(item ? `FNTCORD | Edit Item #${item.number}` : "FNTCORD | New Store Item")
+        .addComponents(input("name", "Item name", 80, item?.name), input("price", "Listed cost (include currency / units)", 80, item?.price), input("description", "Item description", 1000, item?.description, true), input("category", "Category", 40, item?.category || "General"), input("reason", "Reason for this catalog change", 300));
+}
+function buildStoreSimpleModal(session, action, item) {
+    const modal = new discord_js_1.ModalBuilder().setCustomId(`${exports.STORE_PREFIX}${action}_modal:${session.id}${item ? `:${item.number}:${item.revision}` : ""}`)
+        .setTitle(action === "search" ? "FNTCORD | Search Store" : action === "request" ? "FNTCORD | Request Store Item" : "FNTCORD | Update Listing");
+    if (action === "search")
+        modal.addComponents(input("search", "Name, category or item number (blank = all)", 100, session.search, false, false));
+    else if (action === "request")
+        modal.addComponents(input("number", "Item number", 12, item ? String(item.number) : undefined), input("notes", "Optional request details (no payment info)", 1000, undefined, true, false));
+    else
+        modal.addComponents(input("reason", "Reason for this catalog change", 300));
+    return modal;
+}
+function buildStoreConfirmation(session, token, embed, summary) {
+    return { content: summary, embeds: [embed], components: [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}confirm:${session.id}:${token}`).setLabel("Confirm Catalog Change").setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}back:${session.id}`).setLabel("Cancel").setStyle(discord_js_1.ButtonStyle.Secondary))
+        ], allowedMentions: { parse: [] } };
+}

@@ -109,6 +109,40 @@ export function queueJsonWrite(filePath: string, data: unknown): void {
     }
 }
 
+/** Commit an administrative correction without an older queued snapshot restoring it. */
+export function writeJsonSnapshotSync(filePath: string, data: unknown): void {
+    const file = path.resolve(filePath);
+    const queue = getQueue(file);
+    if (queue.running) throw new Error("This data is currently being saved. Please retry shortly.");
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+        const snapshot = JSON.stringify(data, null, 2);
+        if (snapshot === undefined) throw new Error("Cannot persist an undefined JSON value");
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const handle = fs.openSync(temporary, "wx");
+        try {
+            fs.writeFileSync(handle, snapshot, "utf8");
+            fs.fsyncSync(handle);
+        } finally {
+            fs.closeSync(handle);
+        }
+        for (const [source, target] of [[`${file}.bak.1`, `${file}.bak.2`], [`${file}.bak`, `${file}.bak.1`], [file, `${file}.bak`]]) {
+            if (fs.existsSync(source)) fs.copyFileSync(source, target);
+        }
+        fs.renameSync(temporary, file);
+        if (queue.timer) clearTimeout(queue.timer);
+        queue.timer = undefined;
+        queue.pending = undefined;
+        queue.health.lastSuccessAt = Date.now();
+        queue.health.lastError = "";
+    } catch (error) {
+        recordFailure(file, queue, error);
+        throw error;
+    } finally {
+        if (fs.existsSync(temporary)) fs.rmSync(temporary);
+    }
+}
+
 export function getJsonSaveHealth(filePath: string): Readonly<SaveHealth> {
     return getQueue(path.resolve(filePath)).health;
 }

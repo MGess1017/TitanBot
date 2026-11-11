@@ -396,7 +396,10 @@ async function runGuildXpRoleSyncJob(guild, sourceChannelId, startedByUserId) {
             .join(",");
         const user = (0, utils_1.ensureUser)(member.id);
         try {
-            await syncMemberXpRoles(member, user.xp, roleEntries);
+            const syncedXp = user.xp;
+            await syncMemberXpRoles(member, syncedXp, roleEntries);
+            if (user.xp !== syncedXp)
+                enqueueXpRoleSync(guild, member.id, user.xp);
         }
         catch (error) {
             addXpRoleDeadLetter({ guild, userId: member.id, xp: user.xp }, error instanceof Error ? error.message : String(error));
@@ -521,6 +524,8 @@ async function drainXpRoleSyncQueue() {
                 continue;
             let completed = false;
             for (let attempt = 1; attempt <= 3 && !completed; attempt++) {
+                // Owner corrections can reduce XP after a job was queued or dead-lettered.
+                job.xp = (0, utils_1.ensureUser)(job.userId).xp;
                 completed = await syncXpRolesForUserInGuild(job.guild, job.userId, job.xp);
                 if (!completed) {
                     updateXpRoleSyncMetrics(metrics => { metrics.retries += 1; });
@@ -542,7 +547,7 @@ function enqueueXpRoleSync(guild, userId, xp) {
         return;
     const existing = exports.XP_ROLE_SYNC_QUEUE.find(job => job.guild.id === guild.id && job.userId === userId);
     if (existing) {
-        existing.xp = Math.max(existing.xp, xp);
+        existing.xp = xp;
     }
     else {
         if (exports.XP_ROLE_SYNC_QUEUE.length >= 1000) {

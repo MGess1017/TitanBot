@@ -8,54 +8,47 @@ export type WhatsNewRelease = { id: string; title: string; intro: string; sectio
 export const WHATS_NEW_COLOR = 0x9b59b6;
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
-    id: "fnt-patch-008",
-    title: "FNTCORD — Patch 008: Workspace Navigation Repair",
-    intro: "Clean public launchers. Private workspaces. Your FNTCORD experience.",
+    id: "fnt-patch-009",
+    title: "FNTCORD — Patch 009: Owner Control & Store",
+    intro: "Private administration. An organized catalog. Direct owner support.",
     sections: [
         {
-            name: "01 • My Dashboard",
+            name: "01 • Owner Control",
             lines: [
-                "Your private dashboard brings together server and PMC levels, your next XP milestone, Arena setup progress, and a favorite shortcut.",
-                "Home, Back, Refresh, and Customize keep navigation consistent without adding channel clutter."
+                "Authorized owners can adjust server XP, PMC XP, FN Tokenz wallets/banks, and Access Points with before/after previews and saved receipts.",
+                "Feature switches and reward rates are managed privately. Every change requires a reason and explicit confirmation."
             ]
         },
         {
-            name: "02 • Card Studio & Settings",
+            name: "02 • Moderation Allowances",
             lines: [
-                "Settings are grouped into Appearance, Privacy, Notifications, and Linked Games. Preview XP/PMC art, owned theme accents, and visible highlights privately.",
-                "Private mode keeps future profile replies private and removes your stored public Arena card. Old command messages and leaderboards are not erased."
+                "Configure per-administrator ban/kick allowances for calendar days, Monday-start weeks, or months in UTC, with individual overrides.",
+                "Unlimited until configured; server owner exempt. Administrator authorization and existing Access Point badge tiers remain unchanged. Native Discord actions bypass bot quotas."
             ]
         },
         {
-            name: "03 • Player Card Workflow",
+            name: "03 • Owner-Managed Store",
             lines: [
-                "Track setup, edit your profile, refresh cards, and retry failed publication without reentering stats.",
-                "Cards show only key information; Detailed Breakdown keeps full statistics one button away."
+                "The store owner and designated manager can publish permanently numbered items with descriptions, categories and listed costs.",
+                "Private management includes previews, confirmed edits, availability controls, archiving and restoration."
             ]
         },
         {
-            name: "04 • Clear Data Sources",
+            name: "04 • Private Catalog Requests",
             lines: [
-                "Arena ratings are labeled Self-reported. XP/PMC progression is Bot-tracked. RuneScape results are API-sourced with a fetch timestamp.",
-                "Saved player names are preferences, not proof of account ownership. Cards are snapshots, not live gameplay."
+                "Browse, search and view item details privately. Request an item number to open a private ticket assigned directly to the server owner.",
+                "The catalog does not charge currency or confirm purchases. Item details and listed cost are saved with the request for manual fulfillment."
             ]
         },
         {
-            name: "05 • Staff Studio",
+            name: "05 • Reliability & Organization",
             lines: [
-                "Reusable templates, saved drafts, confirmed scheduled announcements, and publication history keep staff workflows organized.",
-                "Staff access, destination permissions, and mention safeguards remain enforced."
-            ]
-        },
-        {
-            name: "06 • Inquiry Navigation Repair",
-            lines: [
-                "Home and Back now use distinct controls even when they lead to the same workspace, fixing Discord's duplicate-component rejection.",
-                "Dashboard, workspace menus, settings, and nested navigation are regression-tested for unique component IDs."
+                "Public panels remain compact; customer replies and administration stay private. Existing support, inquiry, profiles and cosmetic shopping are preserved.",
+                "Persistent moderation reservations, one-use confirmations, stale-edit checks and duplicate-ticket protection keep changes accountable."
             ]
         }
     ],
-    footer: "FNTCORD • Patch 008 • Member Update"
+    footer: "FNTCORD • Patch 009 • Owner & Store Update"
 };
 
 export function buildWhatsNewEmbed(release: WhatsNewRelease = WHATS_NEW_RELEASE): EmbedBuilder {
