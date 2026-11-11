@@ -17,6 +17,7 @@ const audit_1 = require("../core/audit");
 const store_1 = require("../moderation/store");
 const channels_1 = require("../tickets/channels");
 const rateLimit_1 = require("../../runtime/rateLimit");
+const storeReviews_1 = require("../core/storeReviews");
 const sessions = new Map();
 const panelUpdates = new Map();
 let catalog;
@@ -30,7 +31,7 @@ async function upsertStorePanels(guild) {
         if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
             throw new Error(`The designated ${admin ? "store admin" : "store"} channel is unavailable.`);
         const title = admin ? storePanel_1.STORE_ADMIN_TITLE : storePanel_1.STORE_TITLE;
-        const payload = (0, storePanel_1.buildStoreLauncher)(items, admin);
+        const payload = (0, storePanel_1.buildStoreLauncher)(items, admin, (0, storeReviews_1.getStoreReviews)().reviews(guild.id));
         const savedId = (0, store_1.getGuildPanelMessageId)(guild.id, key);
         const saved = savedId ? await channel.messages.fetch(savedId).catch(error => {
             if (error instanceof discord_js_1.DiscordAPIError && error.code === 10008)
@@ -70,6 +71,10 @@ function createSession(userId, guildId, admin) {
     sessions.set(session.id, session);
     return session;
 }
+function workspace(session) {
+    const reviews = (0, storeReviews_1.getStoreReviews)();
+    return (0, storePanel_1.buildStoreWorkspace)(session, getStoreCatalog().list(session.guildId, session.admin), reviews.reviews(session.guildId), session.selected !== null && !!reviews.eligible(session.guildId, session.userId, session.selected));
+}
 async function handleStoreInteraction(interaction) {
     if (!(interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit())
         || !interaction.customId.startsWith(storePanel_1.STORE_PREFIX))
@@ -78,6 +83,18 @@ async function handleStoreInteraction(interaction) {
         if (!interaction.guild || ![config_1.STORE_CHANNEL_ID, config_1.STORE_ADMIN_CHANNEL_ID].includes(interaction.channelId))
             throw new Error("Use the designated store panels in this server.");
         const [, action, sessionId, itemNumber, revision] = interaction.customId.split(":");
+        if (action === "item_reviews" && interaction.isButton()) {
+            if (interaction.channelId !== config_1.STORE_CHANNEL_ID)
+                throw new Error("Use the public store panel.");
+            const item = getStoreCatalog().get(interaction.guild.id, Number(sessionId));
+            const reviews = item ? (0, storeReviews_1.getStoreReviews)().reviews(interaction.guild.id, item.number) : [];
+            if (!item || item.archived || !reviews.length)
+                throw new Error("This listing has no published reviews or is no longer listed.");
+            const reviewSession = createSession(interaction.user.id, interaction.guild.id, false);
+            reviewSession.selected = item.number;
+            await interaction.reply({ ...(0, storePanel_1.buildItemReviews)(reviewSession, item, reviews, 0), flags: discord_js_1.MessageFlags.Ephemeral });
+            return true;
+        }
         let session = sessionId ? sessions.get(sessionId) : undefined;
         if (sessionId && (!session || session.userId !== interaction.user.id || session.guildId !== interaction.guild.id || session.expiresAt <= Date.now())) {
             throw new Error("This private store session expired or belongs to someone else. Open a new workspace.");
@@ -101,13 +118,22 @@ async function handleStoreInteraction(interaction) {
             if (action === "number")
                 await interaction.showModal((0, storePanel_1.buildStoreSimpleModal)(session, "request"));
             else
-                await interaction.reply({ ...(0, storePanel_1.buildStoreWorkspace)(session, getStoreCatalog().list(session.guildId, session.admin)), flags: discord_js_1.MessageFlags.Ephemeral });
+                await interaction.reply({ ...workspace(session), flags: discord_js_1.MessageFlags.Ephemeral });
             return true;
         }
         if (!session)
             throw new Error("Open a new store workspace.");
         const store = getStoreCatalog();
         const selected = session.selected ? store.get(session.guildId, session.selected) : undefined;
+        if (action === "review" && interaction.isButton()) {
+            if (session.admin || !selected || selected.archived)
+                throw new Error("Select a live item in the public store first.");
+            const eligible = (0, storeReviews_1.getStoreReviews)().eligible(session.guildId, session.userId, selected.number);
+            if (!eligible)
+                throw new Error("You need an owner-confirmed fulfilled request that has not already been reviewed.");
+            await interaction.showModal((0, storePanel_1.buildReviewModal)(session, eligible.id));
+            return true;
+        }
         const adminActions = ["add", "edit", "save", "availability", "archive", "status_modal", "confirm"];
         if (adminActions.includes(action) && !session.admin)
             throw new Error("Catalog changes require the private store-admin workspace.");
@@ -138,6 +164,42 @@ async function handleStoreInteraction(interaction) {
         else
             await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         let notice = "";
+        if (["reviews", "review_page"].includes(action) && interaction.isButton()) {
+            const item = store.get(session.guildId, Number(itemNumber));
+            const reviews = item ? (0, storeReviews_1.getStoreReviews)().reviews(session.guildId, item.number) : [];
+            if (!item || (!session.admin && item.archived) || !reviews.length)
+                throw new Error("This listing has no published reviews or is no longer listed.");
+            session.selected = item.number;
+            const page = action === "review_page" ? Number(revision) : 0;
+            if (!Number.isSafeInteger(page))
+                throw new Error("Invalid reviews page.");
+            await interaction.editReply((0, storePanel_1.buildItemReviews)(session, item, reviews, page));
+            return true;
+        }
+        if (action === "review_submit" && interaction.isModalSubmit()) {
+            if (session.admin)
+                throw new Error("Submit reviews through the public store.");
+            const eligible = (0, storeReviews_1.getStoreReviews)().fulfillments(session.guildId).find(row => row.id === itemNumber && row.userId === session.userId);
+            const item = eligible ? store.get(session.guildId, eligible.itemNumber) : undefined;
+            if (!eligible || !item || item.archived)
+                throw new Error("This fulfilled request is not eligible for a review on a live listing.");
+            const rating = interaction.fields.getTextInputValue("rating").trim();
+            if (!/^[1-5]$/.test(rating))
+                throw new Error("Enter a star rating from 1 to 5.");
+            const review = (0, storeReviews_1.getStoreReviews)().submit(session.guildId, session.userId, eligible.id, Number(rating), interaction.fields.getTextInputValue("comment"));
+            (0, audit_1.appendAuditEvent)("store_review_published", { guildId: session.guildId, reviewId: review.id, itemNumber: review.itemNumber, ticketId: eligible.ticketId });
+            session.selected = item.number;
+            notice = "Your verified review is published and saved in the private owner review log.";
+            try {
+                await ensureStorePanelsForGuild(interaction.guild);
+            }
+            catch (error) {
+                console.error("[store] Review saved but launcher refresh failed:", error);
+                notice += " The public launcher could not refresh; reviews are available through Browse Catalog. Do not resubmit.";
+            }
+            await interaction.editReply({ ...workspace(session), content: notice });
+            return true;
+        }
         if (interaction.isModalSubmit() && action === "save") {
             const input = (0, storeCatalog_1.validateCatalogInput)({
                 name: interaction.fields.getTextInputValue("name"), price: interaction.fields.getTextInputValue("price"),
@@ -250,7 +312,7 @@ async function handleStoreInteraction(interaction) {
             else if (action !== "refresh")
                 throw new Error("Unknown store action. Open a new workspace.");
         }
-        await interaction.editReply({ ...(0, storePanel_1.buildStoreWorkspace)(session, store.list(session.guildId, session.admin)), content: notice });
+        await interaction.editReply({ ...workspace(session), content: notice });
     }
     catch (error) {
         console.error("[store] Interaction failed:", error);

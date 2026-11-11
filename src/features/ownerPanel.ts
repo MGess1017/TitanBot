@@ -7,12 +7,13 @@ import { OWNER_VALUE_FIELDS, type OwnerValueField, type OwnerValueOperation } fr
 
 export const OWNER_PANEL_TITLE = "FNTCORD | Owner Control";
 export const OWNER_PREFIX = "owner:";
-export type OwnerPage = "home" | "values" | "quotas" | "features" | "guardrails";
+export type OwnerPage = "home" | "values" | "quotas" | "features" | "guardrails" | "reviews";
 export type OwnerWorkspace = {
     id: string; actorId: string; guildId: string; expiresAt: number; page: OwnerPage;
     targetId: string | null; field: OwnerValueField; operation: OwnerValueOperation;
     quotaUserId: string | null; quotaScope: "guild" | "member"; quotaAction: "ban" | "kick"; period: "day" | "week" | "month";
     feature: FeatureToggle; reward: RewardSetting;
+    reviewPage?: number;
 };
 
 export function ownerNavigation(workspace: OwnerWorkspace) {
@@ -40,7 +41,7 @@ export function buildOwnerWorkspace(workspace: OwnerWorkspace, summary: string, 
     const select = (action: string, placeholder: string, choices: Array<{ value: string; label: string }>, current?: string) =>
         new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(id(action)).setPlaceholder(placeholder)
             .addOptions(choices.map(choice => ({ ...choice, default: choice.value === current }))));
-    const titles: Record<OwnerPage, string> = { home: "Owner Control", values: "Player Values", quotas: "Moderation Limits", features: "Feature Controls", guardrails: "Guardrails & History" };
+    const titles: Record<OwnerPage, string> = { home: "Owner Control", values: "Player Values", quotas: "Moderation Limits", features: "Feature Controls", guardrails: "Guardrails & History", reviews: "Store Review Log" };
     const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle(`FNTCORD | ${titles[workspace.page]}`)
         .setDescription(summary).setFooter({ text: "PRIVATE / CHANGES REQUIRE CONFIRMATION / SESSION EXPIRES IN 15 MINUTES" });
     if (detailFields.length) embed.addFields(detailFields.slice(0, 10));
@@ -49,7 +50,8 @@ export function buildOwnerWorkspace(workspace: OwnerWorkspace, summary: string, 
         components.push(select("page", "Choose an owner workspace", [
             { value: "values", label: "Player XP, FN Tokenz & Access Points" },
             { value: "quotas", label: "Ban / Kick Limits" }, { value: "features", label: "Feature & XP Rate Controls" },
-            { value: "guardrails", label: "Guardrails & Recent History" }
+            { value: "guardrails", label: "Guardrails & Recent History" },
+            { value: "reviews", label: "Store Fulfillment & Review Log" }
         ]));
     } else if (workspace.page === "values") {
         components.push(
@@ -72,6 +74,12 @@ export function buildOwnerWorkspace(workspace: OwnerWorkspace, summary: string, 
             new ButtonBuilder().setCustomId(id("quota_edit")).setLabel("Set Allowance").setStyle(ButtonStyle.Primary)
                 .setDisabled(workspace.quotaScope === "member" && !workspace.quotaUserId)
         ));
+    } else if (workspace.page === "reviews") {
+        components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(id("fulfill")).setLabel("Confirm Store Fulfillment").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(id("reviews_previous")).setLabel("Previous Log Page").setStyle(ButtonStyle.Secondary).setDisabled(!(workspace.reviewPage || 0)),
+            new ButtonBuilder().setCustomId(id("reviews_next")).setLabel("Next Log Page").setStyle(ButtonStyle.Secondary)
+        ));
     } else if (workspace.page === "features") {
         components.push(
             select("feature", "Feature switch", Object.entries(FEATURE_TOGGLES).map(([value, label]) => ({ value, label })), workspace.feature),
@@ -82,6 +90,13 @@ export function buildOwnerWorkspace(workspace: OwnerWorkspace, summary: string, 
     }
     components.push(ownerNavigation(workspace));
     return { content: "", embeds: [embed], components, attachments: [], allowedMentions: { parse: [] as const } };
+}
+
+export function buildFulfillmentModal(workspace: OwnerWorkspace) {
+    return new ModalBuilder().setCustomId(`${OWNER_PREFIX}fulfill_modal:${workspace.id}`).setTitle("FNTCORD | Confirm Fulfillment")
+        .addComponents(...[["ticket", "Store request ticket number"], ["reason", "Fulfillment details (no private info)"]].map(([id, label]) =>
+            new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId(id).setLabel(label)
+                .setStyle(id === "reason" ? TextInputStyle.Paragraph : TextInputStyle.Short).setRequired(true).setMaxLength(id === "reason" ? 300 : 12))));
 }
 
 export function buildOwnerModal(workspace: OwnerWorkspace, action: string, label: string, hint: string, current?: string) {

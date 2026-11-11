@@ -14,6 +14,7 @@ import * as persistence from "./jsonPersistence";
 import { ModerationQuotaStore } from "./moderationQuotas";
 import { getAccessPointBadge } from "../bot/pmc/visuals";
 import type { UserState } from "../utils";
+import { StoreReviews } from "./storeReviews";
 
 type TestUtils = {
     points: Record<string, UserState>; ensureUser(id: string): UserState;
@@ -110,12 +111,16 @@ async function main() {
             for (const id of ids) assert.ok(id!.length <= 100);
         }
         validatePayload(features.buildOwnerLauncher());
-        for (const page of ["home", "values", "quotas", "features", "guardrails"] as const) validatePayload(features.buildOwnerWorkspace({ ...base, page }, "Test"));
+        for (const page of ["home", "values", "quotas", "features", "guardrails", "reviews"] as const) validatePayload(features.buildOwnerWorkspace({ ...base, page }, "Test"));
+        assert.equal(features.buildFulfillmentModal(base).toJSON().components.length, 2);
         validatePayload(features.buildOwnerConfirmation(base, randomUUID(), "Confirm"));
         assert.equal(features.buildOwnerModal(base, "amount_modal", "Amount", "Integer").toJSON().components.length, 2);
 
         const botSettingsStore = new settings.BotSettingsStore(path.join(directory, "settings.json"), settings.defaultBotSettings({ modAlerts: "1", xpPanels: "2", checkpointCards: "3" }));
         const quotaStore = new ModerationQuotaStore(path.join(directory, "quota.json"));
+        const reviewStore = new StoreReviews(path.join(directory, "reviews.json"));
+        const storeTicket = { id: 7, guildId, ownerId: target, category: "store", intakeOrderId: "CAT-1-R2", updatedAt: 1, status: "claimed" };
+        let actualOwner = actor;
         const panelExports: Record<string, any> = {};
         const roleJobs: unknown[] = [];
         let leaderboardUpdates = 0, panelSends = 0, panelEdits = 0;
@@ -143,6 +148,9 @@ async function main() {
                 if (id === "../../utils") return { ...utils, getPointsSaveHealth: () => ({ lastError: "" }) };
                 if (id === "../core/config") return { OWNER_PANEL_CHANNEL_ID: channelId, OWNER_PANEL_USER_IDS: [actor, otherOwner] };
                 if (id === "../core/audit") return { appendAuditEvent: () => undefined };
+                if (id === "../core/storeReviews") return { getStoreReviews: () => reviewStore };
+                if (id === "./store") return { getStoreCatalog: () => ({ get: () => ({ number: 1, name: "Supply Pack" }) }) };
+                if (id === "../tickets/store") return { findTicketById: (ticketId: number) => ticketId === 7 ? storeTicket : null };
                 if (id === "../core/settings") return { botSettingsStore, applyRewardSettings: () => undefined };
                 if (id === "../moderation/store") return {
                     getGuildPanelMessageId: () => storedPanelId,
@@ -162,7 +170,7 @@ async function main() {
             compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, esModuleInterop: true }
         }).outputText, panelContext);
         const sessions = panelExports.sessions as Map<string, features.OwnerWorkspace & { pending?: { id: string } }>;
-        const guild = { id: guildId, client: { user: { id: "bot" } },
+        const guild = { id: guildId, fetch: async () => ({ ownerId: actualOwner }), client: { user: { id: "bot" } },
             channels: { fetch: async (requestedId: string) => {
                 assert.equal(requestedId, channelId, "Owner launcher must only be posted in its designated channel");
                 return panelChannel;
@@ -254,6 +262,37 @@ async function main() {
         assert.equal(botSettingsStore.get().features.messageXp, false);
         await run("modal", `reward_modal:${session.id}`, { fields: { value: "999999", reason: "Invalid" } });
         assert.equal(botSettingsStore.get().rewards.messageXp, 100);
+        await run("select", `page:${session.id}`, { values: ["reviews"] });
+        const log = await run("button", `refresh:${session.id}`);
+        assert.match(log.embeds[0].toJSON().description, /0 reviews \/ 0 fulfilled/);
+        assert.match((await run("modal", `fulfill_modal:${session.id}`, { fields: { ticket: "999", reason: "Wrong request" } })).content, /tracked store request/);
+        await run("modal", `fulfill_modal:${session.id}`, { fields: { ticket: "7", reason: "Delivered" } });
+        const staleToken = session.pending!.id;
+        storeTicket.updatedAt++;
+        assert.match((await run("button", `confirm:${session.id}:${staleToken}`)).content, /changed since preview/);
+        storeTicket.category = "general";
+        assert.match((await run("modal", `fulfill_modal:${session.id}`, { fields: { ticket: "7", reason: "Wrong category" } })).content, /tracked store request/);
+        storeTicket.category = "store";
+        await run("modal", `fulfill_modal:${session.id}`, { fields: { ticket: "7", reason: "Delivered" } });
+        const ownerChanged = session.pending!.id;
+        actualOwner = otherOwner;
+        assert.match((await run("button", `confirm:${session.id}:${ownerChanged}`)).content, /current actual server owner/);
+        assert.equal(reviewStore.fulfillments(guildId).length, 0);
+        assert.match((await run("modal", `fulfill_modal:${session.id}`, { fields: { ticket: "7", reason: "Not owner" } })).content, /actual server owner/);
+        actualOwner = actor;
+        await run("modal", `fulfill_modal:${session.id}`, { fields: { ticket: "7", reason: "Delivered" } });
+        const fulfilled = await run("button", `confirm:${session.id}:${session.pending!.id}`);
+        assert.match(fulfilled.content, /Fulfillment saved/);
+        const fulfillmentReceipt = reviewStore.fulfillments(guildId)[0];
+        assert.equal(fulfillmentReceipt.userId, target, "review eligibility must come from the ticket recipient, never a manually supplied user");
+        assert.equal(fulfillmentReceipt.itemNumber, 1);
+        assert.equal(fulfillmentReceipt.itemRevision, 2);
+        assert.match((await run("modal", `fulfill_modal:${session.id}`, { fields: { ticket: "7", reason: "Duplicate" } })).content, /already marked fulfilled/);
+        reviewStore.submit(guildId, target, fulfillmentReceipt.id, 2, "Verified customer feedback");
+        const reviewLog = await run("button", `refresh:${session.id}`);
+        assert.match(reviewLog.embeds[0].toJSON().description, /1 reviews \/ 1 fulfilled/);
+        assert.ok(JSON.stringify(reviewLog).includes("Verified customer feedback"));
+        assert.ok(JSON.stringify(reviewLog).includes(target), "customer identities stay available in the private owner log");
         session.expiresAt = Date.now() - 1;
         assert.match((await run("button", `refresh:${session.id}`)).content, /expired/);
         console.log("Owner Control: arithmetic, durable corrections, rollback, AP tiers, UI, authorization, replay, quota and settings checks passed.");

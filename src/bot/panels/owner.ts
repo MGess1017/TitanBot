@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ChannelType, DiscordAPIError, MessageFlags, PermissionFlagsBits, type Guild, type Interaction } from "discord.js";
 import {
-    buildOwnerConfirmation, buildOwnerLauncher, buildOwnerModal, buildOwnerWorkspace,
+    buildFulfillmentModal, buildOwnerConfirmation, buildOwnerLauncher, buildOwnerModal, buildOwnerWorkspace,
     OWNER_PANEL_TITLE, OWNER_PREFIX, type OwnerWorkspace, type OwnerPage
 } from "../../features/ownerPanel";
 import { FEATURE_TOGGLES, REWARD_SETTINGS, type FeatureToggle, type RewardSetting } from "../../features/botSettings";
@@ -18,8 +18,13 @@ import { activeRaidEncounters } from "../raid/raids";
 import { rejectIfRateLimited } from "../../runtime/rateLimit";
 import { getAccessPointBadge } from "../pmc/visuals";
 import type { QuotaPolicy } from "../../runtime/moderationQuotas";
+import { getStoreReviews } from "../core/storeReviews";
+import { getStoreCatalog } from "./store";
+import { findTicketById, type TicketEntry } from "../tickets/store";
+import type { StoreFulfillment } from "../../runtime/storeReviews";
 
 type PendingOwnerChange =
+    | { kind: "fulfillment"; fulfillment: Omit<StoreFulfillment, "id" | "at">; before: string }
     | { kind: "value"; change: OwnerValueChange }
     | { kind: "quota"; userId: string | null; action: "ban" | "kick"; policy: QuotaPolicy | null; before: string; reason: string }
     | { kind: "feature"; key: FeatureToggle; before: boolean; after: boolean; reason: string }
@@ -61,6 +66,26 @@ export async function ensureOwnerPanelForGuild(guild: Guild): Promise<void> {
 
 function describeOwnerSession(session: OwnerSession) {
     const settings = botSettingsStore.get();
+    if (session.page === "reviews") {
+        const store = getStoreReviews();
+        const fulfillments = store.fulfillments(session.guildId);
+        const reviews = store.reviews(session.guildId);
+        const entries = [
+            ...fulfillments.map(row => ({ at: row.at, name: `Fulfilled / Item #${row.itemNumber} / Ticket #${row.ticketId}`,
+                value: `Member: <@${row.userId}> / Confirmed by: <@${row.actorId}>\n${row.reason}\nReceipt: \`${row.id}\`` })),
+            ...reviews.map(row => {
+                const fulfillment = fulfillments.find(entry => entry.id === row.fulfillmentId)!;
+                return { at: row.at, name: `Review / Item #${row.itemNumber} / ${row.rating} of 5`,
+                    value: `Member: <@${row.userId}> / Ticket #${fulfillment.ticketId}\n${row.comment}\nReceipt: \`${row.id}\`` };
+            })
+        ].sort((a, b) => b.at - a.at);
+        const pages = Math.max(1, Math.ceil(entries.length / 3));
+        session.reviewPage = Math.max(0, Math.min(session.reviewPage || 0, pages - 1));
+        return buildOwnerWorkspace(session, `**${reviews.length} reviews / ${fulfillments.length} fulfilled requests**\nPrivate log / Page ${session.reviewPage + 1} of ${pages}\nOnly the actual server owner can confirm fulfillment of a tracked store request. Its recipient may then publish one review immediately. Closing a ticket alone never verifies fulfillment.`,
+            entries.slice(session.reviewPage * 3, session.reviewPage * 3 + 3).map(row => ({
+                name: row.name, value: `${row.value}\n<t:${Math.floor(row.at / 1000)}:F>`.slice(0, 1024)
+            })));
+    }
     if (session.page === "values") {
         if (!session.targetId) return buildOwnerWorkspace(session, "Select a player, value and operation. Every adjustment requires a reason and a final confirmation.");
         const user = ensureUser(session.targetId);
@@ -105,6 +130,10 @@ function describeOwnerSession(session: OwnerSession) {
     return buildOwnerWorkspace(session, "Manage player values, per-admin ban/kick allowances, feature switches, and XP rates from one private workspace.\nChanges require a preview, reason and explicit confirmation. Channel visibility is managed through Discord permissions.");
 }
 
+function fulfillmentSnapshot(ticket: TicketEntry): string {
+    return JSON.stringify([ticket.guildId, ticket.id, ticket.ownerId, ticket.category, ticket.intakeOrderId, ticket.updatedAt, ticket.status]);
+}
+
 export async function handleOwnerInteraction(interaction: Interaction): Promise<boolean> {
     if (!(interaction.isButton() || interaction.isStringSelectMenu() || interaction.isUserSelectMenu() || interaction.isModalSubmit())
         || !interaction.customId.startsWith(OWNER_PREFIX)) return false;
@@ -136,6 +165,12 @@ export async function handleOwnerInteraction(interaction: Interaction): Promise<
         }
         const session = ownerSessions.get(sessionId);
         if (!session || session.actorId !== interaction.user.id || session.guildId !== interaction.guild.id) throw new Error("This owner session expired or belongs to someone else. Open a new workspace.");
+        if (action === "fulfill" && interaction.isButton()) {
+            const guild = await interaction.guild.fetch();
+            if (guild.ownerId !== interaction.user.id) throw new Error("Only the actual server owner may verify a fulfilled store request.");
+            await interaction.showModal(buildFulfillmentModal(session));
+            return true;
+        }
         if (interaction.isButton() && ["amount", "quota_edit", "feature_edit", "reward_edit"].includes(action)) {
             if (action === "amount") {
                 if (!session.targetId) throw new Error("Choose a player first.");
@@ -155,12 +190,27 @@ export async function handleOwnerInteraction(interaction: Interaction): Promise<
         else await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         let notice = "";
         if (interaction.isModalSubmit()) {
-            const value = interaction.fields.getTextInputValue("value").trim();
+            const value = interaction.fields.getTextInputValue(action === "fulfill_modal" ? "ticket" : "value").trim();
             const reason = interaction.fields.getTextInputValue("reason").trim();
             if (!reason || reason.length > 300) throw new Error("A reason of 1-300 characters is required.");
             let change: PendingOwnerChange;
             let description: string;
-            if (action === "amount_modal") {
+            if (action === "fulfill_modal") {
+                const guild = await interaction.guild.fetch();
+                if (guild.ownerId !== interaction.user.id) throw new Error("Only the actual server owner may verify fulfillment.");
+                if (!/^[1-9]\d{0,11}$/.test(value)) throw new Error("Enter a valid tracked store ticket number.");
+                const ticket = findTicketById(Number(value));
+                const reference = ticket?.intakeOrderId?.match(/^CAT-([1-9]\d*)-R([1-9]\d*)$/);
+                if (!ticket || ticket.guildId !== session.guildId || ticket.category !== "store" || !reference) throw new Error("Choose a tracked store request with an item receipt. General support tickets cannot grant review eligibility.");
+                const item = getStoreCatalog().get(session.guildId, Number(reference[1]));
+                if (!item) throw new Error("The requested catalog item no longer exists.");
+                if (getStoreReviews().fulfillments(session.guildId).some(row => row.ticketId === ticket.id)) throw new Error("This request is already marked fulfilled.");
+                change = { kind: "fulfillment", before: fulfillmentSnapshot(ticket), fulfillment: {
+                    guildId: session.guildId, ticketId: ticket.id, userId: ticket.ownerId, itemNumber: item.number,
+                    itemRevision: Number(reference[2]), itemName: item.name, actorId: session.actorId, reason
+                } };
+                description = `Confirm **item #${item.number}: ${item.name}** was fulfilled for <@${ticket.ownerId}>?\nTicket #${ticket.id} / ${ticket.intakeOrderId}\nThis enables one public review from that member. It does not charge currency or close the ticket.\nReason: ${reason}`;
+            } else if (action === "amount_modal") {
                 if (!session.targetId) throw new Error("Choose a player first.");
                 const member = await interaction.guild.members.fetch({ user: session.targetId, force: true });
                 if (member.user.bot) throw new Error("Bot accounts cannot be adjusted.");
@@ -212,7 +262,13 @@ export async function handleOwnerInteraction(interaction: Interaction): Promise<
             if (!pending || confirmationId !== pending.id) throw new Error("This confirmation has expired or was already used.");
             delete session.pending;
             const change = pending.change;
-            if (change.kind === "value") {
+            if (change.kind === "fulfillment") {
+                const guild = await interaction.guild.fetch();
+                if (guild.ownerId !== interaction.user.id) throw new Error("Only the current actual server owner may confirm fulfillment.");
+                const ticket = findTicketById(change.fulfillment.ticketId);
+                if (!ticket || fulfillmentSnapshot(ticket) !== change.before) throw new Error("This ticket changed since preview. Reopen the fulfillment form.");
+                getStoreReviews().confirmFulfillment(change.fulfillment);
+            } else if (change.kind === "value") {
                 const member = await interaction.guild.members.fetch({ user: change.change.targetId, force: true });
                 if (member.user.bot || activeRaidEncounters.has(member.id)) throw new Error("The target is a bot or has an active raid. No change was made.");
                 applyOwnerValueChange({ ...change.change, at: Date.now() });
@@ -240,6 +296,7 @@ export async function handleOwnerInteraction(interaction: Interaction): Promise<
                 applyRewardSettings();
             }
             notice = "Owner change saved. Existing open cards are snapshots; reopen or refresh to see current values.";
+            if (change.kind === "fulfillment") notice = "Fulfillment saved in the owner review log. The member can now open this item in the store and choose Leave Verified Review.";
             try {
                 appendAuditEvent("owner_control_change", { guildId: session.guildId, actorId: session.actorId, confirmationId, change });
             } catch (error) {
@@ -250,6 +307,10 @@ export async function handleOwnerInteraction(interaction: Interaction): Promise<
             delete session.pending;
             if (action === "home" || action === "back" || action === "cancel") session.page = "home";
             else if (action === "customize") session.page = "features";
+            else if (action === "reviews_previous" || action === "reviews_next") {
+                session.page = "reviews";
+                session.reviewPage = Math.max(0, (session.reviewPage || 0) + (action === "reviews_next" ? 1 : -1));
+            }
             else if (interaction.isUserSelectMenu()) {
                 const member = await interaction.guild.members.fetch({ user: interaction.values[0], force: true });
                 if (member.user.bot) throw new Error("Choose a human server member.");
@@ -260,7 +321,7 @@ export async function handleOwnerInteraction(interaction: Interaction): Promise<
                 } else throw new Error("Unknown member selector.");
             } else if (interaction.isStringSelectMenu()) {
                 const value = interaction.values[0];
-                if (action === "page" && ["home", "values", "quotas", "features", "guardrails"].includes(value)) session.page = value as OwnerPage;
+                if (action === "page" && ["home", "values", "quotas", "features", "guardrails", "reviews"].includes(value)) session.page = value as OwnerPage;
                 else if (action === "field" && Object.prototype.hasOwnProperty.call(OWNER_VALUE_FIELDS, value)) session.field = value as OwnerValueField;
                 else if (action === "operation" && ["set", "add", "remove"].includes(value)) session.operation = value as OwnerValueOperation;
                 else if (action === "scope" && ["guild", "member"].includes(value)) session.quotaScope = value as "guild" | "member";

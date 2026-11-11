@@ -4,6 +4,7 @@ exports.OWNER_PREFIX = exports.OWNER_PANEL_TITLE = void 0;
 exports.ownerNavigation = ownerNavigation;
 exports.buildOwnerLauncher = buildOwnerLauncher;
 exports.buildOwnerWorkspace = buildOwnerWorkspace;
+exports.buildFulfillmentModal = buildFulfillmentModal;
 exports.buildOwnerModal = buildOwnerModal;
 exports.buildOwnerConfirmation = buildOwnerConfirmation;
 const discord_js_1 = require("discord.js");
@@ -29,7 +30,7 @@ function buildOwnerWorkspace(workspace, summary, detailFields = []) {
     const id = (action) => `${exports.OWNER_PREFIX}${action}:${workspace.id}`;
     const select = (action, placeholder, choices, current) => new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder().setCustomId(id(action)).setPlaceholder(placeholder)
         .addOptions(choices.map(choice => ({ ...choice, default: choice.value === current }))));
-    const titles = { home: "Owner Control", values: "Player Values", quotas: "Moderation Limits", features: "Feature Controls", guardrails: "Guardrails & History" };
+    const titles = { home: "Owner Control", values: "Player Values", quotas: "Moderation Limits", features: "Feature Controls", guardrails: "Guardrails & History", reviews: "Store Review Log" };
     const embed = new discord_js_1.EmbedBuilder().setColor(0x9b59b6).setTitle(`FNTCORD | ${titles[workspace.page]}`)
         .setDescription(summary).setFooter({ text: "PRIVATE / CHANGES REQUIRE CONFIRMATION / SESSION EXPIRES IN 15 MINUTES" });
     if (detailFields.length)
@@ -39,7 +40,8 @@ function buildOwnerWorkspace(workspace, summary, detailFields = []) {
         components.push(select("page", "Choose an owner workspace", [
             { value: "values", label: "Player XP, FN Tokenz & Access Points" },
             { value: "quotas", label: "Ban / Kick Limits" }, { value: "features", label: "Feature & XP Rate Controls" },
-            { value: "guardrails", label: "Guardrails & Recent History" }
+            { value: "guardrails", label: "Guardrails & Recent History" },
+            { value: "reviews", label: "Store Fulfillment & Review Log" }
         ]));
     }
     else if (workspace.page === "values") {
@@ -53,11 +55,19 @@ function buildOwnerWorkspace(workspace, summary, detailFields = []) {
         components.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("quota_edit")).setLabel("Set Allowance").setStyle(discord_js_1.ButtonStyle.Primary)
             .setDisabled(workspace.quotaScope === "member" && !workspace.quotaUserId)));
     }
+    else if (workspace.page === "reviews") {
+        components.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("fulfill")).setLabel("Confirm Store Fulfillment").setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(id("reviews_previous")).setLabel("Previous Log Page").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(!(workspace.reviewPage || 0)), new discord_js_1.ButtonBuilder().setCustomId(id("reviews_next")).setLabel("Next Log Page").setStyle(discord_js_1.ButtonStyle.Secondary)));
+    }
     else if (workspace.page === "features") {
         components.push(select("feature", "Feature switch", Object.entries(botSettings_1.FEATURE_TOGGLES).map(([value, label]) => ({ value, label })), workspace.feature), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("feature_edit")).setLabel("Change Feature State").setStyle(discord_js_1.ButtonStyle.Primary)), select("reward", "XP and cosmetic rate", Object.entries(botSettings_1.REWARD_SETTINGS).map(([value, spec]) => ({ value, label: spec.label })), workspace.reward), new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("reward_edit")).setLabel("Set Rate").setStyle(discord_js_1.ButtonStyle.Primary)));
     }
     components.push(ownerNavigation(workspace));
     return { content: "", embeds: [embed], components, attachments: [], allowedMentions: { parse: [] } };
+}
+function buildFulfillmentModal(workspace) {
+    return new discord_js_1.ModalBuilder().setCustomId(`${exports.OWNER_PREFIX}fulfill_modal:${workspace.id}`).setTitle("FNTCORD | Confirm Fulfillment")
+        .addComponents(...[["ticket", "Store request ticket number"], ["reason", "Fulfillment details (no private info)"]].map(([id, label]) => new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.TextInputBuilder().setCustomId(id).setLabel(label)
+        .setStyle(id === "reason" ? discord_js_1.TextInputStyle.Paragraph : discord_js_1.TextInputStyle.Short).setRequired(true).setMaxLength(id === "reason" ? 300 : 12))));
 }
 function buildOwnerModal(workspace, action, label, hint, current) {
     const input = new discord_js_1.TextInputBuilder().setCustomId("value").setLabel(label).setStyle(discord_js_1.TextInputStyle.Short)

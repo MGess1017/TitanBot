@@ -1,5 +1,6 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle } from "discord.js";
 import type { CatalogItem } from "../runtime/storeCatalog";
+import type { StoreReview } from "../runtime/storeReviews";
 
 export const STORE_PREFIX = "catalog:";
 export const STORE_TITLE = "FNTCORD | Store";
@@ -20,7 +21,7 @@ export function catalogItemEmbed(item: CatalogItem) {
         ).setFooter({ text: `CATALOG ONLY / NO AUTOMATIC CHARGE / ITEM #${item.number} / REVISION ${item.revision}` });
 }
 
-export function buildStoreLauncher(items: CatalogItem[], admin = false) {
+export function buildStoreLauncher(items: CatalogItem[], admin = false, reviews: StoreReview[] = []) {
     const visible = items.filter(item => !item.archived);
     const embed = new EmbedBuilder().setColor(purple).setTitle(admin ? STORE_ADMIN_TITLE : STORE_TITLE)
         .setDescription(admin
@@ -37,7 +38,11 @@ export function buildStoreLauncher(items: CatalogItem[], admin = false) {
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder()
         .setCustomId(`${STORE_PREFIX}${admin ? "admin" : "browse"}`).setLabel(admin ? "Manage Store" : "Browse Catalog").setStyle(ButtonStyle.Primary));
     if (!admin) row.addComponents(new ButtonBuilder().setCustomId(`${STORE_PREFIX}number`).setLabel("Request by Item #").setStyle(ButtonStyle.Secondary));
-    return { embeds: [embed], components: [row], allowedMentions: { parse: [] as const } };
+    const reviewed = visible.slice(0, 5).filter(item => reviews.some(review => review.itemNumber === item.number && review.guildId === item.guildId));
+    const components = [row];
+    if (!admin && reviewed.length) components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...reviewed.map(item =>
+        new ButtonBuilder().setCustomId(`${STORE_PREFIX}item_reviews:${item.number}`).setLabel(`#${item.number} Reviews`).setStyle(ButtonStyle.Secondary))));
+    return { embeds: [embed], components, allowedMentions: { parse: [] as const } };
 }
 
 export function storeNavigation(session: StoreSession) {
@@ -47,7 +52,7 @@ export function storeNavigation(session: StoreSession) {
     );
 }
 
-export function buildStoreWorkspace(session: StoreSession, allItems: CatalogItem[]) {
+export function buildStoreWorkspace(session: StoreSession, allItems: CatalogItem[], reviews: StoreReview[] = [], canReview = false) {
     const id = (action: string) => `${STORE_PREFIX}${action}:${session.id}`;
     const selected = allItems.find(item => item.number === session.selected);
     const filtered = allItems.filter(item => (session.admin || !item.archived) && (!session.search
@@ -80,11 +85,43 @@ export function buildStoreWorkspace(session: StoreSession, allItems: CatalogItem
         new ButtonBuilder().setCustomId(id("request")).setLabel(`Request Item #${selected.number}`).setStyle(ButtonStyle.Primary).setDisabled(!selected.available)
     );
     if (actions.components.length) components.push(actions);
+    const reviewed = (selected ? [selected] : page).filter(item => reviews.some(review => review.itemNumber === item.number && review.guildId === item.guildId));
+    if (reviewed.length || (selected && canReview && !session.admin)) {
+        const reviewRow = new ActionRowBuilder<ButtonBuilder>().addComponents(...reviewed.map(item =>
+            new ButtonBuilder().setCustomId(`${id("reviews")}:${item.number}`).setLabel(`#${item.number} Reviews`).setStyle(ButtonStyle.Secondary)));
+        if (selected && canReview && !session.admin) reviewRow.addComponents(
+            new ButtonBuilder().setCustomId(id("review")).setLabel("Leave Verified Review").setStyle(ButtonStyle.Primary));
+        components.push(reviewRow);
+    }
     components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(id("previous")).setLabel("Previous Page").setStyle(ButtonStyle.Secondary).setDisabled(session.page === 0),
         new ButtonBuilder().setCustomId(id("next")).setLabel("Next Page").setStyle(ButtonStyle.Secondary).setDisabled(session.page >= pages - 1)
     ), storeNavigation(session));
     return { content: "", embeds: [embed], components, attachments: [], allowedMentions: { parse: [] as const } };
+}
+
+export function buildItemReviews(session: StoreSession, item: CatalogItem, reviews: StoreReview[], page: number) {
+    const pages = Math.max(1, Math.ceil(reviews.length / 3));
+    const current = Math.max(0, Math.min(page, pages - 1));
+    const average = reviews.length ? reviews.reduce((sum, row) => sum + row.rating, 0) / reviews.length : 0;
+    const embed = new EmbedBuilder().setColor(purple).setTitle(`FNTCORD | Item #${item.number} Reviews`)
+        .setDescription(`${safe(item.name)}\n**${average.toFixed(1)} / 5** from **${reviews.length}** verified reviews\nPage ${current + 1} of ${pages}`)
+        .setFooter({ text: "MEMBER OPINIONS / OWNER-CONFIRMED FULFILLED REQUESTS / NO PAYMENT DETAILS" });
+    for (const review of reviews.slice(current * 3, current * 3 + 3)) embed.addFields({
+        name: `${review.rating} / 5 - Verified fulfillment`,
+        value: `${safe(review.comment).slice(0, 980)}\n<t:${Math.floor(review.at / 1000)}:d>`
+    });
+    return { content: "", embeds: [embed], components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(`${STORE_PREFIX}review_page:${session.id}:${item.number}:${current - 1}`).setLabel("Previous Reviews").setStyle(ButtonStyle.Secondary).setDisabled(current === 0),
+            new ButtonBuilder().setCustomId(`${STORE_PREFIX}review_page:${session.id}:${item.number}:${current + 1}`).setLabel("Next Reviews").setStyle(ButtonStyle.Secondary).setDisabled(current >= pages - 1)
+        ), storeNavigation(session)
+    ], attachments: [], allowedMentions: { parse: [] as const } };
+}
+
+export function buildReviewModal(session: StoreSession, fulfillmentId: string) {
+    return new ModalBuilder().setCustomId(`${STORE_PREFIX}review_submit:${session.id}:${fulfillmentId}`).setTitle("FNTCORD | Verified Item Review")
+        .addComponents(input("rating", "Rating (1 to 5)", 1), input("comment", "Public review - do not include private info", 500, undefined, true));
 }
 
 function input(id: string, label: string, max: number, value?: string, paragraph = false, required = true) {

@@ -11,6 +11,7 @@ import * as features from "../features/storePanel";
 import { createTicketEntry as createStateTicket, type TicketRecord } from "../services/ticketState";
 import { classifyTicketCategory, getTicketSlaPolicy, hydrateTicketIntakeFields } from "../services/ticketEnhancements";
 import { flushJsonWrites } from "./jsonPersistence";
+import { StoreReviews } from "./storeReviews";
 
 async function main() {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fnt-store-"));
@@ -19,6 +20,7 @@ async function main() {
     try {
         const file = path.join(directory, "catalog.json");
         const catalog = new catalogModule.StoreCatalog(file);
+        const reviewStore = new StoreReviews(path.join(directory, "reviews.json"));
         const sample = { name: "Field Supply Pack", price: "500 FN Tokenz (owner confirms)", description: "A manually fulfilled supply request.", category: "Supplies" };
         assert.throws(() => catalogModule.validateCatalogInput({ ...sample, description: " " }));
         assert.throws(() => catalogModule.validateCatalogInput({ ...sample, name: "x".repeat(81) }));
@@ -111,6 +113,7 @@ async function main() {
                 if (id === "../core/config") return { STORE_ADMIN_CHANNEL_ID: adminChannel, STORE_CHANNEL_ID: publicChannel, STORE_MANAGER_USER_ID: managerId };
                 if (id === "../core/paths") return { BOT_SRC_DIR: directory };
                 if (id === "../core/audit") return { appendAuditEvent: () => undefined };
+                if (id === "../core/storeReviews") return { getStoreReviews: () => reviewStore };
                 if (id === "../moderation/store") return { getGuildPanelMessageId: () => null, setGuildPanelMessageId: () => undefined };
                 if (id === "../tickets/channels") return { createTicketChannel: async (...args: unknown[]) => { ticketsCreated++; savedArguments = args; return requestResult; } };
                 if (id === "../../runtime/rateLimit") return { rejectIfRateLimited: () => null };
@@ -162,6 +165,54 @@ async function main() {
         const count = catalog.list(guildId).length;
         assert.match((await run("button", `confirm:${adminSession.id}:${token}`, managerId, adminChannel)).content, /saved/);
         assert.equal(catalog.list(guildId).length, count + 1);
+        assert.match((await run("button", `review:${buyerSession.id}`)).content, /owner-confirmed/);
+        const fulfillment = reviewStore.confirmFulfillment({
+            guildId, userId: buyerId, actorId: ownerId, ticketId: 7, itemNumber: 1, itemRevision: 4, itemName: sample.name, reason: "Fulfilled"
+        });
+        const eligiblePayload = features.buildStoreWorkspace({ ...session, selected: 1 }, catalog.list(guildId), [], true);
+        validatePayload(eligiblePayload);
+        assert.ok(eligiblePayload.components.flatMap(row => row.toJSON().components).some(component => "label" in component && component.label === "Leave Verified Review"));
+        const emptyLauncher = features.buildStoreLauncher(catalog.list(guildId), false, []);
+        assert.equal(emptyLauncher.components.length, 1, "items without reviews must not display review buttons");
+        const reviewModal = await run("button", `review:${buyerSession.id}`);
+        assert.equal(reviewModal.toJSON().components.length, 2);
+        assert.match((await run("modal", `review_submit:${buyerSession.id}:${fulfillment.id}`, buyerId, publicChannel, { rating: "6", comment: "Invalid" })).content, /1 to 5/);
+        assert.match((await run("modal", `review_submit:${buyerSession.id}:${fulfillment.id}`, buyerId, publicChannel, { rating: "1", comment: "Could be better" })).content, /published and saved/);
+        assert.equal(reviewStore.reviews(guildId, 1)[0].rating, 1);
+        assert.match((await run("modal", `review_submit:${buyerSession.id}:${fulfillment.id}`, buyerId, publicChannel, { rating: "5", comment: "Duplicate" })).content, /already has a review/);
+        const reviews = reviewStore.reviews(guildId);
+        validatePayload(features.buildStoreLauncher(catalog.list(guildId), false, reviews));
+        assert.equal(features.buildStoreLauncher(catalog.list(guildId), false, reviews).components.length, 2);
+        for (const admin of [false, true]) for (const selected of [null, 1]) validatePayload(features.buildStoreWorkspace({ ...session, admin, selected }, catalog.list(guildId, admin), reviews, true));
+        const publicReviews = await run("button", "item_reviews:1");
+        assert.equal(publicReviews.flags, discord.MessageFlags.Ephemeral);
+        assert.match(publicReviews.embeds[0].toJSON().description, /1.0 \/ 5/);
+        assert.ok(!JSON.stringify(publicReviews).includes(buyerId), "public review views must not expose customer IDs or ticket receipts");
+        assert.match((await run("button", "item_reviews:2")).content, /no published reviews/);
+        assert.match((await run("modal", `review_submit:${adminSession.id}:${fulfillment.id}`, managerId, adminChannel, { rating: "5", comment: "Forged" })).content, /public store/);
+        for (let i = 0; i < 5; i++) {
+            const delivered = reviewStore.confirmFulfillment({ guildId, userId: buyerId, actorId: ownerId, ticketId: 20 + i, itemNumber: 1, itemRevision: 4, itemName: sample.name, reason: "Fulfilled" });
+            reviewStore.submit(guildId, buyerId, delivered.id, 5, `Review ${i}`);
+        }
+        validatePayload(features.buildItemReviews(session, first, reviewStore.reviews(guildId, 1), 0));
+        assert.equal(features.buildItemReviews(session, first, reviewStore.reviews(guildId, 1), 0).embeds[0].toJSON().fields?.length, 3);
+        const latestBuyerSession = [...sessions.values()].find(session => !session.admin && session.userId === buyerId)!;
+        const nextReviews = await run("button", `review_page:${latestBuyerSession.id}:1:1`);
+        assert.match(nextReviews.embeds[0].toJSON().description, /Page 2 of 2/);
+        assert.equal(nextReviews.embeds[0].toJSON().fields.length, 3);
+        const longReview = { ...reviews[0], comment: "*".repeat(500) };
+        assert.ok(features.buildItemReviews(session, first, [longReview], 0).embeds[0].toJSON().fields![0].value.length <= 1024);
+        for (const item of catalog.list(guildId).slice(1, 5)) {
+            const delivered = reviewStore.confirmFulfillment({ guildId, userId: buyerId, actorId: ownerId, ticketId: 100 + item.number,
+                itemNumber: item.number, itemRevision: item.revision, itemName: item.name, reason: "Fulfilled" });
+            reviewStore.submit(guildId, buyerId, delivered.id, 5, "Verified");
+        }
+        const reviewedLauncher = features.buildStoreLauncher(catalog.list(guildId), false, reviewStore.reviews(guildId));
+        validatePayload(reviewedLauncher);
+        assert.equal(reviewedLauncher.components[1].components.length, 5, "all five visible reviewed listings have their own reviews button");
+        const reviewedWorkspace = features.buildStoreWorkspace({ ...session }, catalog.list(guildId), reviewStore.reviews(guildId));
+        validatePayload(reviewedWorkspace);
+        assert.equal(reviewedWorkspace.components.length, 4, "review buttons must fit Discord row limits alongside existing navigation");
         assert.match((await run("button", `confirm:${adminSession.id}:${token}`, managerId, adminChannel)).content, /already been used/);
         assert.equal(catalog.list(guildId).length, count + 1);
         await run("button", "admin", ownerId, adminChannel);

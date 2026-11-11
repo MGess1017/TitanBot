@@ -10,47 +10,33 @@ const node_path_1 = __importDefault(require("node:path"));
 const discord_js_1 = require("discord.js");
 exports.WHATS_NEW_COLOR = 0x9b59b6;
 exports.WHATS_NEW_RELEASE = {
-    id: "fnt-patch-009",
-    title: "FNTCORD — Patch 009: Owner Control & Store",
-    intro: "Private administration. An organized catalog. Direct owner support.",
+    id: "fnt-patch-010",
+    title: "FNTCORD — Patch 010: Verified Store Reviews",
+    intro: "Verified feedback. Private records. An uncluttered FNTCORD store.",
     sections: [
         {
-            name: "01 • Owner Control",
+            name: "01 • Verified Fulfillment",
             lines: [
-                "Authorized owners can adjust server XP, PMC XP, FN Tokenz wallets/banks, and Access Points with before/after previews and saved receipts.",
-                "Feature switches and reward rates are managed privately. Every change requires a reason and explicit confirmation."
+                "The server owner can confirm a tracked store request as fulfilled from Owner Control, with a reason and final preview.",
+                "Only that request's recipient can leave one review. Closing a ticket does not automatically verify fulfillment."
             ]
         },
         {
-            name: "02 • Moderation Allowances",
+            name: "02 • Immediate Item Reviews",
             lines: [
-                "Configure per-administrator ban/kick allowances for calendar days, Monday-start weeks, or months in UTC, with individual overrides.",
-                "Unlimited until configured; server owner exempt. Administrator authorization and existing Access Point badge tiers remain unchanged. Native Discord actions bypass bot quotas."
+                "Eligible members can leave a 1–5 rating and a short comment from the item's private store view. Reviews publish immediately without owner approval.",
+                "Review buttons appear only for items with reviews. Read ratings and paginated feedback privately without filling channels with messages."
             ]
         },
         {
-            name: "03 • Owner-Managed Store",
+            name: "03 • Private Review Log",
             lines: [
-                "The store owner and designated manager can publish permanently numbered items with descriptions, categories and listed costs.",
-                "Private management includes previews, confirmed edits, availability controls, archiving and restoration."
-            ]
-        },
-        {
-            name: "04 • Private Catalog Requests",
-            lines: [
-                "Browse, search and view item details privately. Request an item number to open a private ticket assigned directly to the server owner.",
-                "The catalog does not charge currency or confirm purchases. Item details and listed cost are saved with the request for manual fulfillment."
-            ]
-        },
-        {
-            name: "05 • Reliability & Organization",
-            lines: [
-                "Public panels remain compact; customer replies and administration stay private. Existing support, inquiry, profiles and cosmetic shopping are preserved.",
-                "Persistent moderation reservations, one-use confirmations, stale-edit checks and duplicate-ticket protection keep changes accountable."
+                "Owner Control keeps a persistent, paginated log of fulfillment confirmations and every submitted review, including request references and receipts.",
+                "Public review views omit customer IDs and ticket details. Feedback survives restarts; duplicate submissions are rejected."
             ]
         }
     ],
-    footer: "FNTCORD • Patch 009 • Owner & Store Update"
+    footer: "FNTCORD • Patch 010 • Verified Reviews"
 };
 function buildWhatsNewEmbed(release = exports.WHATS_NEW_RELEASE) {
     return new discord_js_1.EmbedBuilder()

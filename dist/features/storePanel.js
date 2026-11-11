@@ -5,6 +5,8 @@ exports.catalogItemEmbed = catalogItemEmbed;
 exports.buildStoreLauncher = buildStoreLauncher;
 exports.storeNavigation = storeNavigation;
 exports.buildStoreWorkspace = buildStoreWorkspace;
+exports.buildItemReviews = buildItemReviews;
+exports.buildReviewModal = buildReviewModal;
 exports.buildStoreEditModal = buildStoreEditModal;
 exports.buildStoreSimpleModal = buildStoreSimpleModal;
 exports.buildStoreConfirmation = buildStoreConfirmation;
@@ -18,7 +20,7 @@ function catalogItemEmbed(item) {
     return new discord_js_1.EmbedBuilder().setColor(purple).setTitle(`FNTCORD | Item #${item.number} - ${item.name}`)
         .setDescription(item.description).addFields({ name: "Listed Cost", value: safe(item.price), inline: true }, { name: "Category", value: safe(item.category), inline: true }, { name: "Availability", value: item.archived ? "Archived / hidden" : item.available ? "Accepting requests" : "Unavailable", inline: true }).setFooter({ text: `CATALOG ONLY / NO AUTOMATIC CHARGE / ITEM #${item.number} / REVISION ${item.revision}` });
 }
-function buildStoreLauncher(items, admin = false) {
+function buildStoreLauncher(items, admin = false, reviews = []) {
     const visible = items.filter(item => !item.archived);
     const embed = new discord_js_1.EmbedBuilder().setColor(purple).setTitle(admin ? exports.STORE_ADMIN_TITLE : exports.STORE_TITLE)
         .setDescription(admin
@@ -38,12 +40,16 @@ function buildStoreLauncher(items, admin = false) {
         .setCustomId(`${exports.STORE_PREFIX}${admin ? "admin" : "browse"}`).setLabel(admin ? "Manage Store" : "Browse Catalog").setStyle(discord_js_1.ButtonStyle.Primary));
     if (!admin)
         row.addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}number`).setLabel("Request by Item #").setStyle(discord_js_1.ButtonStyle.Secondary));
-    return { embeds: [embed], components: [row], allowedMentions: { parse: [] } };
+    const reviewed = visible.slice(0, 5).filter(item => reviews.some(review => review.itemNumber === item.number && review.guildId === item.guildId));
+    const components = [row];
+    if (!admin && reviewed.length)
+        components.push(new discord_js_1.ActionRowBuilder().addComponents(...reviewed.map(item => new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}item_reviews:${item.number}`).setLabel(`#${item.number} Reviews`).setStyle(discord_js_1.ButtonStyle.Secondary))));
+    return { embeds: [embed], components, allowedMentions: { parse: [] } };
 }
 function storeNavigation(session) {
     return new discord_js_1.ActionRowBuilder().addComponents(...[["home", "Home"], ["back", "Back"], ["refresh", "Refresh"], ["customize", session.admin ? "Customize" : "Search"]].map(([action, label]) => new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}${action}:${session.id}`).setLabel(label).setStyle(discord_js_1.ButtonStyle.Secondary)));
 }
-function buildStoreWorkspace(session, allItems) {
+function buildStoreWorkspace(session, allItems, reviews = [], canReview = false) {
     const id = (action) => `${exports.STORE_PREFIX}${action}:${session.id}`;
     const selected = allItems.find(item => item.number === session.selected);
     const filtered = allItems.filter(item => (session.admin || !item.archived) && (!session.search
@@ -75,8 +81,35 @@ function buildStoreWorkspace(session, allItems) {
         actions.addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("request")).setLabel(`Request Item #${selected.number}`).setStyle(discord_js_1.ButtonStyle.Primary).setDisabled(!selected.available));
     if (actions.components.length)
         components.push(actions);
+    const reviewed = (selected ? [selected] : page).filter(item => reviews.some(review => review.itemNumber === item.number && review.guildId === item.guildId));
+    if (reviewed.length || (selected && canReview && !session.admin)) {
+        const reviewRow = new discord_js_1.ActionRowBuilder().addComponents(...reviewed.map(item => new discord_js_1.ButtonBuilder().setCustomId(`${id("reviews")}:${item.number}`).setLabel(`#${item.number} Reviews`).setStyle(discord_js_1.ButtonStyle.Secondary)));
+        if (selected && canReview && !session.admin)
+            reviewRow.addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("review")).setLabel("Leave Verified Review").setStyle(discord_js_1.ButtonStyle.Primary));
+        components.push(reviewRow);
+    }
     components.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(id("previous")).setLabel("Previous Page").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(session.page === 0), new discord_js_1.ButtonBuilder().setCustomId(id("next")).setLabel("Next Page").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(session.page >= pages - 1)), storeNavigation(session));
     return { content: "", embeds: [embed], components, attachments: [], allowedMentions: { parse: [] } };
+}
+function buildItemReviews(session, item, reviews, page) {
+    const pages = Math.max(1, Math.ceil(reviews.length / 3));
+    const current = Math.max(0, Math.min(page, pages - 1));
+    const average = reviews.length ? reviews.reduce((sum, row) => sum + row.rating, 0) / reviews.length : 0;
+    const embed = new discord_js_1.EmbedBuilder().setColor(purple).setTitle(`FNTCORD | Item #${item.number} Reviews`)
+        .setDescription(`${safe(item.name)}\n**${average.toFixed(1)} / 5** from **${reviews.length}** verified reviews\nPage ${current + 1} of ${pages}`)
+        .setFooter({ text: "MEMBER OPINIONS / OWNER-CONFIRMED FULFILLED REQUESTS / NO PAYMENT DETAILS" });
+    for (const review of reviews.slice(current * 3, current * 3 + 3))
+        embed.addFields({
+            name: `${review.rating} / 5 - Verified fulfillment`,
+            value: `${safe(review.comment).slice(0, 980)}\n<t:${Math.floor(review.at / 1000)}:d>`
+        });
+    return { content: "", embeds: [embed], components: [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}review_page:${session.id}:${item.number}:${current - 1}`).setLabel("Previous Reviews").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(current === 0), new discord_js_1.ButtonBuilder().setCustomId(`${exports.STORE_PREFIX}review_page:${session.id}:${item.number}:${current + 1}`).setLabel("Next Reviews").setStyle(discord_js_1.ButtonStyle.Secondary).setDisabled(current >= pages - 1)), storeNavigation(session)
+        ], attachments: [], allowedMentions: { parse: [] } };
+}
+function buildReviewModal(session, fulfillmentId) {
+    return new discord_js_1.ModalBuilder().setCustomId(`${exports.STORE_PREFIX}review_submit:${session.id}:${fulfillmentId}`).setTitle("FNTCORD | Verified Item Review")
+        .addComponents(input("rating", "Rating (1 to 5)", 1), input("comment", "Public review - do not include private info", 500, undefined, true));
 }
 function input(id, label, max, value, paragraph = false, required = true) {
     const field = new discord_js_1.TextInputBuilder().setCustomId(id).setLabel(label).setMaxLength(max).setRequired(required)
