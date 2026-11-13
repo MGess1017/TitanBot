@@ -8,33 +8,26 @@ export type WhatsNewRelease = { id: string; title: string; intro: string; sectio
 export const WHATS_NEW_COLOR = 0x9b59b6;
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
-    id: "fnt-patch-010",
-    title: "FNTCORD — Patch 010: Verified Store Reviews",
-    intro: "Verified feedback. Private records. An uncluttered FNTCORD store.",
+    id: "fnt-patch-012",
+    title: "FNTCORD — Patch 012: LFG Matchmaking Improvements",
+    intro: "More useful group posts, better host controls, and a cleaner LFG channel.",
     sections: [
         {
-            name: "01 • Verified Fulfillment",
+            name: "01 • Richer Matchmaking",
             lines: [
-                "The server owner can confirm a tracked store request as fulfilled from Owner Control, with a reason and final preview.",
-                "Only that request's recipient can leave one review. Closing a ticket does not automatically verify fulfillment."
+                "LFG posts now support platform/crossplay, region, voice-chat preference, and an optional scheduled start displayed in each member's local time.",
+                "Unscheduled listings expire after four hours. Scheduled groups remain open until two hours after their start time."
             ]
         },
         {
-            name: "02 • Immediate Item Reviews",
+            name: "02 • Host and Member Tools",
             lines: [
-                "Eligible members can leave a 1–5 rating and a short comment from the item's private store view. Reviews publish immediately without owner approval.",
-                "Review buttons appear only for items with reviews. Read ratings and paginated feedback privately without filling channels with messages."
-            ]
-        },
-        {
-            name: "03 • Private Review Log",
-            lines: [
-                "Owner Control keeps a persistent, paginated log of fulfillment confirmations and every submitted review, including request references and receipts.",
-                "Public review views omit customer IDs and ticket details. Feedback survives restarts; duplicate submissions are rejected."
+                "Hosts can edit or cancel requests. Join/leave changes send private host notifications, and capacity remains enforced.",
+                "Members can report a listing for staff review. Posts and queued report notifications recover safely across restarts."
             ]
         }
     ],
-    footer: "FNTCORD • Patch 010 • Verified Reviews"
+    footer: "FNTCORD • Patch 012 • LFG Matchmaking Improvements"
 };
 
 export function buildWhatsNewEmbed(release: WhatsNewRelease = WHATS_NEW_RELEASE): EmbedBuilder {

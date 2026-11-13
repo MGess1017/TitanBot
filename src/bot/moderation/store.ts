@@ -51,6 +51,7 @@ type GuildModerationState = {
         xpLeaderboard?: string | null;
         xpCrate?: string | null;
         checkpointCard?: string | null;
+        lfg?: string | null;
     };
 };
 

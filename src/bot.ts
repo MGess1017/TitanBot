@@ -10,6 +10,7 @@ import {
 } from "./bot/core/config";
 import { ensureCheckpointCardPanel, handleCheckpointInteraction } from "./bot/panels/playerCards";
 import { ensureInquiryPanelForGuild, handleInquiryInteraction } from "./bot/panels/inquiry";
+import { ensureLfgPanelForGuild, ensureLfgSchedulerForGuild, handleLfgInteraction, stopLfgSchedulers } from "./bot/panels/lfg";
 import { ensureStaffEmbedPanelForGuild, ensureStaffEmbedSchedulerForGuild, handleStaffEmbedInteraction, stopStaffEmbedScheduler } from "./bot/panels/embedBuilder";
 import { ensureOwnerPanelForGuild, handleOwnerInteraction } from "./bot/panels/owner";
 import { ensureStorePanelsForGuild, handleStoreInteraction } from "./bot/panels/store";
@@ -66,6 +67,7 @@ async function shutdown(reason: string, exitCode: number): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     stopStaffEmbedScheduler();
+    stopLfgSchedulers();
     const deadline = setTimeout(() => {
         console.error("[shutdown] Persistence flush timed out; pending saves may not be durable.");
         releaseInstanceLock();
@@ -123,6 +125,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
             await retryXpRoleDeadLetters();
             purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);
+            await ensureLfgSchedulerForGuild(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 runAsyncWithBoundary("ownerPanelInit", () => ensureOwnerPanelForGuild(guild));
                 runAsyncWithBoundary("storePanelsInit", () => ensureStorePanelsForGuild(guild));
@@ -134,6 +137,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
                 await ensureInquiryPanelForGuild(guild);
+                await ensureLfgPanelForGuild(guild);
                 await ensureStaffEmbedPanelForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
@@ -153,6 +157,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
             await guild.commands.set(slashCommands).catch(() => undefined);
             purgeLegacyImportedTicketRecords(guild.id);
             await ensureArchiveCategory(guild);
+            await ensureLfgSchedulerForGuild(guild);
             if (ENABLE_STARTUP_AUTOPANELS) {
                 runAsyncWithBoundary("ownerPanelInit", () => ensureOwnerPanelForGuild(guild));
                 runAsyncWithBoundary("storePanelsInit", () => ensureStorePanelsForGuild(guild));
@@ -164,6 +169,7 @@ client.once("clientReady", () => runAsyncWithBoundary("clientReady", async () =>
                 await ensureWelcomePanelForGuild(guild);
                 await upsertSelfRoleSelectorForGuild(guild);
                 await ensureInquiryPanelForGuild(guild);
+                await ensureLfgPanelForGuild(guild);
                 await ensureStaffEmbedPanelForGuild(guild);
             }
             await ensureTemporaryVoicePanelForGuild(guild);
@@ -340,6 +346,7 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
     if (await handleStoreInteraction(interaction)) return;
     if (await handleStaffEmbedInteraction(interaction)) return;
     if (await handleInquiryInteraction(interaction)) return;
+    if (await handleLfgInteraction(interaction)) return;
     if (await handleProfileInteraction(interaction)) return;
     if (await handleStaffInteraction(interaction)) return;
     if (await handleCheckpointInteraction(interaction)) return;
