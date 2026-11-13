@@ -8,26 +8,26 @@ export type WhatsNewRelease = { id: string; title: string; intro: string; sectio
 export const WHATS_NEW_COLOR = 0x9b59b6;
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
-    id: "fnt-patch-012",
-    title: "FNTCORD — Patch 012: LFG Matchmaking Improvements",
-    intro: "More useful group posts, better host controls, and a cleaner LFG channel.",
+    id: "fnt-patch-013",
+    title: "FNTCORD — Patch 013: Staff Command Hub",
+    intro: "A private operations workspace connects staff to existing moderation and support tools.",
     sections: [
         {
-            name: "01 • Richer Matchmaking",
+            name: "01 • Staff Workspace",
             lines: [
-                "LFG posts now support platform/crossplay, region, voice-chat preference, and an optional scheduled start displayed in each member's local time.",
-                "Unscheduled listings expire after four hours. Scheduled groups remain open until two hours after their start time."
+                "The Command Hub now offers staff quick access to the staff desk, case lookup, support queue, knowledge base, health checks, alerts and bot settings.",
+                "Existing moderation permissions and Owner Control restrictions continue to apply."
             ]
         },
         {
-            name: "02 • Host and Member Tools",
+            name: "02 • Owner Bot Restart",
             lines: [
-                "Hosts can edit or cancel requests. Join/leave changes send private host notifications, and capacity remains enforced.",
-                "Members can report a listing for staff review. Posts and queued report notifications recover safely across restarts."
+                "Authorized Owner Control users can confirm a bot-only restart from the private staff workspace when running under PM2.",
+                "State is checkpointed before restarting. The control does not reboot the VPS."
             ]
         }
     ],
-    footer: "FNTCORD • Patch 012 • LFG Matchmaking Improvements"
+    footer: "FNTCORD • Patch 013 • Staff Command Hub"
 };
 
 export function buildWhatsNewEmbed(release: WhatsNewRelease = WHATS_NEW_RELEASE): EmbedBuilder {

@@ -10,6 +10,7 @@ import {
 } from "./bot/core/config";
 import { ensureCheckpointCardPanel, handleCheckpointInteraction } from "./bot/panels/playerCards";
 import { ensureInquiryPanelForGuild, handleInquiryInteraction } from "./bot/panels/inquiry";
+import { handleModeratorHubInteraction } from "./bot/panels/moderatorHub";
 import { ensureLfgPanelForGuild, ensureLfgSchedulerForGuild, handleLfgInteraction, stopLfgSchedulers } from "./bot/panels/lfg";
 import { ensureStaffEmbedPanelForGuild, ensureStaffEmbedSchedulerForGuild, handleStaffEmbedInteraction, stopStaffEmbedScheduler } from "./bot/panels/embedBuilder";
 import { ensureOwnerPanelForGuild, handleOwnerInteraction } from "./bot/panels/owner";
@@ -345,6 +346,7 @@ client.on("interactionCreate", interaction => runAsyncWithBoundary("interactionC
     if (await handleOwnerInteraction(interaction)) return;
     if (await handleStoreInteraction(interaction)) return;
     if (await handleStaffEmbedInteraction(interaction)) return;
+    if (await handleModeratorHubInteraction(interaction)) return;
     if (await handleInquiryInteraction(interaction)) return;
     if (await handleLfgInteraction(interaction)) return;
     if (await handleProfileInteraction(interaction)) return;

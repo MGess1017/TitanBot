@@ -83,7 +83,8 @@ export function inquiryControls(): APIActionRowComponent<APIComponentInMessageAc
         new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(INQUIRY_IDS.search).setLabel("Search Guides & Commands").setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}home`).setLabel("My Dashboard").setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}settings`).setLabel("Customize").setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`${INQUIRY_IDS.open}settings`).setLabel("Customize").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId("modhub:open").setLabel("Staff Workspace").setStyle(ButtonStyle.Secondary)
         ).toJSON()
     ];
 }

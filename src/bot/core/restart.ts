@@ -5,7 +5,10 @@ import { appendAuditEvent } from "./audit";
 import { checkpointState } from "./checkpoint";
 import { flushJsonWrites } from "../../runtime/jsonPersistence";
 
-export async function requestManagedRestart(trigger: string, requestedByUserId: string | null = null): Promise<void> {
+export async function requestManagedRestart(trigger: string, requestedByUserId: string | null = null, requirePm2 = false): Promise<void> {
+    if (requirePm2 && !/^\d+$/.test(String(process.env.pm_id || "").trim())) {
+        throw new Error("Restart unavailable: this process is not running under PM2.");
+    }
     if (!checkpointState(`managed_restart:${trigger}`)) {
         throw new Error("Restart cancelled: one or more state stores failed to checkpoint");
     }
@@ -17,7 +20,7 @@ export async function requestManagedRestart(trigger: string, requestedByUserId: 
     if (/^\d+$/.test(pm2IdRaw)) {
         restartTargets.push(pm2IdRaw);
     }
-    if (pm2Name) {
+    if (pm2Name && !requirePm2) {
         restartTargets.push(pm2Name);
     }
 
@@ -48,6 +51,7 @@ export async function requestManagedRestart(trigger: string, requestedByUserId: 
         }
     }
 
+    if (requirePm2) throw new Error("PM2 could not restart the bot. Check the server logs and PM2 status.");
     // Let the signal handler checkpoint and flush before the supervisor restarts us.
     appendAuditEvent("process_restart_fallback_exit", {
         trigger,

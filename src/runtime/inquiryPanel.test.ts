@@ -246,6 +246,7 @@ async function verifyPrivateInteractions(): Promise<void> {
     }
     for (const component of inquiryControls().flatMap(row => row.components)) {
         if (!("custom_id" in component) || !("label" in component)) continue;
+        if (component.custom_id === "modhub:open") continue;
         const request = interaction("button", component.custom_id, "", "launcher-member");
         assert.equal(await context.handleInquiryInteraction(request.fake), true);
         assert.equal(request.events[0].type, component.custom_id === INQUIRY_IDS.search ? "modal" : "defer");
