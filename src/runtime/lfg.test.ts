@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
+import ts from "typescript";
+import { ChannelType, MessageFlags } from "discord.js";
 import {
-    buildLfgPanel, buildLfgPost, lfgExpiration, parseLfgStartTime, validateLfgRequest
+    buildLfgPanel, buildLfgPost, LFG_PREFIX, lfgExpiration, parseLfgStartTime, validateLfgRequest,
+    type LfgListing
 } from "../features/lfg";
+import { LFG_POST_CHANNEL_ID } from "../bot/core/config";
 import { LfgStore } from "./lfgStore";
 import { handleLfgInteraction } from "../bot/panels/lfg";
 import type { Interaction } from "discord.js";
@@ -152,5 +157,66 @@ async function testBuilderInteractions(): Promise<void> {
     assert.equal(response.content, "LFG setup canceled.");
 }
 
+async function testPublicPublishDestination(): Promise<void> {
+    const { readBotSource } = require("../../scripts/lib/bot-source") as { readBotSource: () => string };
+    const source = ts.createSourceFile("bot.ts", readBotSource(), ts.ScriptTarget.ES2020, true);
+    const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "handleLfgInteraction");
+    assert.ok(declaration);
+    assert.equal(LFG_POST_CHANNEL_ID, "1570579425832214568");
+    const session = {
+        game: "Test Game", playerCount: "4", comments: "Bring a mic", platform: "PC", region: "EU",
+        color: "Blue", voicePreference: "any", startsAt: null, listingId: null, publishing: false
+    };
+    let listing: LfgListing | undefined;
+    let sentPayload: ReturnType<typeof buildLfgPost> | undefined;
+    let savedMessageId = "";
+    let fetchedChannel = "";
+    let reply = "";
+    const destination = {
+        id: LFG_POST_CHANNEL_ID, type: ChannelType.GuildText,
+        send: async (payload: ReturnType<typeof buildLfgPost>) => {
+            sentPayload = payload;
+            return { id: "message-1", url: `https://discord.com/channels/guild-1/${LFG_POST_CHANNEL_ID}/message-1` };
+        }
+    };
+    const store = {
+        create: (input: Omit<LfgListing, "id" | "messageId" | "playerIds" | "status" | "createdAt" | "revision" | "renderedRevision" | "expiresAt">) => {
+            listing = { ...input, id: "listing-1", messageId: null, playerIds: [input.hostId],
+                status: "open", createdAt: Date.now(), expiresAt: Date.now() + 60_000, revision: 1, renderedRevision: 0 };
+            return listing;
+        },
+        setMessageId: (_id: string, messageId: string) => {
+            assert.ok(listing);
+            savedMessageId = messageId;
+            return { ...listing, messageId };
+        },
+        markRendered: (id: string, revision: number) => {
+            assert.equal(id, "listing-1");
+            assert.equal(revision, 1);
+        }
+    };
+    const context = vm.createContext({
+        LFG_PREFIX, LFG_POST_CHANNEL_ID, ChannelType, MessageFlags, validateLfgRequest, buildLfgPost,
+        getSetup: () => session, getStore: () => store, setupSessions: new Map(), console
+    });
+    vm.runInContext(ts.transpileModule(declaration.getText(source), {
+        compilerOptions: { target: ts.ScriptTarget.ES2020 }
+    }).outputText, context);
+    const interaction = {
+        customId: "lfg:publish:setup-1", user: { id: "host-1" },
+        guild: { id: "guild-1", channels: { fetch: async (id: string) => { fetchedChannel = id; return destination; } } },
+        isButton: () => true, isStringSelectMenu: () => false, isModalSubmit: () => false,
+        deferReply: async () => undefined, editReply: async (content: string) => { reply = content; }
+    };
+    await context.handleLfgInteraction(interaction);
+    assert.equal(fetchedChannel, "1570579425832214568");
+    assert.equal(listing?.channelId, "1570579425832214568");
+    assert.equal(savedMessageId, "message-1");
+    assert.ok(sentPayload);
+    assert.match(JSON.stringify(sentPayload.embeds[0].toJSON()), /Test Game/);
+    assert.match(JSON.stringify(sentPayload.embeds[0].toJSON()), /Bring a mic/);
+    assert.match(reply, /1570579425832214568\/message-1/);
+}
+
 runLfgTests();
-testBuilderInteractions().catch(error => { console.error(error); process.exitCode = 1; });
+testBuilderInteractions().then(testPublicPublishDestination).catch(error => { console.error(error); process.exitCode = 1; });
