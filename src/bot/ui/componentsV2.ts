@@ -1,11 +1,11 @@
 import { MessageFlags } from "discord.js";
+import type { RequestMethod } from "@discordjs/rest";
 
 type JsonObject = Record<string, unknown>;
 type JsonComponent = { type: number } & JsonObject;
 type RestOptions = { body?: unknown; [key: string]: unknown };
 type RestLike = {
-    post: (route: `/${string}`, options?: RestOptions) => Promise<unknown>;
-    patch: (route: `/${string}`, options?: RestOptions) => Promise<unknown>;
+    request: (options: RestOptions & { fullRoute: `/${string}`; method: RequestMethod }) => Promise<unknown>;
 };
 
 const COMPONENTS_V2_FLAG = MessageFlags.IsComponentsV2;
@@ -154,8 +154,8 @@ function addUnreferencedFileComponents(payload: JsonObject, files: unknown): Jso
     return { ...payload, components };
 }
 
-function convertRestOptions(route: `/${string}`, options?: RestOptions): RestOptions | undefined {
-    if (!options || !isRecord(options.body) || !isMessageRoute(route)) return options;
+function convertRestOptions(route: `/${string}`, options: RestOptions): RestOptions {
+    if (!isRecord(options.body) || !isMessageRoute(route)) return options;
     const body = { ...options.body };
 
     if (route.endsWith("/callback")) {
@@ -173,9 +173,10 @@ export function installComponentsV2(rest: RestLike): void {
     if (state.__componentsV2Installed) return;
     state.__componentsV2Installed = true;
 
-    const post = rest.post.bind(rest);
-    const patch = rest.patch.bind(rest);
-    rest.post = (route, options) => post(route, convertRestOptions(route, options));
-    rest.patch = (route, options) => patch(route, convertRestOptions(route, options));
+    const request = rest.request.bind(rest);
+    rest.request = options => request({
+        ...options,
+        ...convertRestOptions(options.fullRoute, options)
+    });
 }
 

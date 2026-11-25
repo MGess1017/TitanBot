@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { RequestMethod } from "@discordjs/rest";
 import { MessageFlags } from "discord.js";
 import { componentsV2Payload, installComponentsV2 } from "../bot/ui/componentsV2";
 
@@ -30,13 +31,15 @@ assert.deepEqual(converted.allowedMentions, { parse: [] });
 
 const calls: Array<{ route: string; body: unknown }> = [];
 const rest = {
-    post: async (route: `/${string}`, options?: { body?: unknown; files?: unknown }) => {
-        calls.push({ route, body: options?.body });
+    request: async (options: { fullRoute: `/${string}`; method: RequestMethod; body?: unknown; files?: unknown }) => {
+        calls.push({ route: options.fullRoute, body: options.body });
         return {};
     },
-    patch: async (route: `/${string}`, options?: { body?: unknown; files?: unknown }) => {
-        calls.push({ route, body: options?.body });
-        return {};
+    post(fullRoute: `/${string}`, options: { body?: unknown; files?: unknown } = {}) {
+        return this.request({ ...options, fullRoute, method: RequestMethod.Post });
+    },
+    patch(fullRoute: `/${string}`, options: { body?: unknown; files?: unknown } = {}) {
+        return this.request({ ...options, fullRoute, method: RequestMethod.Patch });
     }
 };
 installComponentsV2(rest);
