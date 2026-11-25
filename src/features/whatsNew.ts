@@ -8,26 +8,26 @@ export type WhatsNewRelease = { id: string; title: string; intro: string; sectio
 export const WHATS_NEW_COLOR = 0x9b59b6;
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
-    id: "fnt-patch-014",
-    title: "FNTCORD — Patch 014: Components V2 Interface",
-    intro: "Every bot message now uses Discord Components v2 for a consistent, modern interface.",
+    id: "fnt-patch-015",
+    title: "FNTCORD — Patch 015: Duplicate-Safe Panels",
+    intro: "Managed bot panels now remain single-instance across Components v2 migrations and restarts.",
     sections: [
         {
-            name: "01 • Unified Components V2",
+            name: "01 • Duplicate Prevention",
             lines: [
-                "Slash commands, buttons, selects, panels, DMs, scheduled posts and moderation notices now render through the Components v2 message system.",
-                "Legacy embeds and plain message content are converted at the outbound Discord boundary so every response follows the same presentation model."
+                "Panels now recognize their Components v2 messages during startup and update the existing panel instead of posting another copy.",
+                "Replacement message IDs are saved immediately, including player cards, XP crates, stores, support panels and staff workspaces."
             ]
         },
         {
-            name: "02 • Preserved Controls and Media",
+            name: "02 • Cleaner Recovery",
             lines: [
-                "Existing navigation, action rows, attachments, role mentions and rich imagery remain available inside the new component layouts.",
-                "Interactive modal dialogs remain native Discord modals while all resulting bot responses use Components v2."
+                "Legacy panel migration preserves all navigation controls and media while removing the old message after replacement.",
+                "Deleted or archived ticket channels are skipped safely during panel refreshes instead of generating repeated startup errors."
             ]
         }
     ],
-    footer: "FNTCORD • Patch 014 • Components V2 Interface"
+    footer: "FNTCORD • Patch 015 • Duplicate-Safe Panels"
 };
 
 export function buildWhatsNewEmbed(release: WhatsNewRelease = WHATS_NEW_RELEASE): EmbedBuilder {

@@ -292,6 +292,7 @@ export async function refreshTicketPanelsForGuild(guild: Guild): Promise<void> {
         try {
             await updateTicketOpsPanelMessage(guild, ticket);
         } catch (error) {
+            if (error instanceof DiscordAPIError && error.code === 10003) continue;
             console.error(`Could not migrate ticket #${ticket.id} panel:`, error);
         }
     }
