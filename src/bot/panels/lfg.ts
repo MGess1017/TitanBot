@@ -12,6 +12,7 @@ import { LFG_PANEL_CHANNEL_ID, LFG_POST_CHANNEL_ID, REPORT_LOG_CHANNEL_ID } from
 import { BOT_SRC_DIR } from "../core/paths";
 import { getGuildPanelMessageId, setGuildPanelMessageId } from "../moderation/store";
 import { LfgStore } from "../../runtime/lfgStore";
+import { messageHasTitle } from "../ui/componentsV2";
 
 const setupSessions = new Map<string, LfgSetup & { guildId: string; userId: string; expiresAt: number; listingId: string | null; publishing: boolean }>();
 const SETUP_TTL_MS = 15 * 60 * 1000;
@@ -172,13 +173,14 @@ export async function ensureLfgPanelForGuild(guild: Guild): Promise<void> {
             if (error instanceof DiscordAPIError && error.code === 10008) return null;
             throw error;
         });
-        if (stored?.author.id === guild.client.user.id && stored.embeds[0]?.title === LFG_PANEL_TITLE) {
-            await stored.edit(payload);
+        if (stored?.author.id === guild.client.user.id && messageHasTitle(stored, LFG_PANEL_TITLE)) {
+            const edited = await stored.edit(payload);
+            setGuildPanelMessageId(guild.id, "lfg", edited.id);
             return;
         }
     }
     const recent = await channel.messages.fetch({ limit: 100 });
-    const existing = recent.find(message => message.author.id === guild.client.user.id && message.embeds[0]?.title === LFG_PANEL_TITLE);
+    const existing = recent.find(message => message.author.id === guild.client.user.id && messageHasTitle(message, LFG_PANEL_TITLE));
     const message = existing ? await existing.edit(payload) : await channel.send(payload);
     setGuildPanelMessageId(guild.id, "lfg", message.id);
 }

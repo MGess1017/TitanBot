@@ -5,6 +5,7 @@ import { client } from "../core/client";
 import { appendAuditEvent } from "../core/audit";
 import { getGuildPanelMessageId, setGuildPanelMessageId } from "../moderation/store";
 import { brandLiveEmbed } from "../ui/embeds";
+import { messageHasTitle } from "../ui/componentsV2";
 
 function buildWelcomePayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
@@ -49,7 +50,7 @@ async function upsertWelcomePanelInChannel(guild: Guild, channelId: string): Pro
         const candidates = batch.filter(message =>
             message.author.id === (client.user?.id || "")
             && (
-                message.embeds[0]?.title === expectedTitle
+                messageHasTitle(message, expectedTitle)
                 || message.embeds[0]?.footer?.text?.includes("welcome page")
             )
         );
@@ -73,7 +74,7 @@ async function upsertWelcomePanelInChannel(guild: Guild, channelId: string): Pro
         if (!edited) {
             return { ok: false, error: "Failed to refresh welcome panel message. Check bot permissions for this channel." };
         }
-        setGuildPanelMessageId(guild.id, "welcome", candidateId);
+        setGuildPanelMessageId(guild.id, "welcome", edited.id);
         for (const duplicateId of duplicateIds) {
             if (duplicateId === candidateId) continue;
             const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);

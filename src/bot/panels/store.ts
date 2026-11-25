@@ -13,6 +13,7 @@ import { getGuildPanelMessageId, setGuildPanelMessageId } from "../moderation/st
 import { createTicketChannel } from "../tickets/channels";
 import { rejectIfRateLimited } from "../../runtime/rateLimit";
 import { getStoreReviews } from "../core/storeReviews";
+import { messageHasTitle } from "../ui/componentsV2";
 
 type CatalogChange = { token: string; reason: string } & (
     { kind: "save"; input: CatalogItemInput; existing?: { number: number; revision: number } }
@@ -38,12 +39,13 @@ async function upsertStorePanels(guild: Guild): Promise<void> {
             if (error instanceof DiscordAPIError && error.code === 10008) return null;
             throw error;
         }) : null;
-        if (saved?.author.id === guild.client.user.id && saved.embeds[0]?.title === title) {
-            await saved.edit(payload);
+        if (saved?.author.id === guild.client.user.id && messageHasTitle(saved, title)) {
+            const edited = await saved.edit(payload);
+            setGuildPanelMessageId(guild.id, key, edited.id);
             continue;
         }
         const recent = await channel.messages.fetch({ limit: 100 });
-        const previous = recent.find(message => message.author.id === guild.client.user.id && message.embeds[0]?.title === title);
+        const previous = recent.find(message => message.author.id === guild.client.user.id && messageHasTitle(message, title));
         const message = previous ? await previous.edit(payload) : await channel.send(payload);
         setGuildPanelMessageId(guild.id, key, message.id);
     }

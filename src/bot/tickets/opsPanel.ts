@@ -9,6 +9,7 @@ import { TICKET_IDS } from "../ui/ids";
 import { STAFF_IDS } from "../../features/staffHub";
 import { ticketDisplayStatus } from "../../services/ticketExperience";
 import { buildHandlerSelector } from "./experience";
+import { getMessageTitles } from "../ui/componentsV2";
 
 export function buildTicketCommandEmbed(
     title: string,
@@ -248,6 +249,9 @@ async function performTicketPanelUpdate(guild: Guild, ticket: TicketEntry): Prom
             const candidate = batch.find(message =>
                 message.author.id === (client.user?.id || "")
                 && (
+                    getMessageTitles(message).some(title => title.startsWith(legacyPrefix)
+                        || title.startsWith(premiumPrefix)
+                        || title === `Support Ticket #${ticket.id}`) ||
                     message.embeds[0]?.title?.startsWith(legacyPrefix)
                     || message.embeds[0]?.title?.startsWith(premiumPrefix)
                     || message.embeds[0]?.title === `Support Ticket #${ticket.id}`
@@ -273,7 +277,8 @@ async function performTicketPanelUpdate(guild: Guild, ticket: TicketEntry): Prom
         panelMessage = await channel.send({ embeds, components, allowedMentions: { parse: [] } });
         setTicketPanelMessageId(ticket.channelId, panelMessage.id);
     } else if (!unchanged || panelMessage.id !== savedPanelId) {
-        await panelMessage.edit({ embeds, components, allowedMentions: { parse: [] } });
+        const edited = await panelMessage.edit({ embeds, components, allowedMentions: { parse: [] } });
+        if (edited.id !== ticket.panelMessageId) setTicketPanelMessageId(ticket.channelId, edited.id);
     }
     ticketPanelCheckedAt.set(ticket.channelId, Date.now());
     ticketPanelSignatures.set(ticket.channelId, JSON.stringify({

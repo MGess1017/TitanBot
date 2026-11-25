@@ -13,6 +13,7 @@ import { isStaffMember } from "../staff/staffDesk";
 import { appendAuditEvent } from "../core/audit";
 import { BOT_SRC_DIR } from "../core/paths";
 import { EmbedStudioStore, type StudioPublication } from "../../runtime/embedStudioStore";
+import { messageHasTitle } from "../ui/componentsV2";
 
 const staffEmbedDrafts = new Map<string, StaffEmbedDraft>();
 const DRAFT_TTL_MS = 30 * 60 * 1000;
@@ -135,14 +136,15 @@ export async function ensureStaffEmbedPanelForGuild(guild: Guild): Promise<void>
             throw error;
         });
         if (message?.author.id === guild.client.user.id
-            && [STAFF_EMBED_PANEL_TITLE, STAFF_EMBED_LEGACY_PANEL_TITLE].includes(message.embeds[0]?.title || "")) {
-            await message.edit(payload);
+            && [STAFF_EMBED_PANEL_TITLE, STAFF_EMBED_LEGACY_PANEL_TITLE].some(title => messageHasTitle(message, title))) {
+            const edited = await message.edit(payload);
+            setGuildPanelMessageId(guild.id, "staffEmbed", edited.id);
             return;
         }
     }
     const recent = await channel.messages.fetch({ limit: 100 });
     const existing = recent.find(message => message.author.id === guild.client.user.id
-        && [STAFF_EMBED_PANEL_TITLE, STAFF_EMBED_LEGACY_PANEL_TITLE].includes(message.embeds[0]?.title || ""));
+        && [STAFF_EMBED_PANEL_TITLE, STAFF_EMBED_LEGACY_PANEL_TITLE].some(title => messageHasTitle(message, title)));
     const message = existing ? await existing.edit(payload) : await channel.send(payload);
     setGuildPanelMessageId(guild.id, "staffEmbed", message.id);
 }

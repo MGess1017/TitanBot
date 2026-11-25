@@ -18,6 +18,7 @@ import { buildCheckpointBreakdownEmbed, buildCheckpointWorkspace } from "../../f
 import { getCheckpointCardUrl, removeCheckpointPublicCard } from "./playerCards";
 import { isCheckpointComplete } from "../../game/checkpointRating";
 import { isFeatureEnabled } from "../core/settings";
+import { messageHasTitle } from "../ui/componentsV2";
 
 const hubPreferenceSaves = new Set<string>();
 
@@ -36,14 +37,15 @@ export async function ensureInquiryPanelForGuild(guild: Guild): Promise<void> {
             throw error;
         });
         if (stored && stored.author.id === guild.client.user.id
-            && [INQUIRY_TITLE, INQUIRY_LEGACY_TITLE, INQUIRY_PREVIOUS_TITLE].includes(stored.embeds[0]?.title || "")) {
-            await stored.edit(payload);
+            && [INQUIRY_TITLE, INQUIRY_LEGACY_TITLE, INQUIRY_PREVIOUS_TITLE].some(title => messageHasTitle(stored, title))) {
+            const edited = await stored.edit(payload);
+            setGuildPanelMessageId(guild.id, "inquiry", edited.id);
             return;
         }
     }
     const recent = await channel.messages.fetch({ limit: 100 });
     const existing = recent.find(message => message.author.id === guild.client.user.id
-        && [INQUIRY_TITLE, INQUIRY_LEGACY_TITLE, INQUIRY_PREVIOUS_TITLE].includes(message.embeds[0]?.title || ""));
+        && [INQUIRY_TITLE, INQUIRY_LEGACY_TITLE, INQUIRY_PREVIOUS_TITLE].some(title => messageHasTitle(message, title)));
     const message = existing ? await existing.edit(payload) : await channel.send(payload);
     setGuildPanelMessageId(guild.id, "inquiry", message.id);
 }

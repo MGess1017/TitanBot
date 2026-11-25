@@ -22,6 +22,7 @@ import { getStoreReviews } from "../core/storeReviews";
 import { getStoreCatalog } from "./store";
 import { findTicketById, type TicketEntry } from "../tickets/store";
 import type { StoreFulfillment } from "../../runtime/storeReviews";
+import { messageHasTitle } from "../ui/componentsV2";
 
 type PendingOwnerChange =
     | { kind: "fulfillment"; fulfillment: Omit<StoreFulfillment, "id" | "at">; before: string }
@@ -44,13 +45,14 @@ async function upsertOwnerPanel(guild: Guild): Promise<void> {
             if (error instanceof DiscordAPIError && error.code === 10008) return null;
             throw error;
         });
-        if (message?.author.id === guild.client.user.id && message.embeds[0]?.title === OWNER_PANEL_TITLE) {
-            await message.edit(payload);
+        if (message?.author.id === guild.client.user.id && messageHasTitle(message, OWNER_PANEL_TITLE)) {
+            const edited = await message.edit(payload);
+            setGuildPanelMessageId(guild.id, "owner", edited.id);
             return;
         }
     }
     const recent = await channel.messages.fetch({ limit: 100 });
-    const existing = recent.find(message => message.author.id === guild.client.user.id && message.embeds[0]?.title === OWNER_PANEL_TITLE);
+    const existing = recent.find(message => message.author.id === guild.client.user.id && messageHasTitle(message, OWNER_PANEL_TITLE));
     const message = existing ? await existing.edit(payload) : await channel.send(payload);
     setGuildPanelMessageId(guild.id, "owner", message.id);
 }

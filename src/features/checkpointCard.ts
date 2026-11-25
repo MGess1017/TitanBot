@@ -10,6 +10,7 @@ import {
     type CheckpointStatKey, type CheckpointStats, type CheckpointTier
 } from "../game/checkpointRating";
 import { type InquiryPayload } from "./inquiryPanel";
+import { messageHasTitle } from "../bot/ui/componentsV2";
 
 export const CHECKPOINT_PANEL_TITLE = "FNTCORD | Arena Player Cards";
 export const CHECKPOINT_LEGACY_PANEL_TITLE = "Arena Player Rating";
@@ -323,7 +324,8 @@ export function buildCheckpointCardMessage(userId: string, ingameName: string, r
 }
 
 function isCheckpointPanel(message: Message, botId: string): boolean {
-    return message.author.id === botId && [CHECKPOINT_PANEL_TITLE, CHECKPOINT_LEGACY_PANEL_TITLE].includes(message.embeds[0]?.title || "");
+    return message.author.id === botId && [CHECKPOINT_PANEL_TITLE, CHECKPOINT_LEGACY_PANEL_TITLE]
+        .some(title => messageHasTitle(message, title));
 }
 
 export async function upsertCheckpointPanel(channel: TextChannel, botId: string, storedId: string | null): Promise<string> {
@@ -332,8 +334,7 @@ export async function upsertCheckpointPanel(channel: TextChannel, botId: string,
         try {
             const message = await channel.messages.fetch(storedId);
             if (isCheckpointPanel(message, botId)) {
-                await message.edit(payload);
-                return message.id;
+                return (await message.edit(payload)).id;
             }
         } catch (error) {
             if (!(error instanceof DiscordAPIError && error.code === 10008)) throw error;
@@ -342,8 +343,7 @@ export async function upsertCheckpointPanel(channel: TextChannel, botId: string,
     const recent = await channel.messages.fetch({ limit: 100 });
     const existing = recent.find(message => isCheckpointPanel(message, botId));
     if (existing) {
-        await existing.edit(payload);
-        return existing.id;
+        return (await existing.edit(payload)).id;
     }
     return (await channel.send(payload)).id;
 }

@@ -10,6 +10,7 @@ import { type ComponentLike, type ComponentRowLike, type MessageWithComponents }
 import { upsertAdminReportPanelInChannel } from "./reportPanels";
 import { GIVEAWAY_IDS, REPORT_IDS, TICKET_IDS } from "../ui/ids";
 import { brandLiveEmbed } from "../ui/embeds";
+import { messageHasTitle } from "../ui/componentsV2";
 
 export function buildTicketPanelPayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
@@ -96,7 +97,9 @@ export async function upsertTicketPanelInChannel(guild: Guild, channelId: string
 
         const candidate = batch.find(message =>
             message.author.id === (client.user?.id || "")
-            && (messageHasTicketOpenButton(message as MessageWithComponents) || message.embeds[0]?.title === expectedTitle || message.embeds[0]?.title === "⌛ FN Support Desk")
+            && (messageHasTicketOpenButton(message as MessageWithComponents)
+                || messageHasTitle(message, expectedTitle)
+                || messageHasTitle(message, "⌛ FN Support Desk"))
         );
         if (candidate) {
             candidateId = candidate.id;
@@ -162,7 +165,7 @@ export async function removeLegacyReportPanelForGuild(guild: Guild): Promise<voi
 
         const legacy = batch.filter(message =>
             message.author.id === (client.user?.id || "")
-            && (message.embeds[0]?.title === "🚨 FN Report Desk" || messageHasReportOpenButton(message as MessageWithComponents))
+            && (messageHasTitle(message, "🚨 FN Report Desk") || messageHasReportOpenButton(message as MessageWithComponents))
         );
         for (const message of legacy.values()) {
             await message.delete().catch(() => undefined);

@@ -7,6 +7,10 @@ type RestOptions = { body?: unknown; [key: string]: unknown };
 type RestLike = {
     request: (options: RestOptions & { fullRoute: `/${string}`; method: RequestMethod }) => Promise<unknown>;
 };
+type MessageLike = {
+    embeds: Array<{ title?: string | null }>;
+    components: unknown[];
+};
 
 const COMPONENTS_V2_FLAG = MessageFlags.IsComponentsV2;
 const CONTAINER_TYPE = 17;
@@ -15,6 +19,27 @@ const MEDIA_GALLERY_TYPE = 12;
 const FILE_TYPE = 13;
 const MAX_TEXT_LENGTH = 4_000;
 const MAX_CONTAINER_COMPONENTS = 10;
+
+export function getMessageTitles(message: MessageLike): string[] {
+    const titles = message.embeds.map(embed => embed.title).filter((title): title is string => Boolean(title));
+    const pending = [...message.components];
+    while (pending.length) {
+        const component = pending.shift();
+        if (!isRecord(component)) continue;
+        if (typeof component.content === "string") {
+            for (const line of component.content.split("\n")) {
+                const heading = line.match(/^#{1,6}\s+(.+)$/)?.[1]?.trim();
+                if (heading) titles.push(heading);
+            }
+        }
+        if (Array.isArray(component.components)) pending.push(...component.components);
+    }
+    return titles;
+}
+
+export function messageHasTitle(message: MessageLike, title: string): boolean {
+    return getMessageTitles(message).includes(title);
+}
 
 function isRecord(value: unknown): value is JsonObject {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);

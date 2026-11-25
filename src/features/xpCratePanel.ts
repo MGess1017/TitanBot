@@ -3,6 +3,7 @@ import {
     ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, DiscordAPIError,
     EmbedBuilder, type Message, type MessageCreateOptions, type MessageEditOptions, type TextChannel
 } from "discord.js";
+import { messageHasTitle } from "../bot/ui/componentsV2";
 import { getXpCrateDefinition, XP_CRATE_COOLDOWN_MS, type XpCrateId, type XpCrateReward } from "../game/xpCrates";
 
 export const XP_CRATE_BUTTON_ID = "fn_xp_crate:claim";
@@ -58,7 +59,7 @@ export function addXpCrateProfile(embed: EmbedBuilder, reward: XpCrateReward | n
 }
 
 function isCratePanel(message: Message, botId: string): boolean {
-    return message.author.id === botId && message.embeds[0]?.title === XP_CRATE_PANEL_TITLE;
+    return message.author.id === botId && messageHasTitle(message, XP_CRATE_PANEL_TITLE);
 }
 
 export async function upsertXpCratePanel(channel: TextChannel, botId: string, storedId: string | null): Promise<string> {
@@ -67,8 +68,7 @@ export async function upsertXpCratePanel(channel: TextChannel, botId: string, st
         try {
             const message = await channel.messages.fetch(storedId);
             if (isCratePanel(message, botId)) {
-                await message.edit(payload);
-                return message.id;
+                return (await message.edit(payload)).id;
             }
         } catch (error) {
             if (!(error instanceof DiscordAPIError && error.code === 10008)) throw error;
@@ -77,8 +77,7 @@ export async function upsertXpCratePanel(channel: TextChannel, botId: string, st
     const recent = await channel.messages.fetch({ limit: 100 });
     const existing = recent.find(message => isCratePanel(message, botId));
     if (existing) {
-        await existing.edit(payload);
-        return existing.id;
+        return (await existing.edit(payload)).id;
     }
     return (await channel.send(payload)).id;
 }

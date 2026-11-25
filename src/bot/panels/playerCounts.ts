@@ -6,6 +6,7 @@ import { client } from "../core/client";
 import { runAsyncWithBoundary } from "../core/metrics";
 import { appendAuditEvent } from "../core/audit";
 import { getGuildPanelMessageId, setGuildPanelMessageId } from "../moderation/store";
+import { messageHasTitle } from "../ui/componentsV2";
 
 const PLAYER_COUNTS_BY_GUILD = new Map<string, PlayerCounts>();
 const PLAYER_COUNT_UPDATE_TIMERS = new Map<string, ReturnType<typeof setTimeout>>();
@@ -23,19 +24,22 @@ async function upsertPlayerCountPanelForGuild(guild: Guild, counts: PlayerCounts
     if (storedMessageId) {
         const stored = await channel.messages.fetch(storedMessageId).catch(() => null);
         const edited = await stored?.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
-        if (edited) return;
+        if (edited) {
+            setGuildPanelMessageId(guild.id, "playerCount", edited.id);
+            return;
+        }
         setGuildPanelMessageId(guild.id, "playerCount", null);
     }
 
     const recentMessages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
     const existing = recentMessages?.find(message =>
         message.author.id === (client.user?.id || "")
-        && message.embeds[0]?.title === "FNT • Live Player Count"
+        && messageHasTitle(message, "FNT • Live Player Count")
     );
     if (existing) {
         const edited = await existing.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
         if (edited) {
-            setGuildPanelMessageId(guild.id, "playerCount", existing.id);
+            setGuildPanelMessageId(guild.id, "playerCount", edited.id);
             return;
         }
     }

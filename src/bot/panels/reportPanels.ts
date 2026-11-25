@@ -5,6 +5,7 @@ import { client } from "../core/client";
 import { getGuildPanelMessageId, setGuildPanelMessageId } from "../moderation/store";
 import { REPORT_IDS } from "../ui/ids";
 import { brandLiveEmbed } from "../ui/embeds";
+import { messageHasTitle } from "../ui/componentsV2";
 
 function buildAdminReportPanelPayload(guildName: string) {
     const embed = brandLiveEmbed(new EmbedBuilder()
@@ -69,7 +70,7 @@ export async function upsertAdminReportPanelInChannel(guild: Guild, channelId: s
         const candidates = batch.filter(message =>
             message.author.id === (client.user?.id || "")
             && (
-                message.embeds[0]?.title === "🛡️ Admin Report Panel"
+                messageHasTitle(message, "🛡️ Admin Report Panel")
                 || message.embeds[0]?.footer?.text?.includes("admin report panel")
             )
         );
@@ -94,7 +95,7 @@ export async function upsertAdminReportPanelInChannel(guild: Guild, channelId: s
         if (!edited) {
             return { ok: false, error: "Failed to refresh admin report panel message. Check bot permissions for this channel." };
         }
-        setGuildPanelMessageId(guild.id, "reportAdmin", candidateId);
+        setGuildPanelMessageId(guild.id, "reportAdmin", edited.id);
         for (const duplicateId of duplicateIds) {
             if (duplicateId === candidateId) continue;
             const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);

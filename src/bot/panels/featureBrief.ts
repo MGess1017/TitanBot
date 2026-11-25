@@ -6,6 +6,7 @@ import { appendAuditEvent } from "../core/audit";
 import { getGuildPanelMessageId, setGuildPanelMessageId } from "../moderation/store";
 import { ONBOARDING_IDS } from "../ui/ids";
 import { brandLiveEmbed } from "../ui/embeds";
+import { messageHasTitle } from "../ui/componentsV2";
 
 export function buildBotFeatureBriefPayload() {
     const embed = brandLiveEmbed(new EmbedBuilder()
@@ -47,7 +48,8 @@ async function upsertBotFeatureBriefInChannel(guild: Guild, channelId: string): 
             throw error;
         });
         if (stored && stored.author.id === client.user?.id) {
-            await stored.edit({ embeds: [embed], components, allowedMentions: { parse: [] } });
+            const edited = await stored.edit({ embeds: [embed], components, allowedMentions: { parse: [] } });
+            setGuildPanelMessageId(guild.id, "featureBrief", edited.id);
             return { ok: true, action: "updated" };
         }
         setGuildPanelMessageId(guild.id, "featureBrief", null);
@@ -64,9 +66,9 @@ async function upsertBotFeatureBriefInChannel(guild: Guild, channelId: string): 
         const candidates = batch.filter(message =>
             message.author.id === (client.user?.id || "")
             && (
-                message.embeds[0]?.title === "Welcome to FNT"
+                messageHasTitle(message, "Welcome to FNT")
                 || message.embeds[0]?.footer?.text?.includes("FNT • Member Guide")
-                || message.embeds[0]?.title === expectedPrefix
+                || messageHasTitle(message, expectedPrefix)
                 || message.embeds[0]?.footer?.text?.includes("About Titan Bot")
             )
         );
@@ -90,7 +92,7 @@ async function upsertBotFeatureBriefInChannel(guild: Guild, channelId: string): 
         if (!edited) {
             return { ok: false, error: "Failed to refresh bot feature brief message. Check bot permissions for this channel." };
         }
-        setGuildPanelMessageId(guild.id, "featureBrief", candidateId);
+        setGuildPanelMessageId(guild.id, "featureBrief", edited.id);
         for (const duplicateId of duplicateIds) {
             if (duplicateId === candidateId) continue;
             const duplicate = await channel.messages.fetch(duplicateId).catch(() => null);
