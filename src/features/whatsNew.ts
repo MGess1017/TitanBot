@@ -8,26 +8,26 @@ export type WhatsNewRelease = { id: string; title: string; intro: string; sectio
 export const WHATS_NEW_COLOR = 0x9b59b6;
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
-    id: "fnt-patch-013",
-    title: "FNTCORD — Patch 013: Staff Command Hub",
-    intro: "A private operations workspace connects staff to existing moderation and support tools.",
+    id: "fnt-patch-014",
+    title: "FNTCORD — Patch 014: Components V2 Interface",
+    intro: "Every bot message now uses Discord Components v2 for a consistent, modern interface.",
     sections: [
         {
-            name: "01 • Staff Workspace",
+            name: "01 • Unified Components V2",
             lines: [
-                "The Command Hub now offers staff quick access to the staff desk, case lookup, support queue, knowledge base, health checks, alerts and bot settings.",
-                "Existing moderation permissions and Owner Control restrictions continue to apply."
+                "Slash commands, buttons, selects, panels, DMs, scheduled posts and moderation notices now render through the Components v2 message system.",
+                "Legacy embeds and plain message content are converted at the outbound Discord boundary so every response follows the same presentation model."
             ]
         },
         {
-            name: "02 • Owner Bot Restart",
+            name: "02 • Preserved Controls and Media",
             lines: [
-                "Authorized Owner Control users can confirm a bot-only restart from the private staff workspace when running under PM2.",
-                "State is checkpointed before restarting. The control does not reboot the VPS."
+                "Existing navigation, action rows, attachments, role mentions and rich imagery remain available inside the new component layouts.",
+                "Interactive modal dialogs remain native Discord modals while all resulting bot responses use Components v2."
             ]
         }
     ],
-    footer: "FNTCORD • Patch 013 • Staff Command Hub"
+    footer: "FNTCORD • Patch 014 • Components V2 Interface"
 };
 
 export function buildWhatsNewEmbed(release: WhatsNewRelease = WHATS_NEW_RELEASE): EmbedBuilder {

@@ -15,6 +15,7 @@ import {
 } from "./config";
 import { client } from "./client";
 import { getCommandKey } from "../commands/keys";
+import { componentsV2Payload } from "../ui/componentsV2";
 import { type CasinoGameKey } from "../ui/ids";
 
 const opsAlertLastSent = new Map<string, number>();
@@ -72,10 +73,10 @@ export function postOpsAlert(level: "warn" | "error", title: string, details: Re
         ...detailLines
     ].join("\n");
 
-    const body = JSON.stringify({
+    const body = JSON.stringify(componentsV2Payload({
         username: "Titan Ops Alerts",
         content: content.slice(0, 1800)
-    });
+    }));
 
     const req = https.request({
         protocol: webhookUrl.protocol,
