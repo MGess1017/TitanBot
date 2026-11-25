@@ -67,6 +67,31 @@ void (async () => {
     const edited = calls[2].body as { components: Array<Record<string, unknown>> };
     assert.equal(edited.components[edited.components.length - 1].type, 13);
     assert.deepEqual(calls[3].body, { name: "test" });
+
+    const migrationCalls: Array<{ method: RequestMethod; route: string }> = [];
+    const migrationRest = {
+        request: async (options: { fullRoute: `/${string}`; method: RequestMethod; body?: unknown }) => {
+            migrationCalls.push({ method: options.method, route: options.fullRoute });
+            if (options.method === RequestMethod.Patch) {
+                throw Object.assign(new Error("embeds[MESSAGE_CANNOT_USE_LEGACY_FIELDS_WITH_COMPONENTS_V2]"), { code: 50035 });
+            }
+            return { id: options.method === RequestMethod.Post ? "replacement" : "deleted" };
+        },
+        patch(fullRoute: `/${string}`, options: { body?: unknown }) {
+            return this.request({ ...options, fullRoute, method: RequestMethod.Patch });
+        }
+    };
+    installComponentsV2(migrationRest);
+    const migrated = await migrationRest.patch("/channels/1/messages/old", {
+        body: { embeds: [{ title: "Legacy" }] }
+    }) as { id: string };
+    assert.equal(migrated.id, "replacement");
+    assert.deepEqual(migrationCalls.map(call => call.method), [
+        RequestMethod.Patch,
+        RequestMethod.Post,
+        RequestMethod.Delete
+    ]);
+    assert.equal(migrationCalls[1].route, "/channels/1/messages");
     console.log("components v2 conversion checks passed");
 })().catch(error => {
     console.error(error);

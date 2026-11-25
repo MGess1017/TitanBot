@@ -1,5 +1,5 @@
 import { MessageFlags } from "discord.js";
-import type { RequestMethod } from "@discordjs/rest";
+import { RequestMethod } from "@discordjs/rest";
 
 type JsonObject = Record<string, unknown>;
 type JsonComponent = { type: number } & JsonObject;
@@ -168,15 +168,45 @@ function convertRestOptions(route: `/${string}`, options: RestOptions): RestOpti
     return { ...options, body: addUnreferencedFileComponents(componentsV2Payload(body), options.files) };
 }
 
+function isLegacyFieldConflict(error: unknown): boolean {
+    return error instanceof Error
+        && "code" in error
+        && (error as { code?: unknown }).code === 50035
+        && error.message.includes("MESSAGE_CANNOT_USE_LEGACY_FIELDS_WITH_COMPONENTS_V2");
+}
+
 export function installComponentsV2(rest: RestLike): void {
     const state = rest as RestLike & { __componentsV2Installed?: boolean };
     if (state.__componentsV2Installed) return;
     state.__componentsV2Installed = true;
 
     const request = rest.request.bind(rest);
-    rest.request = options => request({
-        ...options,
-        ...convertRestOptions(options.fullRoute, options)
-    });
+    rest.request = async options => {
+        const converted = {
+            ...options,
+            ...convertRestOptions(options.fullRoute, options)
+        };
+        try {
+            return await request(converted);
+        } catch (error) {
+            if (options.method !== RequestMethod.Patch || !isLegacyFieldConflict(error)) throw error;
+            const match = options.fullRoute.match(/^\/channels\/([^/]+)\/messages\/[^/]+$/);
+            if (!match || !isRecord(converted.body)) throw error;
+            const replacement = await request({
+                ...converted,
+                fullRoute: `/channels/${match[1]}/messages`,
+                method: RequestMethod.Post
+            });
+            try {
+                await request({
+                    fullRoute: options.fullRoute,
+                    method: RequestMethod.Delete
+                });
+            } catch (deleteError) {
+                console.error("[components-v2] Replacement posted, but the legacy message could not be deleted:", deleteError);
+            }
+            return replacement;
+        }
+    };
 }
 
